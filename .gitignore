@@ -15,3 +15,6 @@ debug
 .env
 .env.*
 !.env.example
+
+# Other
+docs/

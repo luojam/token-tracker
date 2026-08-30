@@ -1,0 +1,1 @@
+//! Codex token-usage adapter.
