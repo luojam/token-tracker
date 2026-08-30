@@ -18,6 +18,7 @@ cargo run
 cargo fmt --check
 cargo check
 cargo test
+cargo clippy --all-targets --all-features -- -D warnings
 ```
 
 ## Structure
