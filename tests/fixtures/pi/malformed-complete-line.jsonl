@@ -1,0 +1,3 @@
+{"type":"session","version":3,"id":"01940000-0000-7000-8000-000000000003","timestamp":"2025-01-02T03:04:05.006Z","cwd":"/work/project"}
+{"type":"message","id":"a1a1a1a1","parentId":null,"timestamp":"2025-01-02T03:05:00.100Z","message":{"role":"assistant","provider":"provider-a","model":"model-a","usage":{"input":10,"output":20,"cacheRead":30,"cacheWrite":40}}}
+{"type":"message","message":"SECRET_MALFORMED_CONTENT"}
