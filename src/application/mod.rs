@@ -106,8 +106,9 @@ pub trait UsageStore {
         observed_at: Timestamp,
     ) -> Result<(), Self::Error>;
 
-    /// Atomically upserts metadata and source-scoped observations. Observations
-    /// absent from a rewritten source are retained.
+    /// Atomically upserts the latest metadata for a source path and its
+    /// source-scoped observations. A newer import may replace metadata from a
+    /// different session; observations absent from a rewritten source are retained.
     fn commit_import(&mut self, import: &SessionImport) -> Result<ImportStats, Self::Error>;
 }
 
