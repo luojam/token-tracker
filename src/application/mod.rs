@@ -1,7 +1,9 @@
 //! Contracts and use cases for session discovery, parsing, persistence, and queries.
 
+mod reporting;
 mod synchronization;
 
+pub use reporting::render_terminal_report;
 pub use synchronization::{
     ImportCounts, ImportSynchronizationError, ImportWarning, SynchronizationReport,
     synchronize_sessions, synchronize_sessions_at,

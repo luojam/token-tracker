@@ -1,6 +1,6 @@
 //! SQLite persistence for imported session metadata and usage observations.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::env;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
@@ -14,9 +14,12 @@ use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, 
 
 use crate::application::{
     CommitImportOutcome, DiscoveryReport, FileRevision, ImportStats, ParseCompletion,
-    SessionImport, SourceState, UsageStore,
+    SessionImport, SourceState, UsageStore, UsageSummaryStore,
 };
-use crate::core::{RecordedCost, Timestamp, UsageEvent, UsageKind};
+use crate::core::{
+    ModelAttribution, RecordedCost, SummaryBreakdown, SummaryGroup, SummaryTotals, Timestamp,
+    TokenCounts, UsageEvent, UsageKind, UsageSummary,
+};
 
 const SCHEMA_VERSION: i64 = 2;
 const APPLICATION_DIRECTORY: &str = "token-tracker";
@@ -87,6 +90,79 @@ impl SqliteUsageStore {
         connection.pragma_update(None, "foreign_keys", true)?;
         migrate(&mut connection)?;
         Ok(Self { connection })
+    }
+}
+
+impl UsageSummaryStore for SqliteUsageStore {
+    type Error = SqliteStoreError;
+
+    fn all_time_summary(&self) -> Result<UsageSummary, Self::Error> {
+        let sessions = load_stored_sessions(&self.connection)?;
+        let session_count = sessions
+            .values()
+            .map(|session| (&session.agent, &session.session_id))
+            .collect::<HashSet<_>>()
+            .len();
+        let parents = resolve_session_parents(&sessions);
+        let observations = load_stored_observations(&self.connection)?;
+        let mut observations_by_event = BTreeMap::<EventKey, Vec<StoredObservation>>::new();
+
+        for observation in observations {
+            let session = sessions.get(&observation.source_session_id).ok_or(
+                SqliteStoreError::CorruptData("an observation without session provenance"),
+            )?;
+            if session.agent != observation.event.agent {
+                return Err(SqliteStoreError::CorruptData(
+                    "an observation whose event and session agents differ",
+                ));
+            }
+            observations_by_event
+                .entry(observation.event.clone())
+                .or_default()
+                .push(observation);
+        }
+
+        let mut totals = SummaryTotals {
+            session_count: u64::try_from(session_count)
+                .map_err(|_| SqliteStoreError::ValueOutOfRange("session count"))?,
+            unique_usage_event_count: u64::try_from(observations_by_event.len())
+                .map_err(|_| SqliteStoreError::ValueOutOfRange("usage event count"))?,
+            ..SummaryTotals::default()
+        };
+        let mut breakdown = BTreeMap::<SummaryGroup, SummaryAccumulator>::new();
+
+        // Event keys provide an aggregation order that does not depend on row or
+        // import order. This also makes floating-point cost output deterministic.
+        for event_observations in observations_by_event.values() {
+            let canonical = select_canonical_observation(event_observations, &sessions, &parents)?;
+            totals.tokens = checked_add_tokens(totals.tokens, canonical.tokens)?;
+            checked_add_cost(&mut totals.recorded_cost, canonical.recorded_cost)?;
+
+            let group = match &canonical.attribution {
+                Some(attribution) => SummaryGroup::ProviderModel(attribution.clone()),
+                None => SummaryGroup::Unattributed(canonical.kind),
+            };
+            let group_totals = breakdown.entry(group).or_default();
+            group_totals.tokens = checked_add_tokens(group_totals.tokens, canonical.tokens)?;
+            checked_add_cost(&mut group_totals.recorded_cost, canonical.recorded_cost)?;
+            group_totals.unique_usage_event_count = group_totals
+                .unique_usage_event_count
+                .checked_add(1)
+                .ok_or(SqliteStoreError::ValueOutOfRange("usage event count"))?;
+        }
+
+        Ok(UsageSummary {
+            totals,
+            breakdown: breakdown
+                .into_iter()
+                .map(|(group, totals)| SummaryBreakdown {
+                    group,
+                    tokens: totals.tokens,
+                    recorded_cost: totals.recorded_cost,
+                    unique_usage_event_count: totals.unique_usage_event_count,
+                })
+                .collect(),
+        })
     }
 }
 
@@ -223,6 +299,281 @@ impl UsageStore for SqliteUsageStore {
         transaction.commit()?;
         Ok(CommitImportOutcome::Applied(stats))
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct EventKey {
+    agent: String,
+    adapter_key: String,
+}
+
+#[derive(Clone, Debug)]
+struct StoredSession {
+    id: i64,
+    agent: String,
+    session_id: String,
+    started_at_ms: i64,
+    parent_session: Option<String>,
+    source_path: PathBuf,
+}
+
+#[derive(Clone, Debug)]
+struct StoredObservation {
+    event: EventKey,
+    source_session_id: i64,
+    session_provenance_known: bool,
+    kind: UsageKind,
+    attribution: Option<ModelAttribution>,
+    tokens: TokenCounts,
+    recorded_cost: Option<RecordedCost>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct SummaryAccumulator {
+    tokens: TokenCounts,
+    recorded_cost: Option<RecordedCost>,
+    unique_usage_event_count: u64,
+}
+
+fn load_stored_sessions(
+    connection: &Connection,
+) -> Result<HashMap<i64, StoredSession>, SqliteStoreError> {
+    let mut statement = connection.prepare(
+        "SELECT session.id, session.agent, session.session_id,
+                session.started_at_ms, session.parent_session, source.path
+           FROM source_sessions session
+           JOIN sources source ON source.id = session.source_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Vec<u8>>(5)?,
+        ))
+    })?;
+
+    let mut sessions = HashMap::new();
+    for row in rows {
+        let (id, agent, session_id, started_at_ms, parent_session, source_path) = row?;
+        sessions.insert(
+            id,
+            StoredSession {
+                id,
+                agent,
+                session_id,
+                started_at_ms,
+                parent_session,
+                source_path: decode_path(source_path)?,
+            },
+        );
+    }
+    Ok(sessions)
+}
+
+fn resolve_session_parents(sessions: &HashMap<i64, StoredSession>) -> HashMap<i64, i64> {
+    let mut sessions_by_source = HashMap::<(String, PathBuf), Vec<i64>>::new();
+    for session in sessions.values() {
+        sessions_by_source
+            .entry((session.agent.clone(), session.source_path.clone()))
+            .or_default()
+            .push(session.id);
+    }
+
+    sessions
+        .values()
+        .filter_map(|session| {
+            let parent_path = PathBuf::from(session.parent_session.as_deref()?);
+            let candidates = sessions_by_source.get(&(session.agent.clone(), parent_path))?;
+            match candidates.as_slice() {
+                [parent_id] if *parent_id != session.id => Some((session.id, *parent_id)),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+fn load_stored_observations(
+    connection: &Connection,
+) -> Result<Vec<StoredObservation>, SqliteStoreError> {
+    let mut statement = connection.prepare(
+        "SELECT event.agent, event.adapter_key, observation.source_session_id,
+                observation.session_provenance_known, observation.usage_kind,
+                observation.provider, observation.model,
+                observation.input_tokens, observation.output_tokens,
+                observation.cache_read_tokens, observation.cache_write_tokens,
+                observation.recorded_cost_usd
+           FROM source_observations observation
+           JOIN usage_events event ON event.id = observation.event_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, Vec<u8>>(7)?,
+            row.get::<_, Vec<u8>>(8)?,
+            row.get::<_, Vec<u8>>(9)?,
+            row.get::<_, Vec<u8>>(10)?,
+            row.get::<_, Option<f64>>(11)?,
+        ))
+    })?;
+
+    let mut observations = Vec::new();
+    for row in rows {
+        let (
+            agent,
+            adapter_key,
+            source_session_id,
+            session_provenance_known,
+            kind,
+            provider,
+            model,
+            input,
+            output,
+            cache_read,
+            cache_write,
+            recorded_cost,
+        ) = row?;
+        let session_provenance_known = match session_provenance_known {
+            0 => false,
+            1 => true,
+            _ => {
+                return Err(SqliteStoreError::CorruptData(
+                    "an invalid observation provenance state",
+                ));
+            }
+        };
+        let attribution = match (provider, model) {
+            (Some(provider), Some(model)) => Some(ModelAttribution { provider, model }),
+            (None, None) => None,
+            _ => {
+                return Err(SqliteStoreError::CorruptData(
+                    "an incomplete model attribution",
+                ));
+            }
+        };
+        let recorded_cost = recorded_cost
+            .map(RecordedCost::from_usd)
+            .transpose()
+            .map_err(|_| SqliteStoreError::CorruptData("an invalid recorded cost"))?;
+
+        observations.push(StoredObservation {
+            event: EventKey { agent, adapter_key },
+            source_session_id,
+            session_provenance_known,
+            kind: usage_kind_from_str(&kind)?,
+            attribution,
+            tokens: TokenCounts {
+                input: decode_u64(&input)?,
+                output: decode_u64(&output)?,
+                cache_read: decode_u64(&cache_read)?,
+                cache_write: decode_u64(&cache_write)?,
+            },
+            recorded_cost,
+        });
+    }
+    Ok(observations)
+}
+
+fn select_canonical_observation<'a>(
+    observations: &'a [StoredObservation],
+    sessions: &HashMap<i64, StoredSession>,
+    parents: &HashMap<i64, i64>,
+) -> Result<&'a StoredObservation, SqliteStoreError> {
+    let mut candidates = observations
+        .iter()
+        .filter(|candidate| {
+            !observations.iter().any(|other| {
+                other.source_session_id != candidate.source_session_id
+                    && observation_is_ancestor(other, candidate, parents)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    // Invalid cyclic lineage can make every observation appear dominated. Treat
+    // it as ambiguous and use the documented stable fallback instead.
+    if candidates.is_empty() {
+        candidates.extend(observations);
+    }
+
+    candidates
+        .into_iter()
+        .min_by(|left, right| {
+            let left_session = sessions.get(&left.source_session_id);
+            let right_session = sessions.get(&right.source_session_id);
+            match (left_session, right_session) {
+                (Some(left), Some(right)) => {
+                    observation_fallback_key(left).cmp(&observation_fallback_key(right))
+                }
+                _ => std::cmp::Ordering::Equal,
+            }
+        })
+        .ok_or(SqliteStoreError::CorruptData(
+            "a usage event without observations",
+        ))
+}
+
+fn observation_is_ancestor(
+    possible_ancestor: &StoredObservation,
+    possible_descendant: &StoredObservation,
+    parents: &HashMap<i64, i64>,
+) -> bool {
+    if !possible_ancestor.session_provenance_known || !possible_descendant.session_provenance_known
+    {
+        return false;
+    }
+
+    let mut current = possible_descendant.source_session_id;
+    let mut visited = HashSet::new();
+    let mut ancestors = Vec::new();
+    while let Some(parent) = parents.get(&current).copied() {
+        if !visited.insert(current) {
+            return false;
+        }
+        ancestors.push(parent);
+        current = parent;
+    }
+    ancestors.contains(&possible_ancestor.source_session_id)
+}
+
+fn observation_fallback_key(session: &StoredSession) -> (i64, &str, &Path) {
+    (
+        session.started_at_ms,
+        &session.session_id,
+        &session.source_path,
+    )
+}
+
+fn checked_add_tokens(
+    current: TokenCounts,
+    value: TokenCounts,
+) -> Result<TokenCounts, SqliteStoreError> {
+    current
+        .checked_add(value)
+        .ok_or(SqliteStoreError::ValueOutOfRange("summary token total"))
+}
+
+fn checked_add_cost(
+    current: &mut Option<RecordedCost>,
+    value: Option<RecordedCost>,
+) -> Result<(), SqliteStoreError> {
+    let Some(value) = value else {
+        return Ok(());
+    };
+    *current = Some(match *current {
+        Some(current) => current
+            .checked_add(value)
+            .map_err(|_| SqliteStoreError::ValueOutOfRange("summary recorded cost"))?,
+        None => value,
+    });
+    Ok(())
 }
 
 fn migrate(connection: &mut Connection) -> Result<(), SqliteStoreError> {
@@ -820,6 +1171,16 @@ fn usage_kind_to_str(kind: UsageKind) -> &'static str {
         UsageKind::ToolResult => "tool_result",
         UsageKind::Compaction => "compaction",
         UsageKind::BranchSummary => "branch_summary",
+    }
+}
+
+fn usage_kind_from_str(value: &str) -> Result<UsageKind, SqliteStoreError> {
+    match value {
+        "assistant" => Ok(UsageKind::Assistant),
+        "tool_result" => Ok(UsageKind::ToolResult),
+        "compaction" => Ok(UsageKind::Compaction),
+        "branch_summary" => Ok(UsageKind::BranchSummary),
+        _ => Err(SqliteStoreError::CorruptData("an invalid usage kind")),
     }
 }
 
