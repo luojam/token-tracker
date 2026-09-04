@@ -13,12 +13,12 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
 
 use crate::application::{
-    DiscoveryReport, FileRevision, ImportStats, ParseCompletion, SessionImport, SourceState,
-    UsageStore,
+    CommitImportOutcome, DiscoveryReport, FileRevision, ImportStats, ParseCompletion,
+    SessionImport, SourceState, UsageStore,
 };
 use crate::core::{RecordedCost, Timestamp, UsageEvent, UsageKind};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const APPLICATION_DIRECTORY: &str = "token-tracker";
 const DATABASE_FILENAME: &str = "usage.db";
 
@@ -100,7 +100,8 @@ impl UsageStore for SqliteUsageStore {
                     last_observed_modified_nanos,
                     last_imported_size, last_imported_modified_seconds,
                     last_imported_modified_nanos,
-                    last_successful_scan_ms, last_parse_completion, present
+                    last_successful_scan_ms, last_parse_completion, present,
+                    reimport_required
                FROM sources
               ORDER BY path",
         )?;
@@ -173,17 +174,21 @@ impl UsageStore for SqliteUsageStore {
         Ok(())
     }
 
-    fn commit_import(&mut self, import: &SessionImport) -> Result<ImportStats, Self::Error> {
+    fn commit_import(
+        &mut self,
+        import: &SessionImport,
+    ) -> Result<CommitImportOutcome, Self::Error> {
         validate_import(import)?;
 
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         if import_is_stale(&transaction, import)? {
-            return Ok(ImportStats::default());
+            return Ok(CommitImportOutcome::IgnoredStale);
         }
 
         let source_id = upsert_imported_source(&transaction, import)?;
+        let source_session_id = upsert_source_session(&transaction, source_id, import)?;
         let mut stats = ImportStats::default();
 
         for event in &import.parsed.events {
@@ -200,22 +205,28 @@ impl UsageStore for SqliteUsageStore {
                 |row| row.get(0),
             )?;
 
-            let inserted = insert_observation(&transaction, source_id, event_id, event)?;
+            let inserted =
+                insert_observation(&transaction, source_id, source_session_id, event_id, event)?;
             if inserted {
                 stats.observations_inserted += 1;
             } else {
-                stats.observations_updated +=
-                    update_observation(&transaction, source_id, event_id, event)? as u64;
+                stats.observations_updated += update_observation(
+                    &transaction,
+                    source_id,
+                    source_session_id,
+                    event_id,
+                    event,
+                )? as u64;
             }
         }
 
         transaction.commit()?;
-        Ok(stats)
+        Ok(CommitImportOutcome::Applied(stats))
     }
 }
 
 fn migrate(connection: &mut Connection) -> Result<(), SqliteStoreError> {
-    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let mut version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version > SCHEMA_VERSION {
         return Err(SqliteStoreError::UnsupportedSchemaVersion(version));
     }
@@ -285,6 +296,96 @@ fn migrate(connection: &mut Connection) -> Result<(), SqliteStoreError> {
             PRAGMA user_version = 1;",
         )?;
         transaction.commit()?;
+        version = 1;
+    }
+
+    if version == 1 {
+        // Version 1 retained observations across source rewrites but only kept the
+        // latest session metadata. Mark those associations as unknown and force
+        // a reimport so events still present in available files regain provenance.
+        let transaction = connection.transaction()?;
+        transaction.execute_batch(
+            "CREATE TABLE source_sessions (
+                id INTEGER PRIMARY KEY,
+                source_id INTEGER NOT NULL REFERENCES sources(id),
+                agent TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                format_version INTEGER NOT NULL,
+                working_directory BLOB NOT NULL,
+                started_at_ms INTEGER NOT NULL,
+                name TEXT,
+                parent_session TEXT,
+                UNIQUE (source_id, agent, session_id),
+                UNIQUE (id, source_id)
+            );
+
+            CREATE INDEX source_sessions_identity
+                ON source_sessions(agent, session_id);
+
+            INSERT INTO source_sessions (
+                source_id, agent, session_id, format_version, working_directory,
+                started_at_ms, name, parent_session
+            )
+            SELECT id, agent, session_id, format_version, working_directory,
+                   started_at_ms, name, parent_session
+              FROM sources
+             WHERE agent IS NOT NULL;
+
+            DROP INDEX source_observations_event;
+            ALTER TABLE source_observations RENAME TO source_observations_v1;
+
+            CREATE TABLE source_observations (
+                source_id INTEGER NOT NULL REFERENCES sources(id),
+                source_session_id INTEGER NOT NULL,
+                event_id INTEGER NOT NULL REFERENCES usage_events(id),
+                timestamp_ms INTEGER NOT NULL,
+                usage_kind TEXT NOT NULL,
+                provider TEXT,
+                model TEXT,
+                input_tokens BLOB NOT NULL,
+                output_tokens BLOB NOT NULL,
+                cache_read_tokens BLOB NOT NULL,
+                cache_write_tokens BLOB NOT NULL,
+                recorded_cost_usd REAL,
+                session_provenance_known INTEGER NOT NULL
+                    CHECK (session_provenance_known IN (0, 1)),
+                PRIMARY KEY (source_session_id, event_id),
+                FOREIGN KEY (source_session_id, source_id)
+                    REFERENCES source_sessions(id, source_id),
+                CHECK ((provider IS NULL) = (model IS NULL)),
+                CHECK (recorded_cost_usd IS NULL OR recorded_cost_usd >= 0.0)
+            );
+
+            INSERT INTO source_observations (
+                source_id, source_session_id, event_id, timestamp_ms, usage_kind,
+                provider, model, input_tokens, output_tokens, cache_read_tokens,
+                cache_write_tokens, recorded_cost_usd, session_provenance_known
+            )
+            SELECT observation.source_id, session.id, observation.event_id,
+                   observation.timestamp_ms, observation.usage_kind,
+                   observation.provider, observation.model,
+                   observation.input_tokens, observation.output_tokens,
+                   observation.cache_read_tokens, observation.cache_write_tokens,
+                   observation.recorded_cost_usd, 0
+              FROM source_observations_v1 observation
+              JOIN source_sessions session
+                ON session.source_id = observation.source_id;
+
+            DROP TABLE source_observations_v1;
+
+            CREATE INDEX source_observations_event
+                ON source_observations(event_id);
+
+            ALTER TABLE sources ADD COLUMN reimport_required INTEGER NOT NULL DEFAULT 0
+                CHECK (reimport_required IN (0, 1));
+
+            UPDATE sources
+               SET reimport_required = 1
+             WHERE agent IS NOT NULL;
+
+            PRAGMA user_version = 2;",
+        )?;
+        transaction.commit()?;
     }
 
     Ok(())
@@ -342,6 +443,7 @@ fn upsert_imported_source(
             ),
             last_successful_scan_ms = excluded.last_successful_scan_ms,
             last_parse_completion = excluded.last_parse_completion,
+            reimport_required = 0,
             present = CASE
                 WHEN excluded.last_discovery_scan_ms >= sources.last_discovery_scan_ms
                 THEN 1 ELSE sources.present END",
@@ -366,6 +468,46 @@ fn upsert_imported_source(
         .query_row(
             "SELECT id FROM sources WHERE path = ?1",
             params![path],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+}
+
+fn upsert_source_session(
+    transaction: &Transaction<'_>,
+    source_id: i64,
+    import: &SessionImport,
+) -> Result<i64, SqliteStoreError> {
+    let metadata = &import.parsed.metadata;
+    transaction.execute(
+        "INSERT INTO source_sessions (
+            source_id, agent, session_id, format_version, working_directory,
+            started_at_ms, name, parent_session
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(source_id, agent, session_id) DO UPDATE SET
+            format_version = excluded.format_version,
+            working_directory = excluded.working_directory,
+            started_at_ms = excluded.started_at_ms,
+            name = excluded.name,
+            parent_session = excluded.parent_session",
+        params![
+            source_id,
+            metadata.agent.as_str(),
+            &metadata.session_id,
+            i64::from(metadata.format_version),
+            encode_path(&metadata.working_directory),
+            metadata.started_at.as_unix_milliseconds(),
+            &metadata.name,
+            &metadata.parent_session,
+        ],
+    )?;
+
+    transaction
+        .query_row(
+            "SELECT id
+               FROM source_sessions
+              WHERE source_id = ?1 AND agent = ?2 AND session_id = ?3",
+            params![source_id, metadata.agent.as_str(), &metadata.session_id],
             |row| row.get(0),
         )
         .map_err(Into::into)
@@ -398,19 +540,21 @@ fn import_is_stale(
 fn insert_observation(
     transaction: &Transaction<'_>,
     source_id: i64,
+    source_session_id: i64,
     event_id: i64,
     event: &UsageEvent,
 ) -> Result<bool, SqliteStoreError> {
     let (provider, model) = attribution_parts(event);
     let changed = transaction.execute(
         "INSERT INTO source_observations (
-            source_id, event_id, timestamp_ms, usage_kind, provider, model,
-            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-            recorded_cost_usd
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
-         ON CONFLICT(source_id, event_id) DO NOTHING",
+            source_id, source_session_id, event_id, timestamp_ms, usage_kind,
+            provider, model, input_tokens, output_tokens, cache_read_tokens,
+            cache_write_tokens, recorded_cost_usd, session_provenance_known
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1)
+         ON CONFLICT(source_session_id, event_id) DO NOTHING",
         params![
             source_id,
+            source_session_id,
             event_id,
             event.timestamp.as_unix_milliseconds(),
             usage_kind_to_str(event.kind),
@@ -429,6 +573,7 @@ fn insert_observation(
 fn update_observation(
     transaction: &Transaction<'_>,
     source_id: i64,
+    source_session_id: i64,
     event_id: i64,
     event: &UsageEvent,
 ) -> Result<usize, SqliteStoreError> {
@@ -444,9 +589,11 @@ fn update_observation(
                     output_tokens = ?6,
                     cache_read_tokens = ?7,
                     cache_write_tokens = ?8,
-                    recorded_cost_usd = ?9
-              WHERE source_id = ?10 AND event_id = ?11
-                AND (timestamp_ms IS NOT ?1
+                    recorded_cost_usd = ?9,
+                    session_provenance_known = 1
+              WHERE source_id = ?10 AND source_session_id = ?11 AND event_id = ?12
+                AND (session_provenance_known != 1
+                     OR timestamp_ms IS NOT ?1
                      OR usage_kind IS NOT ?2
                      OR provider IS NOT ?3
                      OR model IS NOT ?4
@@ -466,6 +613,7 @@ fn update_observation(
                 encode_u64(event.tokens.cache_write),
                 event.recorded_cost.map(RecordedCost::as_usd),
                 source_id,
+                source_session_id,
                 event_id,
             ],
         )
@@ -504,6 +652,11 @@ fn source_state_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceStat
         1 => true,
         _ => return Err(corrupt_sql_value("invalid source presence value")),
     };
+    let reimport_required = match row.get::<_, i64>(10)? {
+        0 => false,
+        1 => true,
+        _ => return Err(corrupt_sql_value("invalid source reimport state")),
+    };
 
     Ok(SourceState {
         path,
@@ -512,6 +665,7 @@ fn source_state_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceStat
         last_successful_scan,
         last_parse_completion,
         present,
+        reimport_required,
     })
 }
 
@@ -867,25 +1021,33 @@ mod tests {
 
         assert_eq!(
             store.commit_import(&original).unwrap(),
-            ImportStats {
+            CommitImportOutcome::Applied(ImportStats {
                 event_identities_inserted: 1,
                 observations_inserted: 1,
                 observations_updated: 0,
-            }
+            })
         );
         assert_eq!(
             store.commit_import(&original).unwrap(),
-            ImportStats::default()
+            CommitImportOutcome::Applied(ImportStats::default())
         );
 
-        let changed = session_import("/sessions/a.jsonl", 99);
+        let mut repeated = original.clone();
+        repeated.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
+        assert_eq!(
+            store.commit_import(&repeated).unwrap(),
+            CommitImportOutcome::Applied(ImportStats::default())
+        );
+
+        let mut changed = session_import("/sessions/a.jsonl", 99);
+        changed.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_003_000);
         assert_eq!(
             store.commit_import(&changed).unwrap(),
-            ImportStats {
+            CommitImportOutcome::Applied(ImportStats {
                 event_identities_inserted: 0,
                 observations_inserted: 0,
                 observations_updated: 1,
-            }
+            })
         );
     }
 
@@ -906,11 +1068,11 @@ mod tests {
 
         assert_eq!(
             store.commit_import(&replacement).unwrap(),
-            ImportStats {
+            CommitImportOutcome::Applied(ImportStats {
                 event_identities_inserted: 0,
-                observations_inserted: 0,
-                observations_updated: 1,
-            }
+                observations_inserted: 1,
+                observations_updated: 0,
+            })
         );
         let stored_metadata = store
             .connection
@@ -937,13 +1099,16 @@ mod tests {
         assert_eq!(stored_metadata.2, 1_700_000_001_000);
         assert_eq!(stored_metadata.3.as_deref(), Some("Replacement session"));
         assert_eq!(stored_metadata.4.as_deref(), Some("parent-session"));
-        let stored_tokens = store
+        let mut statement = store
             .connection
-            .query_row("SELECT input_tokens FROM source_observations", [], |row| {
-                row.get::<_, Vec<u8>>(0)
-            })
+            .prepare("SELECT input_tokens FROM source_observations ORDER BY input_tokens")
             .unwrap();
-        assert_eq!(decode_u64(&stored_tokens).unwrap(), 99);
+        let stored_tokens = statement
+            .query_map([], |row| row.get::<_, Vec<u8>>(0))
+            .unwrap()
+            .map(|value| decode_u64(&value.unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(stored_tokens, vec![10, 99]);
     }
 
     #[test]
@@ -961,7 +1126,7 @@ mod tests {
         late_original.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
         assert_eq!(
             store.commit_import(&late_original).unwrap(),
-            ImportStats::default()
+            CommitImportOutcome::IgnoredStale
         );
 
         let stored_session: String = store
@@ -969,13 +1134,16 @@ mod tests {
             .query_row("SELECT session_id FROM sources", [], |row| row.get(0))
             .unwrap();
         assert_eq!(stored_session, "replacement-session");
-        let stored_tokens = store
+        let mut statement = store
             .connection
-            .query_row("SELECT input_tokens FROM source_observations", [], |row| {
-                row.get::<_, Vec<u8>>(0)
-            })
+            .prepare("SELECT input_tokens FROM source_observations ORDER BY input_tokens")
             .unwrap();
-        assert_eq!(decode_u64(&stored_tokens).unwrap(), 99);
+        let stored_tokens = statement
+            .query_map([], |row| row.get::<_, Vec<u8>>(0))
+            .unwrap()
+            .map(|value| decode_u64(&value.unwrap()).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(stored_tokens, vec![10, 99]);
     }
 
     #[test]
@@ -995,18 +1163,21 @@ mod tests {
                 Timestamp::from_unix_milliseconds(1_700_000_003_000),
             )
             .unwrap();
-        assert_eq!(store.commit_import(&stale).unwrap(), ImportStats::default());
+        assert_eq!(
+            store.commit_import(&stale).unwrap(),
+            CommitImportOutcome::IgnoredStale
+        );
 
         let mut current = session_import("/sessions/a.jsonl", 99);
         current.parsed.metadata.session_id = "current-session".into();
         current.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_004_000);
         assert_eq!(
             store.commit_import(&current).unwrap(),
-            ImportStats {
+            CommitImportOutcome::Applied(ImportStats {
                 event_identities_inserted: 1,
                 observations_inserted: 1,
                 observations_updated: 0,
-            }
+            })
         );
         let stored_session: String = store
             .connection
@@ -1027,7 +1198,10 @@ mod tests {
 
         let mut stale = session_import("/sessions/a.jsonl", 50);
         stale.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
-        assert_eq!(store.commit_import(&stale).unwrap(), ImportStats::default());
+        assert_eq!(
+            store.commit_import(&stale).unwrap(),
+            CommitImportOutcome::IgnoredStale
+        );
 
         store
             .record_discovery(
@@ -1102,6 +1276,140 @@ mod tests {
     }
 
     #[test]
+    fn version_one_observations_do_not_fabricate_session_provenance() {
+        let database = TempDatabase::new();
+        let connection = Connection::open(&database.path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE sources (
+                    id INTEGER PRIMARY KEY,
+                    path BLOB NOT NULL UNIQUE,
+                    agent TEXT,
+                    session_id TEXT,
+                    format_version INTEGER,
+                    working_directory BLOB,
+                    started_at_ms INTEGER,
+                    name TEXT,
+                    parent_session TEXT,
+                    last_observed_size BLOB NOT NULL,
+                    last_observed_modified_seconds INTEGER NOT NULL,
+                    last_observed_modified_nanos INTEGER NOT NULL,
+                    last_imported_size BLOB,
+                    last_imported_modified_seconds INTEGER,
+                    last_imported_modified_nanos INTEGER,
+                    last_discovery_scan_ms INTEGER NOT NULL,
+                    last_successful_scan_ms INTEGER,
+                    last_parse_completion TEXT,
+                    present INTEGER NOT NULL
+                );
+                CREATE TABLE usage_events (
+                    id INTEGER PRIMARY KEY,
+                    agent TEXT NOT NULL,
+                    adapter_key TEXT NOT NULL,
+                    UNIQUE (agent, adapter_key)
+                );
+                CREATE TABLE source_observations (
+                    source_id INTEGER NOT NULL REFERENCES sources(id),
+                    event_id INTEGER NOT NULL REFERENCES usage_events(id),
+                    timestamp_ms INTEGER NOT NULL,
+                    usage_kind TEXT NOT NULL,
+                    provider TEXT,
+                    model TEXT,
+                    input_tokens BLOB NOT NULL,
+                    output_tokens BLOB NOT NULL,
+                    cache_read_tokens BLOB NOT NULL,
+                    cache_write_tokens BLOB NOT NULL,
+                    recorded_cost_usd REAL,
+                    PRIMARY KEY (source_id, event_id)
+                );
+                CREATE INDEX source_observations_event
+                    ON source_observations(event_id);
+                PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO sources VALUES (
+                    1, ?1, 'pi', 'replacement-session', 3, ?2, 1000, NULL, NULL,
+                    ?3, 10, 20, ?3, 10, 20, 2000, 2000, 'complete', 1
+                )",
+                params![
+                    encode_path(Path::new("/sessions/old.jsonl")),
+                    encode_path(Path::new("/work/project")),
+                    encode_u64(123),
+                ],
+            )
+            .unwrap();
+        connection
+            .execute_batch(
+                "INSERT INTO usage_events VALUES (1, 'pi', 'legacy-event');
+                 INSERT INTO usage_events VALUES (2, 'pi', 'shared-event');",
+            )
+            .unwrap();
+        for event_id in [1, 2] {
+            connection
+                .execute(
+                    "INSERT INTO source_observations VALUES (
+                        1, ?1, 1500, 'assistant', 'provider', 'model',
+                        ?2, ?3, ?4, ?5, 0.25
+                    )",
+                    params![
+                        event_id,
+                        encode_u64(10),
+                        encode_u64(2),
+                        encode_u64(3),
+                        encode_u64(4),
+                    ],
+                )
+                .unwrap();
+        }
+        drop(connection);
+
+        let mut store = SqliteUsageStore::open(&database.path).unwrap();
+        let version: i64 = store
+            .connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let migrated_state = &store.source_states().unwrap()[0];
+        assert!(migrated_state.last_imported_revision.is_some());
+        assert!(migrated_state.reimport_required);
+
+        let mut current = session_import("/sessions/old.jsonl", 99);
+        current.parsed.metadata.session_id = "replacement-session".into();
+        assert_eq!(
+            store.commit_import(&current).unwrap(),
+            CommitImportOutcome::Applied(ImportStats {
+                event_identities_inserted: 0,
+                observations_inserted: 0,
+                observations_updated: 1,
+            })
+        );
+
+        let mut statement = store
+            .connection
+            .prepare(
+                "SELECT event.adapter_key, observation.session_provenance_known
+                   FROM source_observations observation
+                   JOIN usage_events event ON event.id = observation.event_id
+                  ORDER BY event.adapter_key",
+            )
+            .unwrap();
+        let provenance = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            provenance,
+            vec![("legacy-event".into(), 0), ("shared-event".into(), 1)]
+        );
+        assert!(!store.source_states().unwrap()[0].reimport_required);
+    }
+
+    #[test]
     fn different_sources_retain_different_observations_for_one_event() {
         let mut store = SqliteUsageStore::open_in_memory().unwrap();
         store
@@ -1127,6 +1435,89 @@ mod tests {
             .map(|value| decode_u64(&value.unwrap()).unwrap())
             .collect::<Vec<_>>();
         assert_eq!(values, vec![10, 99]);
+    }
+
+    #[test]
+    fn conflicting_observations_are_order_independent() {
+        fn stored_observations(reverse: bool) -> Vec<(PathBuf, String, u64)> {
+            let mut store = SqliteUsageStore::open_in_memory().unwrap();
+            let first = session_import("/sessions/a.jsonl", 10);
+            let mut second = session_import("/sessions/b.jsonl", 99);
+            second.parsed.metadata.parent_session = Some("/sessions/a.jsonl".into());
+            let imports = if reverse {
+                [&second, &first]
+            } else {
+                [&first, &second]
+            };
+            for import in imports {
+                store.commit_import(import).unwrap();
+            }
+
+            let mut statement = store
+                .connection
+                .prepare(
+                    "SELECT source.path, session.session_id, observation.input_tokens
+                       FROM source_observations observation
+                       JOIN sources source ON source.id = observation.source_id
+                       JOIN source_sessions session
+                         ON session.id = observation.source_session_id
+                      ORDER BY source.path",
+                )
+                .unwrap();
+            statement
+                .query_map([], |row| {
+                    let path = decode_path(row.get(0)?).map_err(to_sql_conversion_error)?;
+                    let tokens =
+                        decode_u64(&row.get::<_, Vec<u8>>(2)?).map_err(to_sql_conversion_error)?;
+                    Ok((path, row.get(1)?, tokens))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+        }
+
+        assert_eq!(stored_observations(false), stored_observations(true));
+    }
+
+    #[test]
+    fn a_replaced_source_keeps_the_session_provenance_of_absent_observations() {
+        let mut store = SqliteUsageStore::open_in_memory().unwrap();
+        let mut original = session_import("/sessions/a.jsonl", 10);
+        original.parsed.metadata.session_id = "original-session".into();
+        store.commit_import(&original).unwrap();
+
+        let mut replacement = session_import("/sessions/a.jsonl", 99);
+        replacement.parsed.metadata.session_id = "replacement-session".into();
+        replacement.parsed.events[0].identity.adapter_key = "replacement-event".into();
+        replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
+        store.commit_import(&replacement).unwrap();
+
+        let mut statement = store
+            .connection
+            .prepare(
+                "SELECT event.adapter_key, session.session_id
+                   FROM source_observations observation
+                   JOIN usage_events event ON event.id = observation.event_id
+                   JOIN source_sessions session
+                     ON session.id = observation.source_session_id
+                  ORDER BY event.adapter_key",
+            )
+            .unwrap();
+        let provenance = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(
+            provenance,
+            vec![
+                ("replacement-event".into(), "replacement-session".into()),
+                ("shared-event".into(), "original-session".into()),
+            ]
+        );
     }
 
     #[test]

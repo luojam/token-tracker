@@ -1,4 +1,11 @@
-//! Contracts for session discovery, parsing, persistence, and queries.
+//! Contracts and use cases for session discovery, parsing, persistence, and queries.
+
+mod synchronization;
+
+pub use synchronization::{
+    ImportCounts, ImportSynchronizationError, ImportWarning, SynchronizationReport,
+    synchronize_sessions, synchronize_sessions_at,
+};
 
 use std::error::Error;
 use std::io::BufRead;
@@ -76,6 +83,8 @@ pub struct SourceState {
     pub last_successful_scan: Option<Timestamp>,
     pub last_parse_completion: Option<ParseCompletion>,
     pub present: bool,
+    /// The stored revision must be imported again despite appearing unchanged.
+    pub reimport_required: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -92,6 +101,12 @@ pub struct ImportStats {
     pub observations_updated: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommitImportOutcome {
+    Applied(ImportStats),
+    IgnoredStale,
+}
+
 pub trait UsageStore {
     type Error: Error + Send + Sync + 'static;
 
@@ -106,10 +121,11 @@ pub trait UsageStore {
         observed_at: Timestamp,
     ) -> Result<(), Self::Error>;
 
-    /// Atomically upserts the latest metadata for a source path and its
-    /// source-scoped observations. A newer import may replace metadata from a
-    /// different session; observations absent from a rewritten source are retained.
-    fn commit_import(&mut self, import: &SessionImport) -> Result<ImportStats, Self::Error>;
+    /// Atomically upserts the latest metadata for a source path and the
+    /// observations for that source/session pair. Historical session provenance
+    /// and observations absent from a rewritten source are retained.
+    fn commit_import(&mut self, import: &SessionImport)
+    -> Result<CommitImportOutcome, Self::Error>;
 }
 
 pub trait UsageSummaryStore {
