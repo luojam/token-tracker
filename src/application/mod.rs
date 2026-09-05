@@ -2,12 +2,14 @@
 
 mod reporting;
 mod synchronization;
+mod workflow;
 
 pub use reporting::render_terminal_report;
 pub use synchronization::{
     ImportCounts, ImportSynchronizationError, ImportWarning, SynchronizationReport,
     synchronize_sessions, synchronize_sessions_at,
 };
+pub use workflow::{AllTimeReportError, run_all_time_report};
 
 use std::error::Error;
 use std::io::BufRead;
