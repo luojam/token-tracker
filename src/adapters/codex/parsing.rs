@@ -1,1 +1,484 @@
+use super::CODEX_AGENT_ID;
+use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
+use crate::core::{AgentId, ParentSession, SessionMetadata, Timestamp};
+use chrono::DateTime;
+use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, Visitor, value::MapAccessDeserializer};
+use serde::{Deserialize, Deserializer};
+use std::collections::BTreeMap;
+use std::io::{self, BufRead};
+use std::marker::PhantomData;
+use std::path::PathBuf;
+use std::{error::Error, fmt, str};
 
+/// Envelope and metadata parser; usage normalization follows in C04–C06.
+/// Keep this adapter unregistered until accounting and pricing are complete.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CodexSessionParser;
+
+impl CodexSessionParser {
+    pub const fn new() -> Self {
+        Self
+    }
+}
+
+impl SessionParser for CodexSessionParser {
+    type Error = CodexParseError;
+
+    fn parse(
+        &self,
+        input: &mut dyn BufRead,
+        _context: ParseContext<'_>,
+    ) -> Result<ParsedSession, Self::Error> {
+        let mut line = Vec::new();
+        let mut line_number = 0;
+        let mut session: Option<SessionState> = None;
+        let mut completion = ParseCompletion::Complete;
+
+        loop {
+            line.clear();
+            line_number += 1;
+            if input
+                .read_until(b'\n', &mut line)
+                .map_err(|error| CodexParseError::Io {
+                    line: line_number,
+                    kind: error.kind(),
+                })?
+                == 0
+            {
+                break;
+            }
+
+            let Some(text) = complete_line(&line, line_number)? else {
+                if session.is_none() {
+                    return Err(CodexParseError::IncompleteHeader);
+                }
+                completion = ParseCompletion::IncompleteFinalLine;
+                break;
+            };
+            let entry: TypeWire = decode(text, line_number, "type")?;
+            if entry.entry_type == "session_meta" {
+                validate_timestamp(text, line_number)?;
+                let header: HeaderWire = payload(text, line_number, "session_meta.payload")?;
+                let header = header.normalize(line_number)?;
+                match session.as_mut() {
+                    Some(session) => session.accept_header(header, line_number)?,
+                    None => session = Some(SessionState::new(header)),
+                }
+            } else {
+                let session = session.as_mut().ok_or(CodexParseError::InvalidHeader)?;
+                session.inherited_prefix = false;
+                validate_entry(text, &entry.entry_type, line_number)?;
+            }
+        }
+
+        let session = session.ok_or(CodexParseError::MissingHeader)?;
+        Ok(ParsedSession {
+            metadata: session.metadata,
+            events: Vec::new(),
+            completion,
+        })
+    }
+}
+
+fn complete_line(bytes: &[u8], line: usize) -> Result<Option<&str>, CodexParseError> {
+    let terminated = bytes.ends_with(b"\n");
+    let text = match str::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(error) if !terminated && error.error_len().is_none() => {
+            return match serde_json::from_slice::<IgnoredAny>(bytes) {
+                Err(error) if error.is_eof() && valid_unicode_escape_prefixes(bytes) => Ok(None),
+                _ => Err(CodexParseError::MalformedLine { line }),
+            };
+        }
+        Err(_) => return Err(CodexParseError::InvalidUtf8 { line }),
+    };
+
+    // Check syntax independently of field types, including ignored content.
+    match serde_json::from_str::<IgnoredAny>(text) {
+        Ok(_) => Ok(Some(text)),
+        Err(error) if !terminated && error.is_eof() && valid_unicode_escape_prefixes(bytes) => {
+            Ok(None)
+        }
+        Err(_) if !terminated && text.ends_with(['.', 'e', 'E', '+', '-']) => {
+            // A digit completes a truncated number only if the preceding syntax is valid.
+            match serde_json::from_str::<IgnoredAny>(&format!("{text}0")) {
+                Ok(_) => Ok(None),
+                Err(error) if error.is_eof() && valid_unicode_escape_prefixes(bytes) => Ok(None),
+                Err(_) => Err(CodexParseError::MalformedLine { line }),
+            }
+        }
+        Err(_) => Err(CodexParseError::MalformedLine { line }),
+    }
+}
+
+fn valid_unicode_escape_prefixes(bytes: &[u8]) -> bool {
+    // Serde reports EOF before validating escapes with fewer than four remaining bytes.
+    let mut bytes = bytes.iter();
+    let mut in_string = false;
+    while let Some(&byte) = bytes.next() {
+        if byte == b'"' {
+            in_string = !in_string;
+        } else if in_string
+            && byte == b'\\'
+            && bytes.next() == Some(&b'u')
+            && !bytes.by_ref().take(4).all(u8::is_ascii_hexdigit)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn decode<T: DeserializeOwned>(
+    text: &str,
+    line: usize,
+    field: &'static str,
+) -> Result<T, CodexParseError> {
+    serde_json::from_str::<ObjectWire<T>>(text)
+        .map(|object| object.0)
+        .map_err(|_| CodexParseError::InvalidField { line, field })
+}
+
+fn payload<T: DeserializeOwned>(
+    text: &str,
+    line: usize,
+    field: &'static str,
+) -> Result<T, CodexParseError> {
+    decode::<PayloadWire<T>>(text, line, field).map(|entry| entry.payload.0)
+}
+
+fn parse_timestamp(
+    value: &str,
+    line: usize,
+    field: &'static str,
+) -> Result<Timestamp, CodexParseError> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| Timestamp::from_unix_milliseconds(timestamp.timestamp_millis()))
+        .map_err(|_| CodexParseError::InvalidField { line, field })
+}
+
+fn validate_timestamp(text: &str, line: usize) -> Result<(), CodexParseError> {
+    let entry: TimestampWire = decode(text, line, "timestamp")?;
+    parse_timestamp(&entry.timestamp, line, "timestamp")?;
+    Ok(())
+}
+
+fn validate_entry(text: &str, entry_type: &str, line: usize) -> Result<(), CodexParseError> {
+    match entry_type {
+        "token_usage_record" => {
+            validate_timestamp(text, line)?;
+            payload::<ResponseUsageWire>(text, line, "token_usage_record.payload")?;
+        }
+        "turn_context" => {
+            validate_timestamp(text, line)?;
+            payload::<TurnWire>(text, line, "turn_context.payload.turn_id")?;
+        }
+        "event_msg" => {
+            let event: TypeWire = payload(text, line, "event_msg.payload.type")?;
+            match event.entry_type.as_str() {
+                "token_count" => {
+                    validate_timestamp(text, line)?;
+                    payload::<TokenCountWire>(text, line, "event_msg.payload.info")?;
+                }
+                "task_started" | "task_complete" | "turn_aborted" => {
+                    validate_timestamp(text, line)?;
+                    payload::<TurnWire>(text, line, "event_msg.payload.turn_id")?;
+                }
+                _ => {}
+            }
+        }
+        "compacted" => validate_timestamp(text, line)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+struct SessionState {
+    metadata: SessionMetadata,
+    headers: BTreeMap<String, HeaderIdentity>,
+    expected_ancestor: Option<String>,
+    inherited_prefix: bool,
+}
+
+impl SessionState {
+    fn new(header: NormalizedHeader) -> Self {
+        Self {
+            expected_ancestor: header.identity.forked_from_id.clone(),
+            headers: BTreeMap::from([(header.metadata.session_id.clone(), header.identity)]),
+            metadata: header.metadata,
+            inherited_prefix: true,
+        }
+    }
+
+    fn accept_header(
+        &mut self,
+        header: NormalizedHeader,
+        line: usize,
+    ) -> Result<(), CodexParseError> {
+        let id = &header.metadata.session_id;
+        if let Some(original) = self.headers.get(id) {
+            if header.identity.started_at != original.started_at {
+                return Err(CodexParseError::InvalidField {
+                    line,
+                    field: "session_meta.payload.timestamp",
+                });
+            }
+            if header.identity.parent_session != original.parent_session
+                || header.identity.forked_from_id != original.forked_from_id
+            {
+                return Err(CodexParseError::InvalidField {
+                    line,
+                    field: "session_meta.payload.parent",
+                });
+            }
+            return Ok(());
+        }
+
+        // Only a fork's contiguous inherited headers can introduce an ancestor.
+        if !self.inherited_prefix || self.expected_ancestor.as_ref() != Some(id) {
+            return Err(CodexParseError::InvalidField {
+                line,
+                field: "session_meta.payload.id",
+            });
+        }
+        if header
+            .identity
+            .parent_session
+            .as_ref()
+            .is_some_and(|parent| self.headers.contains_key(parent))
+        {
+            return Err(CodexParseError::InvalidField {
+                line,
+                field: "session_meta.payload.parent",
+            });
+        }
+        self.expected_ancestor = header.identity.forked_from_id.clone();
+        self.headers.insert(id.clone(), header.identity);
+        Ok(())
+    }
+}
+
+struct HeaderIdentity {
+    started_at: Timestamp,
+    parent_session: Option<String>,
+    forked_from_id: Option<String>,
+}
+
+struct NormalizedHeader {
+    metadata: SessionMetadata,
+    identity: HeaderIdentity,
+}
+
+impl HeaderWire {
+    fn normalize(self, line: usize) -> Result<NormalizedHeader, CodexParseError> {
+        for (value, field) in [
+            (Some(&self.id), "session_meta.payload.id"),
+            (
+                self.parent_thread_id.as_ref(),
+                "session_meta.payload.parent_thread_id",
+            ),
+            (
+                self.forked_from_id.as_ref(),
+                "session_meta.payload.forked_from_id",
+            ),
+        ] {
+            if value.is_some_and(|value| value.trim().is_empty()) {
+                return Err(CodexParseError::InvalidField { line, field });
+            }
+        }
+        if matches!(
+            (&self.parent_thread_id, &self.forked_from_id),
+            (Some(parent), Some(fork)) if parent != fork
+        ) {
+            return Err(CodexParseError::InvalidField {
+                line,
+                field: "session_meta.payload.parent",
+            });
+        }
+        let parent = self
+            .parent_thread_id
+            .or_else(|| self.forked_from_id.clone());
+        if parent.as_ref() == Some(&self.id) {
+            return Err(CodexParseError::InvalidField {
+                line,
+                field: "session_meta.payload.parent",
+            });
+        }
+        let started_at = parse_timestamp(&self.timestamp, line, "session_meta.payload.timestamp")?;
+        Ok(NormalizedHeader {
+            metadata: SessionMetadata {
+                agent: AgentId::from(CODEX_AGENT_ID),
+                session_id: self.id,
+                format_version: None,
+                working_directory: self.cwd.map(PathBuf::from),
+                started_at,
+                name: None,
+                parent_session: parent.clone().map(ParentSession::SessionId),
+            },
+            identity: HeaderIdentity {
+                started_at,
+                parent_session: parent,
+                forked_from_id: self.forked_from_id,
+            },
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct TypeWire {
+    #[serde(rename = "type")]
+    entry_type: String,
+}
+
+#[derive(Deserialize)]
+struct TimestampWire {
+    timestamp: String,
+}
+
+#[derive(Deserialize)]
+struct PayloadWire<T> {
+    payload: ObjectWire<T>,
+}
+
+struct ObjectWire<T>(T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for ObjectWire<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ObjectVisitor<T>(PhantomData<T>);
+
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for ObjectVisitor<T> {
+            type Value = ObjectWire<T>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an object")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                T::deserialize(MapAccessDeserializer::new(map)).map(ObjectWire)
+            }
+        }
+
+        deserializer.deserialize_map(ObjectVisitor(PhantomData))
+    }
+}
+
+#[derive(Deserialize)]
+struct HeaderWire {
+    id: String,
+    timestamp: String,
+    cwd: Option<String>,
+    parent_thread_id: Option<String>,
+    forked_from_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TurnWire {
+    #[serde(rename = "turn_id", deserialize_with = "nonempty_id")]
+    _turn_id: String,
+}
+
+#[derive(Deserialize)]
+struct ResponseUsageWire {
+    #[serde(rename = "response_id", deserialize_with = "nonempty_id")]
+    _response_id: String,
+    #[serde(rename = "thread_id", deserialize_with = "nonempty_id")]
+    _thread_id: String,
+    #[serde(rename = "turn_id", deserialize_with = "nonempty_id")]
+    _turn_id: String,
+    #[serde(rename = "session_id")]
+    _session_id: Option<String>,
+    #[serde(rename = "root_turn_id")]
+    _root_turn_id: Option<String>,
+    #[serde(rename = "usage")]
+    _usage: ObjectWire<TokenUsageWire>,
+    #[serde(rename = "turn_token_usage")]
+    _turn_token_usage: ObjectWire<TokenUsageWire>,
+    #[serde(rename = "thread_token_usage")]
+    _thread_token_usage: ObjectWire<TokenUsageWire>,
+}
+
+#[derive(Deserialize)]
+struct TokenCountWire {
+    #[serde(rename = "info")]
+    _info: Option<ObjectWire<TokenInfoWire>>,
+}
+
+#[derive(Deserialize)]
+struct TokenInfoWire {
+    #[serde(rename = "total_token_usage")]
+    _total_token_usage: ObjectWire<TokenUsageWire>,
+    #[serde(rename = "last_token_usage")]
+    _last_token_usage: ObjectWire<TokenUsageWire>,
+}
+
+#[derive(Deserialize)]
+struct TokenUsageWire {
+    #[serde(rename = "input_tokens")]
+    _input_tokens: u64,
+    #[serde(rename = "cached_input_tokens")]
+    _cached_input_tokens: u64,
+    #[serde(
+        rename = "cache_write_input_tokens",
+        default,
+        deserialize_with = "present_counter"
+    )]
+    _cache_write_input_tokens: Option<u64>,
+    #[serde(rename = "output_tokens")]
+    _output_tokens: u64,
+    #[serde(rename = "reasoning_output_tokens")]
+    _reasoning_output_tokens: u64,
+    #[serde(rename = "total_tokens")]
+    _total_tokens: u64,
+}
+
+fn nonempty_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    if value.trim().is_empty() {
+        return Err(serde::de::Error::custom("empty identifier"));
+    }
+    Ok(value)
+}
+
+fn present_counter<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u64>, D::Error> {
+    u64::deserialize(deserializer).map(Some)
+}
+
+#[derive(Debug)]
+pub enum CodexParseError {
+    MissingHeader,
+    IncompleteHeader,
+    InvalidHeader,
+    InvalidField { line: usize, field: &'static str },
+    MalformedLine { line: usize },
+    InvalidUtf8 { line: usize },
+    Io { line: usize, kind: io::ErrorKind },
+}
+
+impl fmt::Display for CodexParseError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingHeader => formatter.write_str("Codex session is missing its header"),
+            Self::IncompleteHeader => formatter.write_str("Codex session header is incomplete"),
+            Self::InvalidHeader => {
+                formatter.write_str("first JSONL value is not a Codex session header")
+            }
+            Self::InvalidField { line, field } => {
+                write!(formatter, "invalid {field} on Codex session line {line}")
+            }
+            Self::MalformedLine { line } => {
+                write!(formatter, "malformed Codex session line {line}")
+            }
+            Self::InvalidUtf8 { line } => {
+                write!(formatter, "invalid UTF-8 on Codex session line {line}")
+            }
+            Self::Io { line, kind } => {
+                write!(
+                    formatter,
+                    "could not read Codex session line {line}: {kind}"
+                )
+            }
+        }
+    }
+}
+
+impl Error for CodexParseError {}
