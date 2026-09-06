@@ -1,6 +1,9 @@
 use super::CODEX_AGENT_ID;
 use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
-use crate::core::{AgentId, ParentSession, SessionMetadata, Timestamp};
+use crate::core::{
+    AgentId, ParentSession, SessionMetadata, Timestamp, TokenCounts, UsageEvent,
+    UsageEventIdentity, UsageKind,
+};
 use chrono::DateTime;
 use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer};
@@ -10,7 +13,7 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::{error::Error, fmt, str};
 
-/// Envelope and metadata parser; usage normalization follows in C04–C06.
+/// Legacy accounting and mirror validation follow in C05–C06.
 /// Keep this adapter unregistered until accounting and pricing are complete.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CodexSessionParser;
@@ -67,14 +70,24 @@ impl SessionParser for CodexSessionParser {
             } else {
                 let session = session.as_mut().ok_or(CodexParseError::InvalidHeader)?;
                 session.inherited_prefix = false;
-                validate_entry(text, &entry.entry_type, line_number)?;
+                if entry.entry_type == "token_usage_record" {
+                    let timestamp = validate_timestamp(text, line_number)?;
+                    let response = payload(text, line_number, "token_usage_record.payload")?;
+                    session.accept_response(response, timestamp, line_number)?;
+                } else {
+                    validate_entry(text, &entry.entry_type, line_number)?;
+                }
             }
         }
 
         let session = session.ok_or(CodexParseError::MissingHeader)?;
         Ok(ParsedSession {
             metadata: session.metadata,
-            events: Vec::new(),
+            events: session
+                .responses
+                .into_values()
+                .map(|response| response.event)
+                .collect(),
             completion,
         })
     }
@@ -157,18 +170,13 @@ fn parse_timestamp(
         .map_err(|_| CodexParseError::InvalidField { line, field })
 }
 
-fn validate_timestamp(text: &str, line: usize) -> Result<(), CodexParseError> {
+fn validate_timestamp(text: &str, line: usize) -> Result<Timestamp, CodexParseError> {
     let entry: TimestampWire = decode(text, line, "timestamp")?;
-    parse_timestamp(&entry.timestamp, line, "timestamp")?;
-    Ok(())
+    parse_timestamp(&entry.timestamp, line, "timestamp")
 }
 
 fn validate_entry(text: &str, entry_type: &str, line: usize) -> Result<(), CodexParseError> {
     match entry_type {
-        "token_usage_record" => {
-            validate_timestamp(text, line)?;
-            payload::<ResponseUsageWire>(text, line, "token_usage_record.payload")?;
-        }
         "turn_context" => {
             validate_timestamp(text, line)?;
             payload::<TurnWire>(text, line, "turn_context.payload.turn_id")?;
@@ -187,7 +195,9 @@ fn validate_entry(text: &str, entry_type: &str, line: usize) -> Result<(), Codex
                 _ => {}
             }
         }
-        "compacted" => validate_timestamp(text, line)?,
+        "compacted" => {
+            validate_timestamp(text, line)?;
+        }
         _ => {}
     }
     Ok(())
@@ -198,6 +208,7 @@ struct SessionState {
     headers: BTreeMap<String, HeaderIdentity>,
     expected_ancestor: Option<String>,
     inherited_prefix: bool,
+    responses: BTreeMap<String, ResponseObservation>,
 }
 
 impl SessionState {
@@ -207,7 +218,94 @@ impl SessionState {
             headers: BTreeMap::from([(header.metadata.session_id.clone(), header.identity)]),
             metadata: header.metadata,
             inherited_prefix: true,
+            responses: BTreeMap::new(),
         }
+    }
+
+    fn accept_response(
+        &mut self,
+        response: ResponseUsageWire,
+        timestamp: Timestamp,
+        line: usize,
+    ) -> Result<(), CodexParseError> {
+        if !self.headers.contains_key(&response.thread_id) {
+            return Err(CodexParseError::InvalidField {
+                line,
+                field: "token_usage_record.payload.thread_id",
+            });
+        }
+        let tokens = response
+            .usage
+            .0
+            .normalize(line, "token_usage_record.payload.usage")?;
+        response
+            .turn_token_usage
+            .0
+            .normalize(line, "token_usage_record.payload.turn_token_usage")?;
+        response
+            .thread_token_usage
+            .0
+            .normalize(line, "token_usage_record.payload.thread_token_usage")?;
+        response.turn_token_usage.0.validate_contains(
+            &response.usage.0,
+            line,
+            "token_usage_record.payload.turn_token_usage",
+        )?;
+        response.thread_token_usage.0.validate_contains(
+            &response.turn_token_usage.0,
+            line,
+            "token_usage_record.payload.thread_token_usage",
+        )?;
+
+        if let Some(original) = self.responses.get_mut(&response.response_id) {
+            for (changed, field) in [
+                (
+                    original.thread_id != response.thread_id,
+                    "token_usage_record.payload.thread_id",
+                ),
+                (
+                    original.turn_id != response.turn_id,
+                    "token_usage_record.payload.turn_id",
+                ),
+                (
+                    original.session_id != response.session_id,
+                    "token_usage_record.payload.session_id",
+                ),
+                (
+                    original.root_turn_id != response.root_turn_id,
+                    "token_usage_record.payload.root_turn_id",
+                ),
+            ] {
+                if changed {
+                    return Err(CodexParseError::InvalidField { line, field });
+                }
+            }
+            // Corrections replace counters, preserving the original request's identity and time.
+            original.event.tokens = tokens;
+        } else {
+            let event = UsageEvent {
+                identity: UsageEventIdentity {
+                    agent: AgentId::from(CODEX_AGENT_ID),
+                    adapter_key: format!("response-v1:{}", response.response_id),
+                },
+                timestamp,
+                kind: UsageKind::Other,
+                attribution: None,
+                tokens,
+                recorded_cost: None,
+            };
+            self.responses.insert(
+                response.response_id,
+                ResponseObservation {
+                    thread_id: response.thread_id,
+                    turn_id: response.turn_id,
+                    session_id: response.session_id,
+                    root_turn_id: response.root_turn_id,
+                    event,
+                },
+            );
+        }
+        Ok(())
     }
 
     fn accept_header(
@@ -256,6 +354,14 @@ impl SessionState {
         self.headers.insert(id.clone(), header.identity);
         Ok(())
     }
+}
+
+struct ResponseObservation {
+    thread_id: String,
+    turn_id: String,
+    session_id: Option<String>,
+    root_turn_id: Option<String>,
+    event: UsageEvent,
 }
 
 struct HeaderIdentity {
@@ -379,22 +485,17 @@ struct TurnWire {
 
 #[derive(Deserialize)]
 struct ResponseUsageWire {
-    #[serde(rename = "response_id", deserialize_with = "nonempty_id")]
-    _response_id: String,
-    #[serde(rename = "thread_id", deserialize_with = "nonempty_id")]
-    _thread_id: String,
-    #[serde(rename = "turn_id", deserialize_with = "nonempty_id")]
-    _turn_id: String,
-    #[serde(rename = "session_id")]
-    _session_id: Option<String>,
-    #[serde(rename = "root_turn_id")]
-    _root_turn_id: Option<String>,
-    #[serde(rename = "usage")]
-    _usage: ObjectWire<TokenUsageWire>,
-    #[serde(rename = "turn_token_usage")]
-    _turn_token_usage: ObjectWire<TokenUsageWire>,
-    #[serde(rename = "thread_token_usage")]
-    _thread_token_usage: ObjectWire<TokenUsageWire>,
+    #[serde(deserialize_with = "nonempty_id")]
+    response_id: String,
+    #[serde(deserialize_with = "nonempty_id")]
+    thread_id: String,
+    #[serde(deserialize_with = "nonempty_id")]
+    turn_id: String,
+    session_id: Option<String>,
+    root_turn_id: Option<String>,
+    usage: ObjectWire<TokenUsageWire>,
+    turn_token_usage: ObjectWire<TokenUsageWire>,
+    thread_token_usage: ObjectWire<TokenUsageWire>,
 }
 
 #[derive(Deserialize)]
@@ -413,22 +514,58 @@ struct TokenInfoWire {
 
 #[derive(Deserialize)]
 struct TokenUsageWire {
-    #[serde(rename = "input_tokens")]
-    _input_tokens: u64,
-    #[serde(rename = "cached_input_tokens")]
-    _cached_input_tokens: u64,
-    #[serde(
-        rename = "cache_write_input_tokens",
-        default,
-        deserialize_with = "present_counter"
-    )]
-    _cache_write_input_tokens: Option<u64>,
-    #[serde(rename = "output_tokens")]
-    _output_tokens: u64,
-    #[serde(rename = "reasoning_output_tokens")]
-    _reasoning_output_tokens: u64,
-    #[serde(rename = "total_tokens")]
-    _total_tokens: u64,
+    input_tokens: u64,
+    cached_input_tokens: u64,
+    #[serde(default, deserialize_with = "present_counter")]
+    cache_write_input_tokens: Option<u64>,
+    output_tokens: u64,
+    reasoning_output_tokens: u64,
+    total_tokens: u64,
+}
+
+impl TokenUsageWire {
+    fn validate_contains(
+        &self,
+        usage: &Self,
+        line: usize,
+        field: &'static str,
+    ) -> Result<(), CodexParseError> {
+        if self.input_tokens < usage.input_tokens
+            || self.cached_input_tokens < usage.cached_input_tokens
+            || self.normalize(line, field)?.input < usage.normalize(line, field)?.input
+            || self.output_tokens < usage.output_tokens
+            || self.reasoning_output_tokens < usage.reasoning_output_tokens
+            || self.total_tokens < usage.total_tokens
+            || matches!(
+                (self.cache_write_input_tokens, usage.cache_write_input_tokens),
+                (Some(total), Some(used)) if total < used
+            )
+        {
+            return Err(CodexParseError::InvalidField { line, field });
+        }
+        Ok(())
+    }
+
+    fn normalize(&self, line: usize, field: &'static str) -> Result<TokenCounts, CodexParseError> {
+        let invalid = || CodexParseError::InvalidField { line, field };
+        if self.input_tokens.checked_add(self.output_tokens) != Some(self.total_tokens)
+            || self.reasoning_output_tokens > self.output_tokens
+        {
+            return Err(invalid());
+        }
+        let cache_write = self.cache_write_input_tokens.unwrap_or(0);
+        let cached = self
+            .cached_input_tokens
+            .checked_add(cache_write)
+            .ok_or_else(invalid)?;
+        let input = self.input_tokens.checked_sub(cached).ok_or_else(invalid)?;
+        Ok(TokenCounts {
+            input,
+            output: self.output_tokens,
+            cache_read: self.cached_input_tokens,
+            cache_write,
+        })
+    }
 }
 
 fn nonempty_id<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
