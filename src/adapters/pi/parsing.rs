@@ -1,5 +1,3 @@
-//! Pi version 3 JSONL decoding and normalization.
-
 use super::PI_AGENT_ID;
 use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
 use crate::core::{
@@ -14,7 +12,6 @@ use std::{error::Error, fmt, str};
 
 const SUPPORTED_SESSION_VERSION: u32 = 3;
 
-/// Parses current Pi session files without projecting message content into the result.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PiSessionParser;
 

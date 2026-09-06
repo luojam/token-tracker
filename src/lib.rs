@@ -1,5 +1,3 @@
-//! Reusable token collection and parsing library.
-
 use std::error::Error;
 use std::fmt;
 
@@ -29,7 +27,6 @@ pub fn run() -> Result<String, TokenTrackerError> {
     run_all_time_report(&adapters, &mut store, warnings).map_err(TokenTrackerError::Workflow)
 }
 
-/// Keep adapter ownership and setup warnings in the composition layer.
 fn register_adapter<A, E>(
     adapters: &mut Vec<Box<dyn ImportAdapter<SqliteUsageStore>>>,
     warnings: &mut Vec<ImportWarning>,
@@ -48,7 +45,6 @@ fn register_adapter<A, E>(
     }
 }
 
-/// A fatal error from configuring or running the default application.
 #[derive(Debug)]
 pub enum TokenTrackerError {
     StorageSetup(SqliteStoreError),

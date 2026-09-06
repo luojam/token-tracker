@@ -1,5 +1,3 @@
-//! Apply each schema change in its own transaction.
-
 use super::SqliteStoreError;
 use rusqlite::Connection;
 

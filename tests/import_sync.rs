@@ -103,8 +103,6 @@ fn repeat_append_rewrite_parse_failure_and_missing_source_are_synchronized() {
     assert_eq!(appended.counts.observations_inserted, 1);
     assert_eq!(appended.counts.observations_updated, 0);
 
-    // A full rewrite updates observations still present without deleting usage
-    // that is absent from the new file.
     fs::write(&path, session("session-a", None, &[("event-a", 999_999)])).unwrap();
     let rewritten = synchronize(&tree.root, &mut store, 4_000);
     assert_eq!(rewritten.counts.files_imported, 1);

@@ -1,5 +1,3 @@
-//! Pi discovery and parsing; wire-format details stay within this adapter.
-
 mod discovery;
 mod parsing;
 

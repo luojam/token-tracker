@@ -1,5 +1,3 @@
-//! Deterministic reconciliation and aggregation of normalized observations.
-
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt;

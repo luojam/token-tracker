@@ -1,5 +1,3 @@
-//! SQL writes for one source import; the caller owns its transaction.
-
 use super::{
     SqliteStoreError, attribution_parts, completion_to_str, encode_parent, encode_path, encode_u64,
     system_time_to_parts, usage_kind_to_str,

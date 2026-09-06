@@ -1,5 +1,3 @@
-//! Import each configured adapter, then summarize and render once.
-
 use std::error::Error;
 use std::fmt;
 
@@ -10,7 +8,6 @@ use super::{
 };
 use crate::core::AgentId;
 
-/// An explicit discovery/parser pairing. Concrete adapters keep their own errors.
 pub struct SessionAdapter<D, P> {
     discovery: D,
     parser: P,

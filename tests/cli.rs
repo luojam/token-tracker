@@ -85,7 +85,7 @@ fn append(path: &Path, content: &str) {
 fn assert_no_content_persisted(database_directory: &Path) {
     assert!(database_directory.join("usage.db").is_file());
     // Check raw database pages (including freed pages) and any SQLite sidecars,
-    // not just the currently queryable rows. All fixture content has this marker.
+    // not just the currently queryable rows. Fixture conversation content uses SECRET_.
     for entry in fs::read_dir(database_directory).unwrap() {
         let path = entry.unwrap().path();
         let bytes = fs::read(&path).unwrap();

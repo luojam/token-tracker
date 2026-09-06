@@ -1,5 +1,3 @@
-//! Contracts and use cases for session discovery, parsing, persistence, and queries.
-
 mod reconciliation;
 mod reporting;
 mod synchronization;
@@ -63,11 +61,9 @@ pub trait SessionDiscovery {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParseCompletion {
     Complete,
-    /// The trailing JSONL value was incomplete.
     IncompleteFinalLine,
 }
 
-/// Parsed metadata and usage, excluding source contents.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParsedSession {
     pub metadata: SessionMetadata,
@@ -75,7 +71,6 @@ pub struct ParsedSession {
     pub completion: ParseCompletion,
 }
 
-/// Source metadata available while parsing, without reopening the file.
 #[derive(Clone, Copy, Debug)]
 pub struct ParseContext<'a> {
     /// Absolute source path, for filename metadata and relative path resolution.
@@ -99,7 +94,6 @@ pub struct SourceState {
     pub path: PathBuf,
     /// Latest discovered revision, even if import failed.
     pub last_observed_revision: FileRevision,
-    /// Latest committed revision.
     pub last_imported_revision: Option<FileRevision>,
     pub last_successful_scan: Option<Timestamp>,
     pub last_parse_completion: Option<ParseCompletion>,

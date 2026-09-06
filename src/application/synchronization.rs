@@ -1,5 +1,3 @@
-//! Session discovery and import synchronization use case.
-
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
@@ -40,7 +38,6 @@ pub struct SynchronizationReport {
     pub warnings: Vec<ImportWarning>,
 }
 
-/// A failure that prevents the synchronization operation as a whole.
 #[derive(Debug)]
 pub enum ImportSynchronizationError {
     Discovery(Box<dyn Error + Send + Sync>),
@@ -70,7 +67,6 @@ impl Error for ImportSynchronizationError {
     }
 }
 
-/// Discovers sessions and synchronizes all changed sources using the current time.
 pub fn synchronize_sessions<D, P, S>(
     discovery: &D,
     parser: &P,
@@ -84,7 +80,6 @@ where
     synchronize_sessions_at(discovery, parser, store, current_timestamp())
 }
 
-/// Synchronizes sessions at an injected scan time, primarily for deterministic callers and tests.
 pub fn synchronize_sessions_at<D, P, S>(
     discovery: &D,
     parser: &P,

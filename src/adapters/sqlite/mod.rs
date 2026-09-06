@@ -1,5 +1,3 @@
-//! SQLite persistence for imported session metadata and usage observations.
-
 mod importing;
 mod migrations;
 mod reading;
@@ -34,7 +32,6 @@ use crate::core::{AgentId, ParentSession, Timestamp, UsageEvent, UsageKind};
 const APPLICATION_DIRECTORY: &str = "token-tracker";
 const DATABASE_FILENAME: &str = "usage.db";
 
-/// Resolves the database location documented for the command-line application.
 pub fn default_database_path() -> Result<PathBuf, SqliteStoreError> {
     default_database_path_from(
         env::var_os("XDG_DATA_HOME").as_deref(),
@@ -66,7 +63,6 @@ fn absolute_environment_path(value: Option<&OsStr>) -> Option<PathBuf> {
         .filter(|path| path.is_absolute())
 }
 
-/// SQLite implementation of the application storage contract.
 pub struct SqliteUsageStore {
     connection: Connection,
 }

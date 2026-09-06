@@ -1,10 +1,7 @@
-//! Agent-neutral domain types and token-usage rules.
-
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
 
-/// Open agent identifier that does not require core changes for new adapters.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct AgentId(String);
 
@@ -36,7 +33,6 @@ impl fmt::Display for AgentId {
     }
 }
 
-/// An instant represented as Unix milliseconds in UTC.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Timestamp(i64);
 
@@ -125,7 +121,6 @@ pub enum UsageKind {
     ToolResult,
     Compaction,
     BranchSummary,
-    /// Usage that cannot be classified more specifically by the source.
     Other,
 }
 
@@ -144,8 +139,8 @@ pub struct UsageEventIdentity {
 }
 
 /// One additive usage event, excluding conversation and tool content.
-/// Adapters convert cumulative counters to increments and collapse repeated
-/// records. Equal identities describe observations of the same incurred usage.
+/// Adapters convert cumulative counters to increments. Equal identities
+/// describe observations of the same incurred usage.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UsageEvent {
     pub identity: UsageEventIdentity,

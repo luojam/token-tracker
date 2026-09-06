@@ -1,5 +1,3 @@
-//! Decode a consistent database snapshot into application records.
-
 use super::{
     SqliteStoreError, decode_parent, decode_path, decode_u64, to_sql_conversion_error,
     usage_kind_from_str,

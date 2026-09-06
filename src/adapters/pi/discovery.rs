@@ -1,5 +1,3 @@
-//! Pi session roots and filesystem discovery.
-
 use super::PI_AGENT_ID;
 use crate::application::{
     DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, DiscoveryWarning, FileRevision,

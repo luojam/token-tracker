@@ -1,11 +1,8 @@
-//! Deterministic terminal rendering for all-time usage summaries.
-
 use std::fmt::Write;
 
 use super::ImportWarning;
 use crate::core::{SummaryGroup, UsageKind, UsageSummary};
 
-/// Renders an all-time summary and any nonfatal import warnings.
 pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]) -> String {
     let mut output = String::new();
     let totals = &summary.totals;
