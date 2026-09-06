@@ -13,7 +13,11 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::{error::Error, fmt, str};
 
-/// Legacy accounting and mirror validation follow in C05–C06.
+mod legacy;
+
+use legacy::LegacyUsageState;
+
+/// Mirror validation follows in C06.
 /// Keep this adapter unregistered until accounting and pricing are complete.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CodexSessionParser;
@@ -75,7 +79,7 @@ impl SessionParser for CodexSessionParser {
                     let response = payload(text, line_number, "token_usage_record.payload")?;
                     session.accept_response(response, timestamp, line_number)?;
                 } else {
-                    validate_entry(text, &entry.entry_type, line_number)?;
+                    session.accept_entry(text, &entry.entry_type, line_number)?;
                 }
             }
         }
@@ -84,9 +88,15 @@ impl SessionParser for CodexSessionParser {
         Ok(ParsedSession {
             metadata: session.metadata,
             events: session
-                .responses
+                .legacy
+                .events
                 .into_values()
-                .map(|response| response.event)
+                .chain(
+                    session
+                        .responses
+                        .into_values()
+                        .map(|response| response.event),
+                )
                 .collect(),
             completion,
         })
@@ -175,40 +185,13 @@ fn validate_timestamp(text: &str, line: usize) -> Result<Timestamp, CodexParseEr
     parse_timestamp(&entry.timestamp, line, "timestamp")
 }
 
-fn validate_entry(text: &str, entry_type: &str, line: usize) -> Result<(), CodexParseError> {
-    match entry_type {
-        "turn_context" => {
-            validate_timestamp(text, line)?;
-            payload::<TurnWire>(text, line, "turn_context.payload.turn_id")?;
-        }
-        "event_msg" => {
-            let event: TypeWire = payload(text, line, "event_msg.payload.type")?;
-            match event.entry_type.as_str() {
-                "token_count" => {
-                    validate_timestamp(text, line)?;
-                    payload::<TokenCountWire>(text, line, "event_msg.payload.info")?;
-                }
-                "task_started" | "task_complete" | "turn_aborted" => {
-                    validate_timestamp(text, line)?;
-                    payload::<TurnWire>(text, line, "event_msg.payload.turn_id")?;
-                }
-                _ => {}
-            }
-        }
-        "compacted" => {
-            validate_timestamp(text, line)?;
-        }
-        _ => {}
-    }
-    Ok(())
-}
-
 struct SessionState {
     metadata: SessionMetadata,
     headers: BTreeMap<String, HeaderIdentity>,
     expected_ancestor: Option<String>,
     inherited_prefix: bool,
     responses: BTreeMap<String, ResponseObservation>,
+    legacy: LegacyUsageState,
 }
 
 impl SessionState {
@@ -219,7 +202,62 @@ impl SessionState {
             metadata: header.metadata,
             inherited_prefix: true,
             responses: BTreeMap::new(),
+            legacy: LegacyUsageState::default(),
         }
+    }
+
+    fn accept_entry(
+        &mut self,
+        text: &str,
+        entry_type: &str,
+        line: usize,
+    ) -> Result<(), CodexParseError> {
+        match entry_type {
+            "turn_context" => {
+                validate_timestamp(text, line)?;
+                let turn: TurnWire = payload(text, line, "turn_context.payload.turn_id")?;
+                if self.responses.is_empty() {
+                    self.legacy.accept_context(&turn.turn_id, line)?;
+                }
+            }
+            "event_msg" => {
+                let event: TypeWire = payload(text, line, "event_msg.payload.type")?;
+                match event.entry_type.as_str() {
+                    "token_count" => {
+                        validate_timestamp(text, line)?;
+                        let count: TokenCountWire = payload(text, line, "event_msg.payload.info")?;
+                        if let (true, Some(info)) = (self.responses.is_empty(), count.info) {
+                            if self.expected_ancestor.is_some() {
+                                return Err(CodexParseError::InvalidField {
+                                    line,
+                                    field: "event_msg.payload.info.total_token_usage",
+                                });
+                            }
+                            self.legacy.accept_usage(info.0, line)?;
+                        }
+                    }
+                    "task_started" | "task_complete" | "turn_aborted" => {
+                        let timestamp = validate_timestamp(text, line)?;
+                        let turn: TurnWire = payload(text, line, "event_msg.payload.turn_id")?;
+                        if self.responses.is_empty() {
+                            self.legacy.accept_boundary(
+                                &event.entry_type,
+                                turn.turn_id,
+                                timestamp,
+                                line,
+                            )?;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            "compacted" => {
+                validate_timestamp(text, line)?;
+                self.legacy.accept_compaction();
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     fn accept_response(
@@ -228,6 +266,10 @@ impl SessionState {
         timestamp: Timestamp,
         line: usize,
     ) -> Result<(), CodexParseError> {
+        if self.responses.is_empty() {
+            self.legacy
+                .validate_response_start(&response.turn_id, line)?;
+        }
         if !self.headers.contains_key(&response.thread_id) {
             return Err(CodexParseError::InvalidField {
                 line,
@@ -479,8 +521,8 @@ struct HeaderWire {
 
 #[derive(Deserialize)]
 struct TurnWire {
-    #[serde(rename = "turn_id", deserialize_with = "nonempty_id")]
-    _turn_id: String,
+    #[serde(deserialize_with = "nonempty_id")]
+    turn_id: String,
 }
 
 #[derive(Deserialize)]
@@ -500,19 +542,16 @@ struct ResponseUsageWire {
 
 #[derive(Deserialize)]
 struct TokenCountWire {
-    #[serde(rename = "info")]
-    _info: Option<ObjectWire<TokenInfoWire>>,
+    info: Option<ObjectWire<TokenInfoWire>>,
 }
 
 #[derive(Deserialize)]
 struct TokenInfoWire {
-    #[serde(rename = "total_token_usage")]
-    _total_token_usage: ObjectWire<TokenUsageWire>,
-    #[serde(rename = "last_token_usage")]
-    _last_token_usage: ObjectWire<TokenUsageWire>,
+    total_token_usage: ObjectWire<TokenUsageWire>,
+    last_token_usage: ObjectWire<TokenUsageWire>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Copy, Default, Deserialize)]
 struct TokenUsageWire {
     input_tokens: u64,
     cached_input_tokens: u64,
