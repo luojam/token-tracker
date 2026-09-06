@@ -1,22 +1,24 @@
 //! Contracts and use cases for session discovery, parsing, persistence, and queries.
 
+mod reconciliation;
 mod reporting;
 mod synchronization;
 mod workflow;
 
+pub use reconciliation::{SummaryError, summarize_usage};
 pub use reporting::render_terminal_report;
 pub use synchronization::{
     ImportCounts, ImportSynchronizationError, ImportWarning, SynchronizationReport,
     synchronize_sessions, synchronize_sessions_at,
 };
-pub use workflow::{AllTimeReportError, run_all_time_report};
+pub use workflow::{AllTimeReportError, ImportAdapter, SessionAdapter, run_all_time_report};
 
 use std::error::Error;
 use std::io::BufRead;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::core::{SessionMetadata, Timestamp, UsageEvent, UsageSummary};
+use crate::core::{AgentId, ParentSession, SessionMetadata, Timestamp, UsageEvent};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileRevision {
@@ -52,6 +54,9 @@ pub struct DiscoveryReport {
 pub trait SessionDiscovery {
     type Error: Error + Send + Sync + 'static;
 
+    /// Stable namespace for this adapter, including files not yet parsed.
+    fn agent_id(&self) -> AgentId;
+
     fn discover(&self) -> Result<DiscoveryReport, Self::Error>;
 }
 
@@ -70,11 +75,23 @@ pub struct ParsedSession {
     pub completion: ParseCompletion,
 }
 
-/// The caller handles file I/O and revision checks.
+/// Source metadata available while parsing, without reopening the file.
+#[derive(Clone, Copy, Debug)]
+pub struct ParseContext<'a> {
+    /// Absolute source path, for filename metadata and relative path resolution.
+    /// Do not include its location in logical usage event identities.
+    pub source_path: &'a Path,
+}
+
+/// The caller handles file I/O and revision checks. Parse only the supplied reader.
 pub trait SessionParser {
     type Error: Error + Send + Sync + 'static;
 
-    fn parse(&self, input: &mut dyn BufRead) -> Result<ParsedSession, Self::Error>;
+    fn parse(
+        &self,
+        input: &mut dyn BufRead,
+        context: ParseContext<'_>,
+    ) -> Result<ParsedSession, Self::Error>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,8 +104,6 @@ pub struct SourceState {
     pub last_successful_scan: Option<Timestamp>,
     pub last_parse_completion: Option<ParseCompletion>,
     pub present: bool,
-    /// The stored revision must be imported again despite appearing unchanged.
-    pub reimport_required: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -114,13 +129,16 @@ pub enum CommitImportOutcome {
 pub trait UsageStore {
     type Error: Error + Send + Sync + 'static;
 
-    fn source_states(&self) -> Result<Vec<SourceState>, Self::Error>;
+    /// Only source state owned by this agent.
+    fn source_states(&self, agent: &AgentId) -> Result<Vec<SourceState>, Self::Error>;
 
     /// Updates observed revisions and presence without changing successful imports.
+    /// Only sources owned by `agent` are affected.
     /// An omitted source is missing only when under an inspected root and not at
     /// or below an inaccessible path.
     fn record_discovery(
         &mut self,
+        agent: &AgentId,
         report: &DiscoveryReport,
         observed_at: Timestamp,
     ) -> Result<(), Self::Error>;
@@ -132,10 +150,39 @@ pub trait UsageStore {
     -> Result<CommitImportOutcome, Self::Error>;
 }
 
-pub trait UsageSummaryStore {
+/// A source's historical session identity, independent of database row IDs.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceSessionKey {
+    pub agent: AgentId,
+    pub session_id: String,
+    pub source_path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionProvenance {
+    pub key: SourceSessionKey,
+    pub started_at: Timestamp,
+    pub parent_session: Option<ParentSession>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct UsageObservation {
+    pub session: SourceSessionKey,
+    pub event: UsageEvent,
+}
+
+/// One provenance record per source/session and one observation per
+/// (source/session, event identity). Record order carries no meaning.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct UsageSnapshot {
+    pub sessions: Vec<SessionProvenance>,
+    pub observations: Vec<UsageObservation>,
+}
+
+pub trait UsageReadStore {
     type Error: Error + Send + Sync + 'static;
 
-    /// Reconciles observations by logical event identity using stable provenance,
-    /// independent of processing order and transient file state.
-    fn all_time_summary(&self) -> Result<UsageSummary, Self::Error>;
+    /// Loads provenance and observations from one consistent storage snapshot.
+    /// Reconciliation and aggregation belong to the application.
+    fn usage_snapshot(&self) -> Result<UsageSnapshot, Self::Error>;
 }

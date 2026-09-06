@@ -33,6 +33,9 @@ usage is kept even after session files are deleted.
 
 ## Development
 
+See [Architecture and adapter guide](docs/architecture.md) for module boundaries,
+normalization rules, and how to add an agent adapter.
+
 ```sh
 cargo fmt --check
 cargo test

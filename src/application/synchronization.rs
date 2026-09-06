@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    CommitImportOutcome, DiscoveredSessionFile, ImportStats, ParseCompletion, ParsedSession,
-    SessionDiscovery, SessionImport, SessionParser, SourceState, UsageStore,
+    CommitImportOutcome, DiscoveredSessionFile, ImportStats, ParseCompletion, ParseContext,
+    ParsedSession, SessionDiscovery, SessionImport, SessionParser, SourceState, UsageStore,
 };
 use crate::core::Timestamp;
 
@@ -96,20 +96,22 @@ where
     P: SessionParser,
     S: UsageStore,
 {
+    let agent = discovery.agent_id();
     let discovery_report = discovery
         .discover()
         .map_err(|source| ImportSynchronizationError::Discovery(Box::new(source)))?;
-    let states = store
-        .source_states()
-        .map_err(|source| ImportSynchronizationError::Storage {
-            operation: "loading source state",
-            source: Box::new(source),
-        })?;
+    let states =
+        store
+            .source_states(&agent)
+            .map_err(|source| ImportSynchronizationError::Storage {
+                operation: "loading source state",
+                source: Box::new(source),
+            })?;
 
     // Record presence and observed revisions even when individual files cannot be
     // read or parsed. Successful import state remains separate in the store.
     store
-        .record_discovery(&discovery_report, scanned_at)
+        .record_discovery(&agent, &discovery_report, scanned_at)
         .map_err(|source| ImportSynchronizationError::Storage {
             operation: "recording discovery",
             source: Box::new(source),
@@ -158,6 +160,20 @@ where
             }
         };
 
+        if parsed.metadata.agent != agent
+            || parsed
+                .events
+                .iter()
+                .any(|event| event.identity.agent != agent)
+        {
+            report.counts.files_failed += 1;
+            report.warnings.push(ImportWarning {
+                path: Some(file.path),
+                message: "parser returned usage for a different agent".into(),
+            });
+            continue;
+        }
+
         let incomplete = parsed.completion == ParseCompletion::IncompleteFinalLine;
         let import = SessionImport {
             source: DiscoveredSessionFile {
@@ -184,10 +200,9 @@ where
                 });
             }
             Err(error) => {
-                report.counts.files_failed += 1;
-                report.warnings.push(ImportWarning {
-                    path: Some(file.path),
-                    message: format!("could not store session import: {error}"),
+                return Err(ImportSynchronizationError::Storage {
+                    operation: "committing session import",
+                    source: Box::new(error),
                 });
             }
         }
@@ -202,8 +217,7 @@ where
 }
 
 fn source_is_unchanged(state: &SourceState, discovered: &DiscoveredSessionFile) -> bool {
-    !state.reimport_required
-        && state.last_imported_revision.as_ref() == Some(&discovered.revision)
+    state.last_imported_revision.as_ref() == Some(&discovered.revision)
         && state.last_parse_completion == Some(ParseCompletion::Complete)
 }
 
@@ -258,7 +272,7 @@ fn load_session_once<P: SessionParser>(path: &Path, parser: &P) -> LoadAttempt {
     };
     let mut reader = BufReader::new(file);
     let parsed = parser
-        .parse(&mut reader)
+        .parse(&mut reader, ParseContext { source_path: path })
         .map_err(|error| SourceLoadError::Parse(error.to_string()));
 
     let handle_after = match reader.get_ref().metadata() {

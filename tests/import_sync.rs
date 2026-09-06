@@ -6,9 +6,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use token_tracker::adapters::pi::{PiParseError, PiSessionDiscovery, PiSessionParser};
 use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{
-    ParsedSession, SessionParser, UsageStore, synchronize_sessions_at,
+    ParseContext, ParsedSession, SessionParser, UsageStore, synchronize_sessions_at,
 };
-use token_tracker::core::Timestamp;
+use token_tracker::core::{AgentId, Timestamp};
 
 static NEXT_TEMP_TREE: AtomicU64 = AtomicU64::new(0);
 
@@ -111,7 +111,7 @@ fn repeat_append_rewrite_parse_failure_and_missing_source_are_synchronized() {
     assert_eq!(rewritten.counts.event_identities_inserted, 0);
     assert_eq!(rewritten.counts.observations_inserted, 0);
     assert_eq!(rewritten.counts.observations_updated, 1);
-    let last_good_revision = store.source_states().unwrap()[0]
+    let last_good_revision = store.source_states(&AgentId::from("pi")).unwrap()[0]
         .last_imported_revision
         .clone();
 
@@ -124,14 +124,14 @@ fn repeat_append_rewrite_parse_failure_and_missing_source_are_synchronized() {
     assert_eq!(malformed.counts.files_failed, 1);
     assert_eq!(malformed.counts.files_imported, 0);
     assert_eq!(malformed.warnings.len(), 1);
-    let state = &store.source_states().unwrap()[0];
+    let state = &store.source_states(&AgentId::from("pi")).unwrap()[0];
     assert_eq!(state.last_imported_revision, last_good_revision);
     assert_ne!(state.last_observed_revision, last_good_revision.unwrap());
 
     fs::remove_file(path).unwrap();
     let missing = synchronize(&tree.root, &mut store, 6_000);
     assert_eq!(missing.counts.files_discovered, 0);
-    let state = &store.source_states().unwrap()[0];
+    let state = &store.source_states(&AgentId::from("pi")).unwrap()[0];
     assert!(!state.present);
     assert!(state.last_imported_revision.is_some());
 }
@@ -243,8 +243,13 @@ struct MutatingParser {
 impl SessionParser for MutatingParser {
     type Error = PiParseError;
 
-    fn parse(&self, input: &mut dyn BufRead) -> Result<ParsedSession, Self::Error> {
-        let parsed = PiSessionParser::new().parse(input);
+    fn parse(
+        &self,
+        input: &mut dyn BufRead,
+        context: ParseContext<'_>,
+    ) -> Result<ParsedSession, Self::Error> {
+        assert_eq!(context.source_path, self.path);
+        let parsed = PiSessionParser::new().parse(input, context);
         if self.mutate_once.swap(false, Ordering::SeqCst) {
             OpenOptions::new()
                 .append(true)
@@ -285,7 +290,7 @@ fn a_file_change_during_an_import_attempt_is_retried() {
     assert_eq!(report.counts.event_identities_inserted, 2);
     assert_eq!(report.counts.observations_inserted, 2);
     assert_eq!(
-        store.source_states().unwrap()[0]
+        store.source_states(&AgentId::from("pi")).unwrap()[0]
             .last_imported_revision
             .as_ref()
             .unwrap()
@@ -301,8 +306,13 @@ struct AlwaysMutatingParser {
 impl SessionParser for AlwaysMutatingParser {
     type Error = PiParseError;
 
-    fn parse(&self, input: &mut dyn BufRead) -> Result<ParsedSession, Self::Error> {
-        let parsed = PiSessionParser::new().parse(input);
+    fn parse(
+        &self,
+        input: &mut dyn BufRead,
+        context: ParseContext<'_>,
+    ) -> Result<ParsedSession, Self::Error> {
+        assert_eq!(context.source_path, self.path);
+        let parsed = PiSessionParser::new().parse(input, context);
         OpenOptions::new()
             .append(true)
             .open(&self.path)
@@ -336,7 +346,7 @@ fn a_file_that_keeps_changing_is_deferred() {
     assert_eq!(report.counts.files_failed, 1);
     assert!(report.warnings[0].message.contains("import deferred"));
     assert!(
-        store.source_states().unwrap()[0]
+        store.source_states(&AgentId::from("pi")).unwrap()[0]
             .last_imported_revision
             .is_none()
     );

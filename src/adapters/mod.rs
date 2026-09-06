@@ -1,4 +1,4 @@
-//! Agent-specific input adapters.
+//! Agent input adapters and storage implementations of application contracts.
 
 pub mod codex;
 pub mod pi;

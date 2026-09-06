@@ -274,3 +274,24 @@ fn command_returns_failure_when_default_storage_cannot_be_opened() {
             .contains("token-tracker: could not open usage storage:")
     );
 }
+
+#[test]
+fn command_reports_stored_usage_when_adapter_setup_is_unavailable() {
+    let tree = TempTree::new();
+    let home = tree.root.join("home");
+    let sessions = tree.root.join("sessions");
+    let data_home = tree.root.join("data");
+    fs::create_dir(&sessions).unwrap();
+    fs::write(sessions.join("history.jsonl"), ALL_USAGE).unwrap();
+    successful_report(run_command(&sessions, &data_home, &home));
+
+    let report = successful_report(
+        command(&home)
+            .env_remove("HOME")
+            .env("XDG_DATA_HOME", &data_home)
+            .output()
+            .unwrap(),
+    );
+    assert_totals(&report, [25, 38, 51, 64], 1, 4);
+    assert!(report.contains("pi: could not configure adapter:"));
+}

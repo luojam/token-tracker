@@ -1,13 +1,11 @@
 use std::path::PathBuf;
-use std::time::{Duration, UNIX_EPOCH};
 
-use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{
-    DiscoveredSessionFile, FileRevision, ImportWarning, ParseCompletion, ParsedSession,
-    SessionImport, UsageStore, UsageSummaryStore, render_terminal_report,
+    ImportWarning, SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot,
+    render_terminal_report, summarize_usage,
 };
 use token_tracker::core::{
-    AgentId, ModelAttribution, RecordedCost, SessionMetadata, Timestamp, TokenCounts, UsageEvent,
+    AgentId, ModelAttribution, ParentSession, RecordedCost, Timestamp, TokenCounts, UsageEvent,
     UsageEventIdentity, UsageKind,
 };
 
@@ -34,40 +32,37 @@ fn event(
     }
 }
 
-fn session_import(
+fn session(
     path: &str,
     session_id: &str,
     started_at: i64,
     parent_session: Option<&str>,
     events: Vec<UsageEvent>,
-) -> SessionImport {
-    SessionImport {
-        source: DiscoveredSessionFile {
-            path: PathBuf::from(path),
-            revision: FileRevision {
-                size: 100,
-                modified_at: UNIX_EPOCH + Duration::from_secs(10),
-            },
-        },
-        scanned_at: Timestamp::from_unix_milliseconds(2_000),
-        parsed: ParsedSession {
-            metadata: SessionMetadata {
-                agent: AgentId::from("pi"),
-                session_id: session_id.into(),
-                format_version: 3,
-                working_directory: PathBuf::from("/work/project"),
-                started_at: Timestamp::from_unix_milliseconds(started_at),
-                name: None,
-                parent_session: parent_session.map(Into::into),
-            },
-            events,
-            completion: ParseCompletion::Complete,
-        },
-    }
+) -> (SessionProvenance, Vec<UsageObservation>) {
+    let key = SourceSessionKey {
+        agent: "pi".into(),
+        session_id: session_id.into(),
+        source_path: path.into(),
+    };
+    let provenance = SessionProvenance {
+        key: key.clone(),
+        started_at: Timestamp::from_unix_milliseconds(started_at),
+        parent_session: parent_session.map(|path| ParentSession::SourcePath(path.into())),
+    };
+    (
+        provenance,
+        events
+            .into_iter()
+            .map(|event| UsageObservation {
+                session: key.clone(),
+                event,
+            })
+            .collect(),
+    )
 }
 
-fn imports() -> [SessionImport; 2] {
-    let original = session_import(
+fn sessions() -> [(SessionProvenance, Vec<UsageObservation>); 2] {
+    let original = session(
         "/sessions/original.jsonl",
         "original-session",
         200,
@@ -99,7 +94,7 @@ fn imports() -> [SessionImport; 2] {
             ),
         ],
     );
-    let child = session_import(
+    let child = session(
         "/sessions/child.jsonl",
         "child-session",
         100,
@@ -134,17 +129,21 @@ fn imports() -> [SessionImport; 2] {
     [original, child]
 }
 
-fn summary_for_order(reverse: bool) -> token_tracker::core::UsageSummary {
-    let mut store = SqliteUsageStore::open_in_memory().unwrap();
-    let [original, child] = imports();
+fn snapshot(reverse: bool) -> UsageSnapshot {
+    let mut records = sessions();
     if reverse {
-        store.commit_import(&child).unwrap();
-        store.commit_import(&original).unwrap();
-    } else {
-        store.commit_import(&original).unwrap();
-        store.commit_import(&child).unwrap();
+        records.reverse();
     }
-    store.all_time_summary().unwrap()
+    let mut snapshot = UsageSnapshot::default();
+    for (session, observations) in records {
+        snapshot.sessions.push(session);
+        snapshot.observations.extend(observations);
+    }
+    snapshot
+}
+
+fn summary_for_order(reverse: bool) -> token_tracker::core::UsageSummary {
+    summarize_usage(&snapshot(reverse)).unwrap()
 }
 
 #[test]
@@ -185,4 +184,21 @@ fn summary_reconciles_and_renders_independently_of_observation_order() {
          - discovery warning\n\
          - /sessions/z-bad.jsonl: could not parse\n"
     );
+}
+
+#[test]
+fn typed_lineage_and_ambiguous_provenance_use_deterministic_precedence() {
+    let mut data = snapshot(false);
+    let original = data.sessions[0].key.clone();
+    let child = data.sessions[1].key.clone();
+    data.sessions[1].parent_session = Some(ParentSession::SessionId(original.session_id.clone()));
+    assert_eq!(summarize_usage(&data).unwrap(), summary_for_order(false));
+
+    // Cycles are treated as ambiguous, never as an import-order tie breaker.
+    data.sessions[0].parent_session = Some(ParentSession::SessionId(child.session_id));
+    let expected = summarize_usage(&data).unwrap();
+    assert_eq!(expected.totals.tokens.input, 1005);
+    data.sessions.reverse();
+    data.observations.reverse();
+    assert_eq!(summarize_usage(&data).unwrap(), expected);
 }

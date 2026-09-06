@@ -50,6 +50,8 @@ impl Timestamp {
     }
 }
 
+/// Disjoint token categories: input excludes cache reads/writes, and output
+/// includes any reasoning tokens. Adapters normalize overlapping source counters.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TokenCounts {
     pub input: u64,
@@ -123,6 +125,8 @@ pub enum UsageKind {
     ToolResult,
     Compaction,
     BranchSummary,
+    /// Usage that cannot be classified more specifically by the source.
+    Other,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -139,7 +143,9 @@ pub struct UsageEventIdentity {
     pub adapter_key: String,
 }
 
-/// One source's usage observation, excluding conversation and tool content.
+/// One additive usage event, excluding conversation and tool content.
+/// Adapters convert cumulative counters to increments and collapse repeated
+/// records. Equal identities describe observations of the same incurred usage.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UsageEvent {
     pub identity: UsageEventIdentity,
@@ -150,15 +156,23 @@ pub struct UsageEvent {
     pub recorded_cost: Option<RecordedCost>,
 }
 
+/// Parent references are scoped to the child's agent. Paths must be absolute.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ParentSession {
+    SessionId(String),
+    SourcePath(PathBuf),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionMetadata {
     pub agent: AgentId,
     pub session_id: String,
-    pub format_version: u32,
-    pub working_directory: PathBuf,
+    /// Source format version, when reported (not the adapter implementation version).
+    pub format_version: Option<String>,
+    pub working_directory: Option<PathBuf>,
     pub started_at: Timestamp,
     pub name: Option<String>,
-    pub parent_session: Option<String>,
+    pub parent_session: Option<ParentSession>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

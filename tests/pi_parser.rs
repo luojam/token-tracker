@@ -1,11 +1,11 @@
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use token_tracker::adapters::pi::{PiParseError, PiSessionParser};
-use token_tracker::application::{ParseCompletion, ParsedSession, SessionParser};
+use token_tracker::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
 use token_tracker::core::{
-    AgentId, ModelAttribution, RecordedCost, SessionMetadata, Timestamp, TokenCounts, UsageEvent,
-    UsageEventIdentity, UsageKind,
+    AgentId, ModelAttribution, ParentSession, RecordedCost, SessionMetadata, Timestamp,
+    TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
 
 const ALL_USAGE: &str = include_str!("fixtures/pi/all-usage.jsonl");
@@ -17,7 +17,12 @@ fn parse(source: &str) -> Result<ParsedSession, PiParseError> {
 }
 
 fn parse_bytes(source: &[u8]) -> Result<ParsedSession, PiParseError> {
-    PiSessionParser::new().parse(&mut Cursor::new(source))
+    PiSessionParser::new().parse(
+        &mut Cursor::new(source),
+        ParseContext {
+            source_path: Path::new("/sessions/fixture.jsonl"),
+        },
+    )
 }
 
 fn cost(value: f64) -> Option<RecordedCost> {
@@ -33,11 +38,11 @@ fn parses_every_usage_location_without_exposing_session_content() {
         SessionMetadata {
             agent: AgentId::from("pi"),
             session_id: "01940000-0000-7000-8000-000000000001".into(),
-            format_version: 3,
-            working_directory: PathBuf::from("/work/project"),
+            format_version: Some("3".into()),
+            working_directory: Some(PathBuf::from("/work/project")),
             started_at: Timestamp::from_unix_milliseconds(1_735_787_045_006),
             name: Some("Fixture session".into()),
-            parent_session: Some("/sessions/original.jsonl".into()),
+            parent_session: Some(ParentSession::SourcePath("/sessions/original.jsonl".into())),
         }
     );
     assert_eq!(parsed.completion, ParseCompletion::Complete);

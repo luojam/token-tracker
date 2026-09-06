@@ -112,6 +112,7 @@ fn group_label(group: &SummaryGroup) -> String {
             one_line(&attribution.provider),
             one_line(&attribution.model)
         ),
+        SummaryGroup::Unattributed(UsageKind::Other) => "Unattributed other usage".into(),
         SummaryGroup::Unattributed(UsageKind::Assistant) => "Unattributed assistants".into(),
         SummaryGroup::Unattributed(UsageKind::ToolResult) => "Unattributed tool results".into(),
         SummaryGroup::Unattributed(UsageKind::Compaction) => "Unattributed compactions".into(),
