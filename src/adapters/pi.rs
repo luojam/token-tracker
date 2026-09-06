@@ -856,7 +856,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn discovery_warns_about_an_unreadable_candidate_and_continues() {
         use std::os::unix::fs::symlink;

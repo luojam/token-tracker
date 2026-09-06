@@ -5,7 +5,8 @@ terminal summary grouped by provider and model.
 
 ## Usage
 
-Requires Rust 1.85+ and Pi v3 session files. Install from this checkout:
+Requires a Unix system, Rust 1.85+, and Pi v3 session files. Windows is not
+supported. Install from this checkout:
 
 ```sh
 cargo install --path .

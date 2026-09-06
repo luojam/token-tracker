@@ -291,15 +291,9 @@ fn same_file_and_revision(left: &Metadata, right: &Metadata) -> bool {
         && same_file_identity(left, right)
 }
 
-#[cfg(unix)]
 fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
     left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-#[cfg(not(unix))]
-fn same_file_identity(_left: &Metadata, _right: &Metadata) -> bool {
-    true
 }
 
 enum LoadAttempt {

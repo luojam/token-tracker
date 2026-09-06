@@ -235,7 +235,7 @@ impl UsageStore for SqliteUsageStore {
                 continue;
             }
 
-            let path = decode_path(encoded_path)?;
+            let path = decode_path(encoded_path);
             if discovery_covers(&path, report) {
                 transaction.execute(
                     "UPDATE sources
@@ -366,7 +366,7 @@ fn load_stored_sessions(
                 session_id,
                 started_at_ms,
                 parent_session,
-                source_path: decode_path(source_path)?,
+                source_path: decode_path(source_path),
             },
         );
     }
@@ -986,7 +986,7 @@ fn validate_import(import: &SessionImport) -> Result<(), SqliteStoreError> {
 }
 
 fn source_state_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceState> {
-    let path = decode_path(row.get(0)?).map_err(to_sql_conversion_error)?;
+    let path = decode_path(row.get(0)?);
     let last_observed_revision = revision_from_columns(row, 1, 2, 3)?
         .ok_or_else(|| corrupt_sql_value("last observed revision is incomplete"))?;
     let last_imported_revision = revision_from_columns(row, 4, 5, 6)?;
@@ -1112,50 +1112,14 @@ fn decode_u64(value: &[u8]) -> Result<u64, SqliteStoreError> {
     Ok(u64::from_be_bytes(bytes))
 }
 
-#[cfg(unix)]
 fn encode_path(path: &Path) -> Vec<u8> {
     use std::os::unix::ffi::OsStrExt;
     path.as_os_str().as_bytes().to_vec()
 }
 
-#[cfg(unix)]
-fn decode_path(value: Vec<u8>) -> Result<PathBuf, SqliteStoreError> {
+fn decode_path(value: Vec<u8>) -> PathBuf {
     use std::os::unix::ffi::OsStringExt;
-    Ok(PathBuf::from(OsString::from_vec(value)))
-}
-
-#[cfg(windows)]
-fn encode_path(path: &Path) -> Vec<u8> {
-    use std::os::windows::ffi::OsStrExt;
-    path.as_os_str()
-        .encode_wide()
-        .flat_map(u16::to_le_bytes)
-        .collect()
-}
-
-#[cfg(windows)]
-fn decode_path(value: Vec<u8>) -> Result<PathBuf, SqliteStoreError> {
-    use std::os::windows::ffi::OsStringExt;
-    if value.len() % 2 != 0 {
-        return Err(SqliteStoreError::CorruptData("invalid stored path"));
-    }
-    let wide = value
-        .chunks_exact(2)
-        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-        .collect::<Vec<_>>();
-    Ok(PathBuf::from(OsString::from_wide(&wide)))
-}
-
-#[cfg(not(any(unix, windows)))]
-fn encode_path(path: &Path) -> Vec<u8> {
-    path.to_string_lossy().into_owned().into_bytes()
-}
-
-#[cfg(not(any(unix, windows)))]
-fn decode_path(value: Vec<u8>) -> Result<PathBuf, SqliteStoreError> {
-    String::from_utf8(value)
-        .map(PathBuf::from)
-        .map_err(|_| SqliteStoreError::CorruptData("invalid stored path"))
+    PathBuf::from(OsString::from_vec(value))
 }
 
 fn attribution_parts(event: &UsageEvent) -> (Option<&str>, Option<&str>) {
@@ -1454,7 +1418,7 @@ mod tests {
             .unwrap();
         assert_eq!(stored_metadata.0, "replacement-session");
         assert_eq!(
-            decode_path(stored_metadata.1).unwrap(),
+            decode_path(stored_metadata.1),
             PathBuf::from("/work/replacement")
         );
         assert_eq!(stored_metadata.2, 1_700_000_001_000);
@@ -1827,7 +1791,7 @@ mod tests {
                 .unwrap();
             statement
                 .query_map([], |row| {
-                    let path = decode_path(row.get(0)?).map_err(to_sql_conversion_error)?;
+                    let path = decode_path(row.get(0)?);
                     let tokens =
                         decode_u64(&row.get::<_, Vec<u8>>(2)?).map_err(to_sql_conversion_error)?;
                     Ok((path, row.get(1)?, tokens))
