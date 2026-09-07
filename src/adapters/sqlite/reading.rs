@@ -1,6 +1,6 @@
 use super::{
-    SqliteStoreError, decode_parent, decode_path, decode_u64, to_sql_conversion_error,
-    usage_kind_from_str,
+    SqliteStoreError, decode_parent, decode_path, decode_u64, pricing_context,
+    to_sql_conversion_error, usage_kind_from_str,
 };
 use crate::application::{SessionProvenance, SourceSessionKey, UsageObservation};
 use crate::core::{
@@ -47,7 +47,11 @@ pub(super) fn load_stored_observations(
                 observation.provider, observation.model,
                 observation.input_tokens, observation.output_tokens,
                 observation.cache_read_tokens, observation.cache_write_tokens,
-                observation.recorded_cost_usd, observation.timestamp_ms
+                observation.recorded_cost_usd, observation.timestamp_ms,
+                observation.pricing_tier, observation.pricing_unsupported_tier,
+                observation.pricing_raw_tier_kind, observation.pricing_raw_tier_value,
+                observation.pricing_tier_evidence, observation.pricing_request_granularity,
+                observation.pricing_cache_detail
            FROM source_observations observation
            JOIN usage_events event ON event.id = observation.event_id",
     )?;
@@ -65,6 +69,15 @@ pub(super) fn load_stored_observations(
             row.get::<_, Vec<u8>>(9)?,
             row.get::<_, Option<f64>>(10)?,
             row.get::<_, i64>(11)?,
+            [
+                row.get::<_, Option<String>>(12)?,
+                row.get::<_, Option<String>>(13)?,
+                row.get::<_, Option<String>>(14)?,
+                row.get::<_, Option<String>>(15)?,
+                row.get::<_, Option<String>>(16)?,
+                row.get::<_, Option<String>>(17)?,
+                row.get::<_, Option<String>>(18)?,
+            ],
         ))
     })?;
 
@@ -83,6 +96,7 @@ pub(super) fn load_stored_observations(
             cache_write,
             recorded_cost,
             timestamp_ms,
+            pricing,
         ) = row?;
         let attribution = match (provider, model) {
             (Some(provider), Some(model)) => Some(ModelAttribution { provider, model }),
@@ -122,7 +136,7 @@ pub(super) fn load_stored_observations(
                     cache_write: decode_u64(&cache_write)?,
                 },
                 recorded_cost,
-                pricing_context: None,
+                pricing_context: pricing_context::decode(pricing)?,
             },
         });
     }

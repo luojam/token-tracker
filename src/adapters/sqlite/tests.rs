@@ -1,3 +1,5 @@
+mod pricing;
+
 use super::*;
 use crate::application::{
     DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, ParsedSession,

@@ -1,5 +1,6 @@
 mod importing;
 mod migrations;
+mod pricing_context;
 mod reading;
 #[cfg(test)]
 mod tests;

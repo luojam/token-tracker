@@ -69,6 +69,30 @@ CREATE TABLE source_observations (
     cache_read_tokens BLOB NOT NULL,
     cache_write_tokens BLOB NOT NULL,
     recorded_cost_usd REAL,
+    pricing_tier TEXT
+        CHECK (pricing_tier IN ('standard', 'fast', 'unknown', 'unsupported')),
+    pricing_unsupported_tier TEXT,
+    pricing_raw_tier_kind TEXT
+        CHECK (pricing_raw_tier_kind IN ('missing', 'null', 'value')),
+    pricing_raw_tier_value TEXT,
+    pricing_tier_evidence TEXT
+        CHECK (pricing_tier_evidence IN ('unknown', 'requested_setting', 'served_response')),
+    pricing_request_granularity TEXT
+        CHECK (pricing_request_granularity IN ('exact_single_request', 'aggregate_or_unknown')),
+    pricing_cache_detail TEXT
+        CHECK (pricing_cache_detail IN ('complete', 'incomplete')),
+    CHECK (
+        (pricing_tier IS NULL AND pricing_unsupported_tier IS NULL
+         AND pricing_raw_tier_kind IS NULL AND pricing_raw_tier_value IS NULL
+         AND pricing_tier_evidence IS NULL AND pricing_request_granularity IS NULL
+         AND pricing_cache_detail IS NULL)
+        OR
+        (pricing_tier IS NOT NULL AND pricing_raw_tier_kind IS NOT NULL
+         AND pricing_tier_evidence IS NOT NULL AND pricing_request_granularity IS NOT NULL
+         AND pricing_cache_detail IS NOT NULL
+         AND (pricing_tier IS 'unsupported') = (pricing_unsupported_tier IS NOT NULL)
+         AND (pricing_raw_tier_kind IS 'value') = (pricing_raw_tier_value IS NOT NULL))
+    ),
     PRIMARY KEY (source_session_id, event_id),
     FOREIGN KEY (source_session_id, source_id) REFERENCES source_sessions(id, source_id),
     CHECK ((provider IS NULL) = (model IS NULL)),

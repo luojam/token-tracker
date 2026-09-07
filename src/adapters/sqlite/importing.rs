@@ -1,6 +1,6 @@
 use super::{
     SqliteStoreError, attribution_parts, completion_to_str, encode_parent, encode_path, encode_u64,
-    system_time_to_parts, usage_kind_to_str,
+    pricing_context, system_time_to_parts, usage_kind_to_str,
 };
 use crate::application::SessionImport;
 use crate::core::{RecordedCost, UsageEvent};
@@ -170,12 +170,17 @@ pub(super) fn insert_observation(
     event: &UsageEvent,
 ) -> Result<bool, SqliteStoreError> {
     let (provider, model) = attribution_parts(event);
+    let pricing = pricing_context::encode(event.pricing_context.as_ref());
     let changed = transaction.execute(
         "INSERT INTO source_observations (
             source_id, source_session_id, event_id, timestamp_ms, usage_kind,
             provider, model, input_tokens, output_tokens, cache_read_tokens,
-            cache_write_tokens, recorded_cost_usd
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            cache_write_tokens, recorded_cost_usd,
+            pricing_tier, pricing_unsupported_tier, pricing_raw_tier_kind,
+            pricing_raw_tier_value, pricing_tier_evidence,
+            pricing_request_granularity, pricing_cache_detail
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                   ?13, ?14, ?15, ?16, ?17, ?18, ?19)
          ON CONFLICT(source_session_id, event_id) DO NOTHING",
         params![
             source_id,
@@ -190,6 +195,13 @@ pub(super) fn insert_observation(
             encode_u64(event.tokens.cache_read),
             encode_u64(event.tokens.cache_write),
             event.recorded_cost.map(RecordedCost::as_usd),
+            pricing[0],
+            pricing[1],
+            pricing[2],
+            pricing[3],
+            pricing[4],
+            pricing[5],
+            pricing[6],
         ],
     )?;
     Ok(changed == 1)
@@ -203,6 +215,7 @@ pub(super) fn update_observation(
     event: &UsageEvent,
 ) -> Result<usize, SqliteStoreError> {
     let (provider, model) = attribution_parts(event);
+    let pricing = pricing_context::encode(event.pricing_context.as_ref());
     transaction
         .execute(
             "UPDATE source_observations
@@ -214,7 +227,14 @@ pub(super) fn update_observation(
                     output_tokens = ?6,
                     cache_read_tokens = ?7,
                     cache_write_tokens = ?8,
-                    recorded_cost_usd = ?9
+                    recorded_cost_usd = ?9,
+                    pricing_tier = ?13,
+                    pricing_unsupported_tier = ?14,
+                    pricing_raw_tier_kind = ?15,
+                    pricing_raw_tier_value = ?16,
+                    pricing_tier_evidence = ?17,
+                    pricing_request_granularity = ?18,
+                    pricing_cache_detail = ?19
               WHERE source_id = ?10 AND source_session_id = ?11 AND event_id = ?12
                 AND (timestamp_ms IS NOT ?1
                      OR usage_kind IS NOT ?2
@@ -224,7 +244,14 @@ pub(super) fn update_observation(
                      OR output_tokens IS NOT ?6
                      OR cache_read_tokens IS NOT ?7
                      OR cache_write_tokens IS NOT ?8
-                     OR recorded_cost_usd IS NOT ?9)",
+                     OR recorded_cost_usd IS NOT ?9
+                     OR pricing_tier IS NOT ?13
+                     OR pricing_unsupported_tier IS NOT ?14
+                     OR pricing_raw_tier_kind IS NOT ?15
+                     OR pricing_raw_tier_value IS NOT ?16
+                     OR pricing_tier_evidence IS NOT ?17
+                     OR pricing_request_granularity IS NOT ?18
+                     OR pricing_cache_detail IS NOT ?19)",
             params![
                 event.timestamp.as_unix_milliseconds(),
                 usage_kind_to_str(event.kind),
@@ -238,6 +265,13 @@ pub(super) fn update_observation(
                 source_id,
                 source_session_id,
                 event_id,
+                pricing[0],
+                pricing[1],
+                pricing[2],
+                pricing[3],
+                pricing[4],
+                pricing[5],
+                pricing[6],
             ],
         )
         .map_err(Into::into)
