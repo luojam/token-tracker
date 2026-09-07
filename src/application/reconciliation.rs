@@ -3,10 +3,13 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
+use super::pricing::{RATE_DATE, SNAPSHOT_ID, calculate_estimate};
 use super::{SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot};
 use crate::core::{
-    ParentSession, RecordedCost, SummaryBreakdown, SummaryGroup, SummaryTotals, Timestamp,
-    TokenCounts, UsageEventIdentity, UsageSummary,
+    EstimateBreakdown, EstimateSummary, EstimateTotal, EstimateTotals, EstimateUnavailableReason,
+    EstimatedCost, ModelAttribution, ParentSession, RecordedCost, ServiceTier, SummaryBreakdown,
+    SummaryGroup, SummaryTotals, TierEvidence, Timestamp, TokenCounts, UsageEventIdentity,
+    UsageSummary,
 };
 
 /// Count each logical event once. Prefer its earliest known ancestor observation,
@@ -43,6 +46,9 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
         ..SummaryTotals::default()
     };
     let mut breakdown = BTreeMap::<SummaryGroup, SummaryBreakdown>::new();
+    let mut estimate_totals = EstimateTotals::default();
+    let mut estimate_rows =
+        BTreeMap::<(Option<ModelAttribution>, ServiceTier), EstimateTotals>::new();
     // Stable event order also makes floating-point cost accumulation deterministic.
     for observations in by_event.values() {
         let canonical = select_canonical_observation(observations, &sessions, &parents);
@@ -65,12 +71,67 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
             .unique_usage_event_count
             .checked_add(1)
             .ok_or(SummaryError::Overflow("event count"))?;
+
+        if event.identity.agent.as_str() == "codex" {
+            let estimate = calculate_estimate(event);
+            let (tier, evidence) = event
+                .pricing_context
+                .as_ref()
+                .map(|context| (context.tier.clone(), context.tier_evidence))
+                .unwrap_or((ServiceTier::Unknown, TierEvidence::Unknown));
+            let row = estimate_rows
+                .entry((event.attribution.clone(), tier))
+                .or_default();
+            add_estimate(&mut estimate_totals, estimate, evidence);
+            add_estimate(row, estimate, evidence);
+        }
     }
+    let estimate = (estimate_totals.imported_event_count > 0).then(|| EstimateSummary {
+        snapshot_id: SNAPSHOT_ID.into(),
+        rate_date: RATE_DATE.into(),
+        totals: estimate_totals,
+        breakdown: estimate_rows
+            .into_iter()
+            .map(|((attribution, tier), totals)| EstimateBreakdown {
+                attribution,
+                tier,
+                totals,
+            })
+            .collect(),
+    });
     Ok(UsageSummary {
         totals,
         breakdown: breakdown.into_values().collect(),
-        estimate: None,
+        estimate,
     })
+}
+
+fn add_estimate(
+    totals: &mut EstimateTotals,
+    estimate: Result<EstimatedCost, EstimateUnavailableReason>,
+    evidence: TierEvidence,
+) {
+    // Counts are bounded by the already-validated canonical event count.
+    totals.imported_event_count += 1;
+    match estimate {
+        Ok(cost) => {
+            totals.priced_event_count += 1;
+            match evidence {
+                TierEvidence::RequestedSetting => totals.requested_setting_event_count += 1,
+                TierEvidence::ServedResponse => totals.served_response_event_count += 1,
+                TierEvidence::Unknown => {}
+            }
+            totals.cost = match totals.cost {
+                EstimateTotal::Unavailable => EstimateTotal::Available(cost),
+                EstimateTotal::Available(current) => current
+                    .checked_add(cost)
+                    .map(EstimateTotal::Available)
+                    .unwrap_or(EstimateTotal::Overflow),
+                EstimateTotal::Overflow => EstimateTotal::Overflow,
+            };
+        }
+        Err(reason) => *totals.unavailable_reasons.entry(reason).or_default() += 1,
+    }
 }
 
 fn resolve_session_parents(
@@ -197,3 +258,34 @@ impl fmt::Display for SummaryError {
 }
 
 impl Error for SummaryError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimate_total_overflow_is_sticky_without_losing_coverage() {
+        // Bundled rates cannot reach this boundary with valid summary token totals.
+        let mut totals = EstimateTotals::default();
+        for cost in [u128::MAX, 1, 0] {
+            add_estimate(
+                &mut totals,
+                Ok(EstimatedCost::from_picodollars(cost)),
+                TierEvidence::RequestedSetting,
+            );
+        }
+        add_estimate(
+            &mut totals,
+            Err(EstimateUnavailableReason::ArithmeticOverflow),
+            TierEvidence::RequestedSetting,
+        );
+        assert_eq!(totals.cost, EstimateTotal::Overflow);
+        assert_eq!(totals.imported_event_count, 4);
+        assert_eq!(totals.priced_event_count, 3);
+        assert_eq!(totals.requested_setting_event_count, 3);
+        assert_eq!(
+            totals.unavailable_reasons[&EstimateUnavailableReason::ArithmeticOverflow],
+            1
+        );
+    }
+}

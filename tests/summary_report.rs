@@ -5,7 +5,9 @@ use token_tracker::application::{
     render_terminal_report, summarize_usage,
 };
 use token_tracker::core::{
-    AgentId, ModelAttribution, ParentSession, RecordedCost, Timestamp, TokenCounts, UsageEvent,
+    AgentId, CacheDetail, EstimateTotal, EstimateUnavailableReason, EstimatedCost,
+    ModelAttribution, ParentSession, PricingContext, RawServiceTier, RecordedCost,
+    RequestGranularity, ServiceTier, TierEvidence, Timestamp, TokenCounts, UsageEvent,
     UsageEventIdentity, UsageKind,
 };
 
@@ -185,6 +187,96 @@ fn summary_reconciles_and_renders_independently_of_observation_order() {
          - discovery warning\n\
          - /sessions/z-bad.jsonl: could not parse\n"
     );
+}
+
+#[test]
+fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
+    let context = PricingContext {
+        tier: ServiceTier::Standard,
+        raw_tier: RawServiceTier::Value("default".into()),
+        tier_evidence: TierEvidence::RequestedSetting,
+        request_granularity: RequestGranularity::ExactSingleRequest,
+        cache_detail: CacheDetail::Complete,
+    };
+    let model = ModelAttribution {
+        provider: "openai".into(),
+        model: "gpt-5.6".into(),
+    };
+    let mut data = snapshot(false);
+    for session in &mut data.sessions {
+        session.key.agent = "codex".into();
+    }
+    for observation in &mut data.observations {
+        observation.session.agent = "codex".into();
+        observation.event.identity.agent = "codex".into();
+        if observation.event.identity.adapter_key != "shared" {
+            observation.event.attribution = Some(model.clone());
+            observation.event.pricing_context = Some(context.clone());
+        }
+        if observation.session.session_id == "child-session" {
+            observation.event.pricing_context = Some(PricingContext {
+                tier: ServiceTier::Fast,
+                raw_tier: RawServiceTier::Value("priority".into()),
+                tier_evidence: TierEvidence::ServedResponse,
+                ..context.clone()
+            });
+        }
+    }
+    // The child offers richer context for shared, and conflicting facts for tool.
+    let mut conflicting = data.observations[2].clone();
+    conflicting.event.identity.adapter_key = "tool".into();
+    data.observations.push(conflicting);
+    let (pi, observations) = sessions().into_iter().next().unwrap();
+    data.sessions.push(pi);
+    data.observations.extend(observations);
+
+    let summary = summarize_usage(&data).unwrap();
+    data.sessions.reverse();
+    data.observations.reverse();
+    assert_eq!(summarize_usage(&data).unwrap(), summary);
+    let estimate = summary.estimate.unwrap();
+    assert_eq!(summary.totals.tokens.input, 27);
+    assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 1.0);
+    assert_eq!(estimate.totals.imported_event_count, 3);
+    assert_eq!(estimate.totals.priced_event_count, 2);
+    assert_eq!(estimate.totals.requested_setting_event_count, 1);
+    assert_eq!(estimate.totals.served_response_event_count, 1);
+    assert_eq!(
+        estimate.totals.cost,
+        EstimateTotal::Available(EstimatedCost::from_picodollars(395_000_000))
+    );
+    assert_eq!(
+        estimate.totals.unavailable_reasons,
+        std::collections::BTreeMap::from([(EstimateUnavailableReason::MissingPricingContext, 1)])
+    );
+    assert_eq!(
+        estimate
+            .breakdown
+            .iter()
+            .map(|row| (&row.tier, row.totals.priced_event_count))
+            .collect::<Vec<_>>(),
+        vec![
+            (&ServiceTier::Standard, 1),
+            (&ServiceTier::Fast, 1),
+            (&ServiceTier::Unknown, 0)
+        ]
+    );
+
+    data.observations.reverse();
+    data.observations.truncate(1);
+    let unpriced = summarize_usage(&data).unwrap().estimate.unwrap();
+    assert_eq!(unpriced.totals.cost, EstimateTotal::Unavailable);
+    let event = &mut data.observations[0].event;
+    event.attribution = Some(model);
+    event.pricing_context = Some(context);
+    event.tokens = TokenCounts::default();
+    let zero = summarize_usage(&data).unwrap().estimate.unwrap();
+    assert_eq!(
+        zero.totals.cost,
+        EstimateTotal::Available(EstimatedCost::default())
+    );
+    data.observations.clear();
+    assert!(summarize_usage(&data).unwrap().estimate.is_none());
 }
 
 #[test]
