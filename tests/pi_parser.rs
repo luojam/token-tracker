@@ -67,6 +67,7 @@ fn parses_every_usage_location_without_exposing_session_content() {
                     cache_write: 40,
                 },
                 recorded_cost: cost(0.12),
+                pricing_context: None,
             },
             UsageEvent {
                 identity: UsageEventIdentity {
@@ -83,6 +84,7 @@ fn parses_every_usage_location_without_exposing_session_content() {
                     cache_write: 4,
                 },
                 recorded_cost: None,
+                pricing_context: None,
             },
             UsageEvent {
                 identity: UsageEventIdentity {
@@ -99,6 +101,7 @@ fn parses_every_usage_location_without_exposing_session_content() {
                     cache_write: 8,
                 },
                 recorded_cost: cost(0.34),
+                pricing_context: None,
             },
             UsageEvent {
                 identity: UsageEventIdentity {
@@ -115,6 +118,7 @@ fn parses_every_usage_location_without_exposing_session_content() {
                     cache_write: 12,
                 },
                 recorded_cost: cost(0.56),
+                pricing_context: None,
             },
         ]
     );

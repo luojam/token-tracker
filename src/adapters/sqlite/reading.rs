@@ -122,6 +122,7 @@ pub(super) fn load_stored_observations(
                     cache_write: decode_u64(&cache_write)?,
                 },
                 recorded_cost,
+                pricing_context: None,
             },
         });
     }

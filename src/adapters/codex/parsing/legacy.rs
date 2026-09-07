@@ -144,6 +144,7 @@ impl LegacyUsageState {
                 attribution: None,
                 tokens: Default::default(),
                 recorded_cost: None,
+                pricing_context: None,
             });
         event.tokens = event.tokens.checked_add(tokens).ok_or_else(invalid)?;
         self.previous_total = Some(total);

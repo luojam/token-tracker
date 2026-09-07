@@ -354,6 +354,7 @@ impl SessionState {
                 attribution: None,
                 tokens,
                 recorded_cost: None,
+                pricing_context: None,
             };
             self.responses.insert(
                 response.response_id,

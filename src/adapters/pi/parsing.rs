@@ -328,6 +328,7 @@ fn normalize_event(
             cache_write: usage.cache_write,
         },
         recorded_cost,
+        pricing_context: None,
     })
 }
 

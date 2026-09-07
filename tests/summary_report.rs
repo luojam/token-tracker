@@ -29,6 +29,7 @@ fn event(
         }),
         tokens,
         recorded_cost: cost.map(|value| RecordedCost::from_usd(value).unwrap()),
+        pricing_context: None,
     }
 }
 

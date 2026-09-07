@@ -69,6 +69,7 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
     Ok(UsageSummary {
         totals,
         breakdown: breakdown.into_values().collect(),
+        estimate: None,
     })
 }
 

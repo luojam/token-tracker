@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
@@ -115,6 +116,91 @@ impl fmt::Display for InvalidRecordedCost {
 
 impl Error for InvalidRecordedCost {}
 
+/// API-equivalent USD value in picodollars (10^-12 USD), not a reported charge.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct EstimatedCost(u128);
+
+impl EstimatedCost {
+    pub const fn from_picodollars(value: u128) -> Self {
+        Self(value)
+    }
+
+    pub const fn as_picodollars(self) -> u128 {
+        self.0
+    }
+
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+        self.0.checked_add(other.0).map(Self)
+    }
+}
+
+impl fmt::Display for EstimatedCost {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        const PICODOLLARS_PER_MICRODOLLAR: u128 = 1_000_000;
+        const MICRODOLLARS_PER_DOLLAR: u128 = 1_000_000;
+
+        if self.0 > 0 && self.0 < PICODOLLARS_PER_MICRODOLLAR {
+            return formatter.write_str("<$0.000001");
+        }
+        // Divide before rounding so even u128::MAX can be displayed.
+        let microdollars = self.0 / PICODOLLARS_PER_MICRODOLLAR
+            + u128::from(self.0 % PICODOLLARS_PER_MICRODOLLAR >= 500_000);
+        write!(
+            formatter,
+            "${}.{:06}",
+            microdollars / MICRODOLLARS_PER_DOLLAR,
+            microdollars % MICRODOLLARS_PER_DOLLAR,
+        )
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ServiceTier {
+    Standard,
+    Fast,
+    Unknown,
+    Unsupported(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RawServiceTier {
+    Missing,
+    Null,
+    Value(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TierEvidence {
+    Unknown,
+    RequestedSetting,
+    ServedResponse,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RequestGranularity {
+    ExactSingleRequest,
+    AggregateOrUnknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CacheDetail {
+    Complete,
+    /// A zero subdivision in TokenCounts is not necessarily an observed zero.
+    Incomplete,
+}
+
+/// Facts bound to the original request; no rates, derived counts, or money.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PricingContext {
+    /// Standard/fast require requested or served evidence bound to this usage.
+    pub tier: ServiceTier,
+    /// Retained even when attribution is unknown; missing, null, and auto differ.
+    pub raw_tier: RawServiceTier,
+    pub tier_evidence: TierEvidence,
+    pub request_granularity: RequestGranularity,
+    pub cache_detail: CacheDetail,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UsageKind {
     Assistant,
@@ -149,6 +235,7 @@ pub struct UsageEvent {
     pub attribution: Option<ModelAttribution>,
     pub tokens: TokenCounts,
     pub recorded_cost: Option<RecordedCost>,
+    pub pricing_context: Option<PricingContext>,
 }
 
 /// Parent references are scoped to the child's agent. Paths must be absolute.
@@ -192,9 +279,64 @@ pub struct SummaryBreakdown {
     pub unique_usage_event_count: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum EstimateUnavailableReason {
+    MissingPricingContext,
+    UnknownAttribution,
+    UnsupportedProvider,
+    UnsupportedModel,
+    UnknownTier,
+    UnsupportedTier,
+    UnknownRequestGranularity,
+    IncompleteCacheDetail,
+    ArithmeticOverflow,
+}
+
+/// An available total covers only priced events; coverage determines partiality.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EstimateTotal {
+    #[default]
+    Unavailable,
+    Available(EstimatedCost),
+    /// The sum overflowed, so no partial monetary total may be displayed.
+    Overflow,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EstimateTotals {
+    pub cost: EstimateTotal,
+    /// Imported canonical Codex events only, not completeness of local history.
+    pub imported_event_count: u64,
+    pub priced_event_count: u64,
+    /// Evidence counts include priced events only.
+    pub requested_setting_event_count: u64,
+    pub served_response_event_count: u64,
+    /// Exactly one deterministic reason per unpriced event.
+    pub unavailable_reasons: BTreeMap<EstimateUnavailableReason, u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EstimateBreakdown {
+    pub attribution: Option<ModelAttribution>,
+    pub tier: ServiceTier,
+    pub totals: EstimateTotals,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EstimateSummary {
+    pub snapshot_id: String,
+    /// Price snapshot date (YYYY-MM-DD), not the usage date.
+    pub rate_date: String,
+    pub totals: EstimateTotals,
+    /// Ordered by original attribution and normalized tier, retaining unsupported values.
+    pub breakdown: Vec<EstimateBreakdown>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UsageSummary {
     pub totals: SummaryTotals,
     /// Rows must be ordered deterministically by group.
     pub breakdown: Vec<SummaryBreakdown>,
+    /// Separate from recorded costs; absent when there are no Codex observations.
+    pub estimate: Option<EstimateSummary>,
 }

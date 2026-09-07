@@ -126,6 +126,7 @@ impl SessionParser for TestParser {
                     ..TokenCounts::default()
                 },
                 recorded_cost: None,
+                pricing_context: None,
             }],
             completion: ParseCompletion::Complete,
         })

@@ -71,6 +71,7 @@ fn session_import(path: &str, input_tokens: u64) -> SessionImport {
                     cache_write: 4,
                 },
                 recorded_cost: Some(RecordedCost::from_usd(0.25).unwrap()),
+                pricing_context: None,
             }],
             completion: ParseCompletion::Complete,
         },
