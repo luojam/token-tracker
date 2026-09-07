@@ -1,8 +1,8 @@
 use super::CODEX_AGENT_ID;
 use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
 use crate::core::{
-    AgentId, ParentSession, SessionMetadata, Timestamp, TokenCounts, UsageEvent,
-    UsageEventIdentity, UsageKind,
+    AgentId, CacheDetail, ParentSession, RequestGranularity, SessionMetadata, Timestamp,
+    TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
 use chrono::DateTime;
 use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, Visitor, value::MapAccessDeserializer};
@@ -13,9 +13,11 @@ use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::{error::Error, fmt, str};
 
+mod context;
 mod legacy;
 mod mirrors;
 
+use context::{ContextState, SettingsWire};
 use legacy::LegacyUsageState;
 use mirrors::MirrorState;
 
@@ -194,10 +196,17 @@ struct SessionState {
     responses: BTreeMap<String, ResponseObservation>,
     legacy: LegacyUsageState,
     mirrors: Option<MirrorState>,
+    context: ContextState,
 }
 
 impl SessionState {
     fn new(header: NormalizedHeader) -> Self {
+        let mut context = ContextState::default();
+        context.accept_header(
+            &header.metadata.session_id,
+            header.provider,
+            header.identity.forked_from_id.is_none(),
+        );
         Self {
             expected_ancestor: header.identity.forked_from_id.clone(),
             headers: BTreeMap::from([(header.metadata.session_id.clone(), header.identity)]),
@@ -206,6 +215,7 @@ impl SessionState {
             responses: BTreeMap::new(),
             legacy: LegacyUsageState::default(),
             mirrors: None,
+            context,
         }
     }
 
@@ -218,8 +228,9 @@ impl SessionState {
         match entry_type {
             "turn_context" => {
                 validate_timestamp(text, line)?;
-                let turn: TurnWire = payload(text, line, "turn_context.payload.turn_id")?;
+                let turn: TurnContextWire = payload(text, line, "turn_context.payload")?;
                 self.legacy.accept_context(&turn.turn_id, line)?;
+                self.context.accept_context(turn.model);
             }
             "event_msg" => {
                 let event: TypeWire = payload(text, line, "event_msg.payload.type")?;
@@ -236,9 +247,15 @@ impl SessionState {
                             }
                             match &mut self.mirrors {
                                 Some(mirrors) => mirrors.accept_mirror(info.0, line)?,
-                                None => self.legacy.accept_usage(info.0, line)?,
+                                None => self.legacy.accept_usage(info.0, &self.context, line)?,
                             }
                         }
+                    }
+                    "thread_settings_applied" => {
+                        validate_timestamp(text, line)?;
+                        let settings: SettingsWire =
+                            payload(text, line, "event_msg.payload.thread_settings")?;
+                        self.context.accept_settings(settings);
                     }
                     "task_started" | "task_complete" | "turn_aborted" => {
                         let timestamp = validate_timestamp(text, line)?;
@@ -248,10 +265,12 @@ impl SessionState {
                         }
                         self.legacy.accept_boundary(
                             &event.entry_type,
-                            turn.turn_id,
+                            turn.turn_id.clone(),
                             timestamp,
                             line,
                         )?;
+                        self.context
+                            .accept_boundary(&event.entry_type, &turn.turn_id);
                     }
                     _ => {}
                 }
@@ -330,6 +349,9 @@ impl SessionState {
             }
             // Corrections replace counters, preserving the original request's identity and time.
             original.event.tokens = tokens;
+            if let Some(context) = &mut original.event.pricing_context {
+                context.cache_detail = response.usage.0.cache_detail();
+            }
         } else {
             self.legacy
                 .validate_response_start(&response.turn_id, line)?;
@@ -344,6 +366,12 @@ impl SessionState {
                     MirrorState::new(self.legacy.baseline(), response.thread_id.clone())
                 })
                 .accept_response(&response, line)?;
+            let (attribution, pricing_context) = self.context.observation(
+                &response.turn_id,
+                Some(&response.thread_id),
+                RequestGranularity::ExactSingleRequest,
+                response.usage.0.cache_detail(),
+            );
             let event = UsageEvent {
                 identity: UsageEventIdentity {
                     agent: AgentId::from(CODEX_AGENT_ID),
@@ -351,10 +379,10 @@ impl SessionState {
                 },
                 timestamp,
                 kind: UsageKind::Other,
-                attribution: None,
+                attribution,
                 tokens,
                 recorded_cost: None,
-                pricing_context: None,
+                pricing_context: Some(pricing_context),
             };
             self.responses.insert(
                 response.response_id,
@@ -391,6 +419,12 @@ impl SessionState {
                     field: "session_meta.payload.parent",
                 });
             }
+            self.context.accept_header(
+                id,
+                header.provider,
+                id == &self.metadata.session_id
+                    && (original.forked_from_id.is_none() || !self.inherited_prefix),
+            );
             return Ok(());
         }
 
@@ -413,6 +447,8 @@ impl SessionState {
             });
         }
         self.expected_ancestor = header.identity.forked_from_id.clone();
+        // Copied legacy turns lack thread IDs and an evidenced end-of-inheritance marker.
+        self.context.accept_header(id, header.provider, false);
         self.headers.insert(id.clone(), header.identity);
         Ok(())
     }
@@ -435,6 +471,7 @@ struct HeaderIdentity {
 struct NormalizedHeader {
     metadata: SessionMetadata,
     identity: HeaderIdentity,
+    provider: Option<String>,
 }
 
 impl HeaderWire {
@@ -474,6 +511,7 @@ impl HeaderWire {
         }
         let started_at = parse_timestamp(&self.timestamp, line, "session_meta.payload.timestamp")?;
         Ok(NormalizedHeader {
+            provider: self.model_provider,
             metadata: SessionMetadata {
                 agent: AgentId::from(CODEX_AGENT_ID),
                 session_id: self.id,
@@ -537,6 +575,14 @@ struct HeaderWire {
     cwd: Option<String>,
     parent_thread_id: Option<String>,
     forked_from_id: Option<String>,
+    model_provider: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TurnContextWire {
+    #[serde(deserialize_with = "nonempty_id")]
+    turn_id: String,
+    model: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -583,6 +629,14 @@ struct TokenUsageWire {
 }
 
 impl TokenUsageWire {
+    fn cache_detail(&self) -> CacheDetail {
+        if self.cache_write_input_tokens.is_some() {
+            CacheDetail::Complete
+        } else {
+            CacheDetail::Incomplete
+        }
+    }
+
     fn validate_contains(
         &self,
         usage: &Self,

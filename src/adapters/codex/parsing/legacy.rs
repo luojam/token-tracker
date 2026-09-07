@@ -1,5 +1,10 @@
-use super::{CODEX_AGENT_ID, CodexParseError, TokenInfoWire, TokenUsageWire};
-use crate::core::{AgentId, Timestamp, UsageEvent, UsageEventIdentity, UsageKind};
+use super::{
+    CODEX_AGENT_ID, CodexParseError, TokenInfoWire, TokenUsageWire, context::ContextState,
+};
+use crate::core::{
+    AgentId, CacheDetail, RequestGranularity, ServiceTier, TierEvidence, Timestamp, UsageEvent,
+    UsageEventIdentity, UsageKind,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
@@ -101,6 +106,7 @@ impl LegacyUsageState {
     pub(super) fn accept_usage(
         &mut self,
         info: TokenInfoWire,
+        context: &ContextState,
         line: usize,
     ) -> Result<(), CodexParseError> {
         const TOTAL: &str = "event_msg.payload.info.total_token_usage";
@@ -131,6 +137,24 @@ impl LegacyUsageState {
             return Err(CodexParseError::InvalidField { line, field: LAST });
         }
 
+        if unchanged && self.events.contains_key(&turn.id) {
+            return Ok(());
+        }
+        let cache_detail = if total.cache_detail() == CacheDetail::Complete
+            && self
+                .previous_total
+                .is_none_or(|previous| previous.cache_detail() == CacheDetail::Complete)
+        {
+            CacheDetail::Complete
+        } else {
+            CacheDetail::Incomplete
+        };
+        let (attribution, pricing_context) = context.observation(
+            &turn.id,
+            None,
+            RequestGranularity::AggregateOrUnknown,
+            cache_detail,
+        );
         let event = self
             .events
             .entry(turn.id.clone())
@@ -141,11 +165,26 @@ impl LegacyUsageState {
                 },
                 timestamp: turn.started_at,
                 kind: UsageKind::Other,
-                attribution: None,
+                attribution: attribution.clone(),
                 tokens: Default::default(),
                 recorded_cost: None,
-                pricing_context: None,
+                pricing_context: Some(pricing_context.clone()),
             });
+        if event.attribution != attribution {
+            event.attribution = None;
+        }
+        if let Some(existing) = &mut event.pricing_context {
+            if existing.tier != pricing_context.tier
+                || existing.raw_tier != pricing_context.raw_tier
+                || existing.tier_evidence != pricing_context.tier_evidence
+            {
+                existing.tier = ServiceTier::Unknown;
+                existing.tier_evidence = TierEvidence::Unknown;
+            }
+            if cache_detail == CacheDetail::Incomplete {
+                existing.cache_detail = CacheDetail::Incomplete;
+            }
+        }
         event.tokens = event.tokens.checked_add(tokens).ok_or_else(invalid)?;
         self.previous_total = Some(total);
         Ok(())

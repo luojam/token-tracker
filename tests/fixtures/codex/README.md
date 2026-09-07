@@ -110,6 +110,13 @@ or borrow the parent's setting for a child. Mid-turn changes leave affected tier
 attribution unknown. No served tier or monetary charge was observed. Interleaving
 multiple threads in a single file is not established by the separate child sample.
 
+C09 conservatively leaves copied legacy ownership unknown until a repeated owning
+header establishes local scope. Neither a completed/aborted inherited turn nor the
+next task start proves that copying has ended: the partial-fork fixture has no
+owner-transition header. Such observations retain tokens with unknown provider/tier;
+a repeated child header before its turn context permits child model attribution,
+but cannot retroactively bind settings at the preceding task start.
+
 ## Expected normalized facts
 
 Vectors are `(ordinary input, cache read, cache write, output)`; totals sum all

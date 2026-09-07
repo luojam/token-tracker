@@ -69,7 +69,10 @@ fn legacy_fixtures_match_turn_aggregate_oracles() {
             assert_eq!(tokens(actual.tokens), expected["tokens"], "{name}");
             assert_eq!(actual.kind, UsageKind::Other, "{name}");
             assert_eq!(actual.recorded_cost, None, "{name}");
-            assert_eq!(actual.attribution, None, "{name}");
+            let owner_known = name != "legacy-partial-fork.jsonl"
+                && (name != "legacy-fork.jsonl"
+                    || actual.identity.adapter_key.ends_with("turn-fork"));
+            assert_eq!(actual.attribution.is_some(), owner_known, "{name}");
         }
         let total: u128 = parsed.events.iter().map(|event| event.tokens.total()).sum();
         assert_eq!(
