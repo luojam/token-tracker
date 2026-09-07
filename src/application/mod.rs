@@ -1,3 +1,4 @@
+pub mod pricing;
 mod reconciliation;
 mod reporting;
 mod synchronization;
