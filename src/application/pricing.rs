@@ -9,7 +9,10 @@
 //! Sol prices are promotional, available at least through November 21, 2026.
 //! Replace this snapshot to revalue stored facts; ordinary runs need no network.
 
-use crate::core::{EstimateUnavailableReason, ModelAttribution, ServiceTier};
+use crate::core::{
+    CacheDetail, EstimateUnavailableReason, EstimatedCost, ModelAttribution, RequestGranularity,
+    ServiceTier, TierEvidence, TokenCounts, UsageEvent,
+};
 
 pub const SNAPSHOT_ID: &str = "openai-api-2026-09-07";
 pub const RATE_DATE: &str = "2026-09-07";
@@ -69,6 +72,57 @@ const SOL: ModelRates = ModelRates {
     },
 };
 
+/// Prices one complete observation without changing its facts or recorded cost.
+/// Failures prefer context, attribution/rate support, tier evidence, granularity,
+/// then cache detail. The caller selects canonical Codex observations.
+pub fn calculate_estimate(event: &UsageEvent) -> Result<EstimatedCost, EstimateUnavailableReason> {
+    use EstimateUnavailableReason as Reason;
+
+    let context = event
+        .pricing_context
+        .as_ref()
+        .ok_or(Reason::MissingPricingContext)?;
+    let attribution = event
+        .attribution
+        .as_ref()
+        .ok_or(Reason::UnknownAttribution)?;
+    let request_input = u128::from(event.tokens.input)
+        .checked_add(u128::from(event.tokens.cache_read))
+        .and_then(|input| input.checked_add(u128::from(event.tokens.cache_write)))
+        .ok_or(Reason::ArithmeticOverflow)?;
+    let rates = lookup_rates(attribution, &context.tier, request_input)?;
+    if context.tier_evidence == TierEvidence::Unknown {
+        return Err(Reason::UnknownTier);
+    }
+    if context.request_granularity != RequestGranularity::ExactSingleRequest {
+        return Err(Reason::UnknownRequestGranularity);
+    }
+    if context.cache_detail != CacheDetail::Complete {
+        return Err(Reason::IncompleteCacheDetail);
+    }
+    calculate_cost(event.tokens, rates)
+}
+
+fn calculate_cost(
+    tokens: TokenCounts,
+    rates: TokenRates,
+) -> Result<EstimatedCost, EstimateUnavailableReason> {
+    [
+        (tokens.input, rates.input),
+        (tokens.cache_read, rates.cache_read),
+        (tokens.cache_write, rates.cache_write),
+        (tokens.output, rates.output),
+    ]
+    .into_iter()
+    .try_fold(0u128, |total, (count, rate)| {
+        u128::from(count)
+            .checked_mul(u128::from(rate))
+            .and_then(|cost| total.checked_add(cost))
+    })
+    .map(EstimatedCost::from_picodollars)
+    .ok_or(EstimateUnavailableReason::ArithmeticOverflow)
+}
+
 /// `request_input` includes ordinary input, cache reads, and cache writes for one
 /// exact request, never session totals or configured context capacity. The caller
 /// must establish request granularity, cache completeness, and tier evidence.
@@ -97,4 +151,29 @@ pub fn lookup_rates(
     } else {
         rates.long
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cost_overflow_returns_no_partial_value() {
+        // Bundled rates cannot overflow u128 with u64 counts; exercise the guard
+        // with extreme rates without exposing a configurable calculator.
+        let rates = TokenRates::new(u64::MAX, u64::MAX, 0, 0);
+        let mut tokens = TokenCounts {
+            input: u64::MAX,
+            ..TokenCounts::default()
+        };
+        assert_eq!(
+            calculate_cost(tokens, rates).unwrap().as_picodollars(),
+            u128::from(u64::MAX) * u128::from(u64::MAX),
+        );
+        tokens.cache_read = u64::MAX;
+        assert_eq!(
+            calculate_cost(tokens, rates),
+            Err(EstimateUnavailableReason::ArithmeticOverflow),
+        );
+    }
 }
