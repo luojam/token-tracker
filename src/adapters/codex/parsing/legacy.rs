@@ -74,17 +74,21 @@ impl LegacyUsageState {
         }
     }
 
+    pub(super) fn baseline(&self) -> TokenUsageWire {
+        self.previous_total.unwrap_or_default()
+    }
+
     pub(super) fn validate_response_start(
         &self,
         turn_id: &str,
         line: usize,
     ) -> Result<(), CodexParseError> {
-        if !self.events.is_empty()
-            && (self.events.contains_key(turn_id)
-                || self
-                    .active_turn
-                    .as_ref()
-                    .is_none_or(|turn| turn.id != turn_id || !turn.has_context))
+        if self.checkpoint_before_usage
+            || self.events.contains_key(turn_id)
+            || self
+                .active_turn
+                .as_ref()
+                .is_none_or(|turn| turn.id != turn_id || !turn.has_context)
         {
             return Err(CodexParseError::InvalidField {
                 line,
@@ -148,7 +152,7 @@ impl LegacyUsageState {
 }
 
 impl TokenUsageWire {
-    fn checked_sub(&self, previous: &Self) -> Option<Self> {
+    pub(super) fn checked_sub(&self, previous: &Self) -> Option<Self> {
         let cache_write = self
             .cache_write_input_tokens
             .unwrap_or(0)
@@ -167,7 +171,7 @@ impl TokenUsageWire {
         })
     }
 
-    fn same_counters(&self, other: &Self) -> bool {
+    pub(super) fn same_counters(&self, other: &Self) -> bool {
         self.input_tokens == other.input_tokens
             && self.cached_input_tokens == other.cached_input_tokens
             && self.cache_write_input_tokens.unwrap_or(0)
@@ -177,7 +181,7 @@ impl TokenUsageWire {
             && self.total_tokens == other.total_tokens
     }
 
-    fn is_zero(&self) -> bool {
+    pub(super) fn is_zero(&self) -> bool {
         self.same_counters(&Self::default())
     }
 }

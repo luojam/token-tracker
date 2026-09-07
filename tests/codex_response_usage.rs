@@ -98,10 +98,7 @@ fn response_prefixes_count_usage_before_mirrors_arrive() {
         .filter(|line| !line.contains("\"token_count\""))
         .collect::<Vec<_>>()
         .join("\n");
-    assert_eq!(
-        parse(&without_mirrors).unwrap().events,
-        parse(RESPONSE).unwrap().events
-    );
+    assert!(parse(&without_mirrors).is_err());
 }
 
 #[test]

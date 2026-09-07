@@ -14,10 +14,11 @@ use std::path::PathBuf;
 use std::{error::Error, fmt, str};
 
 mod legacy;
+mod mirrors;
 
 use legacy::LegacyUsageState;
+use mirrors::MirrorState;
 
-/// Mirror validation follows in C06.
 /// Keep this adapter unregistered until accounting and pricing are complete.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CodexSessionParser;
@@ -192,6 +193,7 @@ struct SessionState {
     inherited_prefix: bool,
     responses: BTreeMap<String, ResponseObservation>,
     legacy: LegacyUsageState,
+    mirrors: Option<MirrorState>,
 }
 
 impl SessionState {
@@ -203,6 +205,7 @@ impl SessionState {
             inherited_prefix: true,
             responses: BTreeMap::new(),
             legacy: LegacyUsageState::default(),
+            mirrors: None,
         }
     }
 
@@ -216,9 +219,7 @@ impl SessionState {
             "turn_context" => {
                 validate_timestamp(text, line)?;
                 let turn: TurnWire = payload(text, line, "turn_context.payload.turn_id")?;
-                if self.responses.is_empty() {
-                    self.legacy.accept_context(&turn.turn_id, line)?;
-                }
+                self.legacy.accept_context(&turn.turn_id, line)?;
             }
             "event_msg" => {
                 let event: TypeWire = payload(text, line, "event_msg.payload.type")?;
@@ -226,34 +227,40 @@ impl SessionState {
                     "token_count" => {
                         validate_timestamp(text, line)?;
                         let count: TokenCountWire = payload(text, line, "event_msg.payload.info")?;
-                        if let (true, Some(info)) = (self.responses.is_empty(), count.info) {
+                        if let Some(info) = count.info {
                             if self.expected_ancestor.is_some() {
                                 return Err(CodexParseError::InvalidField {
                                     line,
                                     field: "event_msg.payload.info.total_token_usage",
                                 });
                             }
-                            self.legacy.accept_usage(info.0, line)?;
+                            match &mut self.mirrors {
+                                Some(mirrors) => mirrors.accept_mirror(info.0, line)?,
+                                None => self.legacy.accept_usage(info.0, line)?,
+                            }
                         }
                     }
                     "task_started" | "task_complete" | "turn_aborted" => {
                         let timestamp = validate_timestamp(text, line)?;
                         let turn: TurnWire = payload(text, line, "event_msg.payload.turn_id")?;
-                        if self.responses.is_empty() {
-                            self.legacy.accept_boundary(
-                                &event.entry_type,
-                                turn.turn_id,
-                                timestamp,
-                                line,
-                            )?;
+                        if let Some(mirrors) = &self.mirrors {
+                            mirrors.require_confirmed(line)?;
                         }
+                        self.legacy.accept_boundary(
+                            &event.entry_type,
+                            turn.turn_id,
+                            timestamp,
+                            line,
+                        )?;
                     }
                     _ => {}
                 }
             }
             "compacted" => {
                 validate_timestamp(text, line)?;
-                self.legacy.accept_compaction();
+                if self.mirrors.is_none() {
+                    self.legacy.accept_compaction();
+                }
             }
             _ => {}
         }
@@ -266,10 +273,6 @@ impl SessionState {
         timestamp: Timestamp,
         line: usize,
     ) -> Result<(), CodexParseError> {
-        if self.responses.is_empty() {
-            self.legacy
-                .validate_response_start(&response.turn_id, line)?;
-        }
         if !self.headers.contains_key(&response.thread_id) {
             return Err(CodexParseError::InvalidField {
                 line,
@@ -322,9 +325,25 @@ impl SessionState {
                     return Err(CodexParseError::InvalidField { line, field });
                 }
             }
+            if let Some(mirrors) = &self.mirrors {
+                mirrors.accept_repeat(&response, line)?;
+            }
             // Corrections replace counters, preserving the original request's identity and time.
             original.event.tokens = tokens;
         } else {
+            self.legacy
+                .validate_response_start(&response.turn_id, line)?;
+            if self.expected_ancestor.is_some() || response.thread_id != self.metadata.session_id {
+                return Err(CodexParseError::InvalidField {
+                    line,
+                    field: "token_usage_record.payload.thread_id",
+                });
+            }
+            self.mirrors
+                .get_or_insert_with(|| {
+                    MirrorState::new(self.legacy.baseline(), response.thread_id.clone())
+                })
+                .accept_response(&response, line)?;
             let event = UsageEvent {
                 identity: UsageEventIdentity {
                     agent: AgentId::from(CODEX_AGENT_ID),
