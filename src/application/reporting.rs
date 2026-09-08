@@ -1,7 +1,10 @@
 use std::fmt::Write;
 
 use super::ImportWarning;
-use crate::core::{SummaryGroup, UsageKind, UsageSummary};
+use crate::core::{
+    EstimateSummary, EstimateTotal, EstimateTotals, EstimateUnavailableReason, ModelAttribution,
+    ServiceTier, SummaryGroup, UsageKind, UsageSummary,
+};
 
 pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]) -> String {
     let mut output = String::new();
@@ -75,6 +78,10 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
         }
     }
 
+    if let Some(estimate) = &summary.estimate {
+        render_estimate(&mut output, estimate);
+    }
+
     if !warnings.is_empty() {
         let mut warnings = warnings.iter().collect::<Vec<_>>();
         warnings.sort_by(|left, right| {
@@ -102,13 +109,127 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
     output
 }
 
+fn render_estimate(output: &mut String, estimate: &EstimateSummary) {
+    let totals = &estimate.totals;
+    writeln!(output).unwrap();
+    writeln!(output, "API-equivalent estimate (Codex):").unwrap();
+    writeln!(
+        output,
+        "Rate date: {} (snapshot: {})",
+        one_line(&estimate.rate_date),
+        one_line(&estimate.snapshot_id),
+    )
+    .unwrap();
+    writeln!(output, "Estimated total: {}", estimate_cost_label(totals)).unwrap();
+    writeln!(
+        output,
+        "Coverage: {} / {} imported canonical Codex events priced",
+        format_integer(totals.priced_event_count),
+        format_integer(totals.imported_event_count),
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "Priced tier evidence: {} requested setting, {} served response",
+        format_integer(totals.requested_setting_event_count),
+        format_integer(totals.served_response_event_count),
+    )
+    .unwrap();
+    if totals.requested_setting_event_count > 0 {
+        writeln!(output, "Requested settings do not confirm the served tier.").unwrap();
+    }
+    writeln!(output, "Estimates by provider/model/tier:").unwrap();
+    for row in &estimate.breakdown {
+        writeln!(
+            output,
+            "- {} / {}: {}, coverage {} / {}, requested setting {}, served response {}",
+            row.attribution
+                .as_ref()
+                .map(model_label)
+                .unwrap_or_else(|| "Unattributed".into()),
+            tier_label(&row.tier),
+            estimate_cost_label(&row.totals),
+            format_integer(row.totals.priced_event_count),
+            format_integer(row.totals.imported_event_count),
+            format_integer(row.totals.requested_setting_event_count),
+            format_integer(row.totals.served_response_event_count),
+        )
+        .unwrap();
+    }
+    if !totals.unavailable_reasons.is_empty() {
+        writeln!(output, "Unpriced events:").unwrap();
+        for (reason, count) in &totals.unavailable_reasons {
+            writeln!(
+                output,
+                "- {}: {}",
+                unavailable_reason_label(*reason),
+                format_integer(*count),
+            )
+            .unwrap();
+        }
+    }
+    writeln!(
+        output,
+        "Coverage excludes Pi; unparsed files have unknown usage outside this denominator."
+    )
+    .unwrap();
+    writeln!(
+        output,
+        "Public API token prices at this snapshot, not historical rates or actual subscription charges. \
+         Excludes regional uplifts, discounts, tool fees, and subscription/credit charges."
+    )
+    .unwrap();
+}
+
+fn estimate_cost_label(totals: &EstimateTotals) -> String {
+    match totals.cost {
+        EstimateTotal::Available(cost)
+            if totals.priced_event_count < totals.imported_event_count =>
+        {
+            format!("{cost} (partial)")
+        }
+        EstimateTotal::Available(cost) => cost.to_string(),
+        EstimateTotal::Unavailable => "unavailable".into(),
+        EstimateTotal::Overflow => "unavailable (arithmetic overflow)".into(),
+    }
+}
+
+fn tier_label(tier: &ServiceTier) -> String {
+    match tier {
+        ServiceTier::Standard => "standard".into(),
+        ServiceTier::Fast => "fast".into(),
+        ServiceTier::Unknown => "unknown".into(),
+        ServiceTier::Unsupported(raw) => format!("unsupported ({})", one_line(raw)),
+    }
+}
+
+fn unavailable_reason_label(reason: EstimateUnavailableReason) -> &'static str {
+    match reason {
+        EstimateUnavailableReason::MissingPricingContext => "missing pricing context",
+        EstimateUnavailableReason::UnknownAttribution => "unknown provider/model attribution",
+        EstimateUnavailableReason::UnsupportedProvider => "unsupported provider",
+        EstimateUnavailableReason::UnsupportedModel => "unsupported model",
+        EstimateUnavailableReason::UnknownTier => "unknown tier",
+        EstimateUnavailableReason::UnsupportedTier => "unsupported tier",
+        EstimateUnavailableReason::UnknownRequestGranularity => {
+            "aggregate or unknown request granularity"
+        }
+        EstimateUnavailableReason::IncompleteCacheDetail => "incomplete cache detail",
+        EstimateUnavailableReason::ArithmeticOverflow => "arithmetic overflow",
+    }
+}
+
+fn model_label(attribution: &ModelAttribution) -> String {
+    format!(
+        "{} / {}",
+        one_line(&attribution.provider),
+        one_line(&attribution.model)
+    )
+}
+
 fn group_label(group: &SummaryGroup) -> String {
     match group {
-        SummaryGroup::ProviderModel(attribution) => format!(
-            "{} / {}",
-            one_line(&attribution.provider),
-            one_line(&attribution.model)
-        ),
+        SummaryGroup::ProviderModel(attribution) => model_label(attribution),
         SummaryGroup::Unattributed(UsageKind::Other) => "Unattributed other usage".into(),
         SummaryGroup::Unattributed(UsageKind::Assistant) => "Unattributed assistants".into(),
         SummaryGroup::Unattributed(UsageKind::ToolResult) => "Unattributed tool results".into(),

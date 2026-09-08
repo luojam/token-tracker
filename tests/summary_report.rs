@@ -234,6 +234,22 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
     data.sessions.reverse();
     data.observations.reverse();
     assert_eq!(summarize_usage(&data).unwrap(), summary);
+    let report = render_terminal_report(&summary, &[]);
+    for expected in [
+        "Recorded cost: $1.000000\n",
+        "Estimated total: $0.000395 (partial)\n",
+        "Coverage: 2 / 3 imported canonical Codex events priced\n",
+        "Priced tier evidence: 1 requested setting, 1 served response\n",
+        "Requested settings do not confirm the served tier.\n",
+        "- openai / gpt-5.6 / standard: $0.000029",
+        "- openai / gpt-5.6 / fast: $0.000366",
+        "- missing pricing context: 1\n",
+    ] {
+        assert!(
+            report.contains(expected),
+            "missing {expected:?} in {report}"
+        );
+    }
     let estimate = summary.estimate.unwrap();
     assert_eq!(summary.totals.tokens.input, 27);
     assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 1.0);
