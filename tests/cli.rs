@@ -326,6 +326,120 @@ fn command_reports_both_adapters_with_missing_or_failing_roots() {
 }
 
 #[test]
+fn command_preserves_mixed_usage_and_estimates_through_codex_lifecycle() {
+    let mut reports = Vec::new();
+    for parent_first in [true, false] {
+        let tree = TempTree::new();
+        let home = tree.root.join("home");
+        let pi_root = home.join(".pi/agent/sessions");
+        let codex_home = tree.root.join("custom-codex");
+        let sessions = codex_home.join("sessions/2026/01");
+        let archive = codex_home.join("archived_sessions");
+        fs::create_dir_all(&pi_root).unwrap();
+        fs::create_dir_all(&sessions).unwrap();
+        fs::create_dir(&archive).unwrap();
+        fs::write(pi_root.join("history.jsonl"), ALL_USAGE).unwrap();
+
+        let lines = CODEX_USAGE.split_inclusive('\n').collect::<Vec<_>>();
+        let standard = lines[6].replace("priority", "default");
+        let content = concat!(
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"content\":\"SECRET_CODEX_MESSAGE\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"function_call_output\",\"output\":\"SECRET_CODEX_TOOL\"}}\n",
+        );
+        let response = format!("{}{standard}{content}{}", lines[0], lines[1..].concat());
+        let response_path = sessions.join("rollout-response.jsonl");
+        let cut = response.find(lines[9]).unwrap() + lines[9].len() / 2;
+        fs::write(&response_path, &response[..cut]).unwrap();
+
+        // Every invocation reopens the same on-disk ledger.
+        let run = || {
+            successful_report(
+                command(&home)
+                    .env("CODEX_HOME", &codex_home)
+                    .output()
+                    .unwrap(),
+            )
+        };
+        let partial = run();
+        assert_totals(&partial, [85, 48, 91, 64], 2, 5);
+        assert!(partial.contains("Estimated total: $0.001140\n"));
+        assert!(partial.contains("Coverage: 1 / 1 imported canonical Codex events priced"));
+        assert_eq!(run(), partial);
+
+        let sources = [
+            (
+                sessions.join("rollout-parent.jsonl"),
+                include_str!("fixtures/codex/legacy-parent.jsonl"),
+            ),
+            (
+                sessions.join("rollout-fork.jsonl"),
+                include_str!("fixtures/codex/legacy-fork.jsonl"),
+            ),
+        ];
+        for index in if parent_first { [0, 1] } else { [1, 0] } {
+            fs::write(&sources[index].0, sources[index].1).unwrap();
+            run();
+        }
+        fs::write(
+            sessions.join("rollout-subagent.jsonl"),
+            include_str!("fixtures/codex/response-subagent.jsonl"),
+        )
+        .unwrap();
+        let inherited = run();
+        assert_totals(&inherited, [325, 98, 271, 64], 5, 8);
+        assert!(inherited.contains("Coverage: 1 / 4 imported canonical Codex events priced"));
+
+        append(&response_path, &response[cut..]);
+        let completed = run();
+        assert_totals(&completed, [385, 118, 331, 64], 5, 9);
+        for expected in [
+            "Recorded cost: $1.020000\n",
+            "Estimated total: $0.004460 (partial)\n",
+            "Coverage: 2 / 5 imported canonical Codex events priced",
+            "openai / gpt-6-astra / standard: $0.001140, coverage 1 / 1",
+            "openai / gpt-6-astra / fast: $0.003320, coverage 1 / 1",
+            "Priced tier evidence: 2 requested setting, 0 served response",
+            "Requested settings do not confirm the served tier.",
+        ] {
+            assert!(completed.contains(expected), "{completed}");
+        }
+        assert!(!completed.contains("Warnings"), "{completed}");
+
+        let archived_response = archive.join("rollout-renamed.jsonl");
+        fs::copy(&response_path, &archived_response).unwrap();
+        assert_eq!(run(), completed);
+        fs::remove_file(&response_path).unwrap();
+        fs::rename(&sources[0].0, archive.join("rollout-parent.jsonl")).unwrap();
+        assert_eq!(run(), completed);
+
+        let database_directory = home.join(".local/share/token-tracker");
+        assert_no_content_persisted(&database_directory);
+        fs::write(
+            &archived_response,
+            format!(
+                "{}{{SECRET_CODEX_MALFORMED_REWRITE}}\n",
+                response.replace("priority", "default")
+            ),
+        )
+        .unwrap();
+        let malformed = run();
+        assert!(malformed.contains("Warnings (1):\n"), "{malformed}");
+        assert!(
+            malformed.contains("malformed Codex session line"),
+            "{malformed}"
+        );
+        assert_eq!(malformed.split_once("\nWarnings").unwrap().0, completed);
+
+        fs::remove_dir_all(&codex_home).unwrap();
+        fs::remove_dir_all(&pi_root).unwrap();
+        assert_eq!(run(), completed);
+        assert_no_content_persisted(&database_directory);
+        reports.push(completed);
+    }
+    assert_eq!(reports[0], reports[1]);
+}
+
+#[test]
 fn command_returns_failure_when_default_storage_cannot_be_opened() {
     let tree = TempTree::new();
     let sessions = tree.root.join("sessions");
