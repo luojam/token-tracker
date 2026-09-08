@@ -15,13 +15,14 @@ use std::{error::Error, fmt, str};
 
 mod context;
 mod legacy;
+mod lifecycle;
 mod mirrors;
 
 use context::{ContextState, SettingsWire};
 use legacy::LegacyUsageState;
+use lifecycle::{ReviewBoundary, TurnLifecycle};
 use mirrors::MirrorState;
 
-/// Keep this adapter unregistered until accounting and pricing are complete.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CodexSessionParser;
 
@@ -195,6 +196,7 @@ struct SessionState {
     inherited_prefix: bool,
     responses: BTreeMap<String, ResponseObservation>,
     legacy: LegacyUsageState,
+    turns: TurnLifecycle,
     mirrors: Option<MirrorState>,
     context: ContextState,
 }
@@ -214,6 +216,7 @@ impl SessionState {
             inherited_prefix: true,
             responses: BTreeMap::new(),
             legacy: LegacyUsageState::default(),
+            turns: TurnLifecycle::default(),
             mirrors: None,
             context,
         }
@@ -229,7 +232,7 @@ impl SessionState {
             "turn_context" => {
                 validate_timestamp(text, line)?;
                 let turn: TurnContextWire = payload(text, line, "turn_context.payload")?;
-                self.legacy.accept_context(&turn.turn_id, line)?;
+                self.turns.accept_context(&turn.turn_id, line)?;
                 self.context.accept_context(turn.model);
             }
             "event_msg" => {
@@ -247,7 +250,12 @@ impl SessionState {
                             }
                             match &mut self.mirrors {
                                 Some(mirrors) => mirrors.accept_mirror(info.0, line)?,
-                                None => self.legacy.accept_usage(info.0, &self.context, line)?,
+                                None => self.legacy.accept_usage(
+                                    info.0,
+                                    &self.context,
+                                    self.turns.accounting_turn(),
+                                    line,
+                                )?,
                             }
                         }
                     }
@@ -255,7 +263,8 @@ impl SessionState {
                         validate_timestamp(text, line)?;
                         let settings: SettingsWire =
                             payload(text, line, "event_msg.payload.thread_settings")?;
-                        self.context.accept_settings(settings);
+                        self.context
+                            .accept_settings(settings, !self.turns.in_review());
                     }
                     "task_started" | "task_complete" | "turn_aborted" => {
                         let timestamp = validate_timestamp(text, line)?;
@@ -263,14 +272,40 @@ impl SessionState {
                         if let Some(mirrors) = &self.mirrors {
                             mirrors.require_confirmed(line)?;
                         }
-                        self.legacy.accept_boundary(
+                        if self.turns.accept_boundary(
                             &event.entry_type,
                             turn.turn_id.clone(),
                             timestamp,
                             line,
-                        )?;
-                        self.context
-                            .accept_boundary(&event.entry_type, &turn.turn_id);
+                        )? {
+                            self.context
+                                .accept_boundary(&event.entry_type, &turn.turn_id);
+                        }
+                    }
+                    "entered_review_mode" | "exited_review_mode" => {
+                        validate_timestamp(text, line)?;
+                        let turn: TurnWire = payload(text, line, "event_msg.payload.turn_id")?;
+                        let boundary = if event.entry_type == "entered_review_mode" {
+                            ReviewBoundary::Enter
+                        } else {
+                            ReviewBoundary::Exit
+                        };
+                        self.accept_review(boundary, turn.turn_id, None, line)?;
+                    }
+                    "item_completed" => {
+                        let item: ItemCompletedWire =
+                            payload(text, line, "event_msg.payload.item")?;
+                        let boundary = match item.item.0.entry_type.as_str() {
+                            "EnteredReviewMode" => Some(ReviewBoundary::Enter),
+                            "ExitedReviewMode" => Some(ReviewBoundary::Exit),
+                            _ => None,
+                        };
+                        if let Some(boundary) = boundary {
+                            validate_timestamp(text, line)?;
+                            let turn: ReviewItemWire =
+                                payload(text, line, "event_msg.payload.review")?;
+                            self.accept_review(boundary, turn.turn_id, Some(turn.thread_id), line)?;
+                        }
                     }
                     _ => {}
                 }
@@ -284,6 +319,28 @@ impl SessionState {
             _ => {}
         }
         Ok(())
+    }
+
+    fn accept_review(
+        &mut self,
+        boundary: ReviewBoundary,
+        turn_id: String,
+        thread_id: Option<String>,
+        line: usize,
+    ) -> Result<(), CodexParseError> {
+        if thread_id
+            .as_ref()
+            .is_some_and(|id| !self.headers.contains_key(id))
+        {
+            return Err(CodexParseError::InvalidField {
+                line,
+                field: "event_msg.payload.thread_id",
+            });
+        }
+        if let Some(mirrors) = &self.mirrors {
+            mirrors.require_confirmed(line)?;
+        }
+        self.turns.accept_review(boundary, turn_id, thread_id, line)
     }
 
     fn accept_response(
@@ -353,6 +410,16 @@ impl SessionState {
                 context.cache_detail = response.usage.0.cache_detail();
             }
         } else {
+            if self
+                .turns
+                .accounting_turn()
+                .is_none_or(|turn| turn.id != response.turn_id)
+            {
+                return Err(CodexParseError::InvalidField {
+                    line,
+                    field: "token_usage_record.payload.turn_id",
+                });
+            }
             self.legacy
                 .validate_response_start(&response.turn_id, line)?;
             if self.expected_ancestor.is_some() || response.thread_id != self.metadata.session_id {
@@ -587,6 +654,19 @@ struct TurnContextWire {
 
 #[derive(Deserialize)]
 struct TurnWire {
+    #[serde(deserialize_with = "nonempty_id")]
+    turn_id: String,
+}
+
+#[derive(Deserialize)]
+struct ItemCompletedWire {
+    item: ObjectWire<TypeWire>,
+}
+
+#[derive(Deserialize)]
+struct ReviewItemWire {
+    #[serde(deserialize_with = "nonempty_id")]
+    thread_id: String,
     #[serde(deserialize_with = "nonempty_id")]
     turn_id: String,
 }

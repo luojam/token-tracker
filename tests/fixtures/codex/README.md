@@ -107,8 +107,9 @@ that an unscoped event is that session's full snapshot; apply it only when the
 original owner is unambiguous. Missing/null tier clears old fast evidence. Bind
 requested settings at a subsequent matching turn boundary, never backfill them
 or borrow the parent's setting for a child. Mid-turn changes leave affected tier
-attribution unknown. No served tier or monetary charge was observed. Interleaving
-multiple threads in a single file is not established by the separate child sample.
+attribution unknown. No served tier or monetary charge was observed. Multiplexed
+accounting is unsupported; review presentation events can be forwarded from a
+separately accounted child, as described below.
 
 C09 conservatively leaves copied legacy ownership unknown until a repeated owning
 header establishes local scope. Neither a completed/aborted inherited turn nor the
@@ -116,6 +117,37 @@ next task start proves that copying has ended: the partial-fork fixture has no
 owner-transition header. Such observations retain tokens with unknown provider/tier;
 a repeated child header before its turn context permits child model attribution,
 but cannot retroactively bind settings at the preceding task start.
+
+### Review control and forwarded child events
+
+Follow-up [producer evidence](SOURCES.md#review-control-and-forwarded-events)
+establishes this separate control lifecycle:
+
+```text
+entered_review_mode / item_completed(EnteredReviewMode): parent turn A
+optional task_started: child turn B
+exited_review_mode / item_completed(ExitedReviewMode): parent turn A
+task_complete / turn_aborted: parent turn A
+```
+
+The parent has no ordinary `task_started(A)` in this supported shape. Review entry
+and exit require the same nonempty turn ID; item markers also require the same
+known owning thread. Marker item IDs are not turn IDs. The child start does not
+open an accounting turn or bind parent context. Child usage remains in its own
+rollout and is imported normally. A review can end without a child start, and an
+open review at EOF is a valid prefix with no review usage invented.
+
+Review handling does not skip usage records or reset counters/mirror obligations.
+Unsupported accounting inside a review rejects rather than disappearing. Confirmed
+response repeats/corrections and unchanged cumulative snapshots retain their usual
+semantics. Unscoped review settings cannot prove parent defaults and clear that
+evidence; explicitly owned parent settings can configure a later normal turn.
+Missing identity, conflicting/nested reviews, unmatched terminals, overlap with
+ordinary turns, and reused IDs still reject the file.
+
+`tests/codex_review.rs` constructs these shapes using invented values and the
+existing accounting fixtures. It checks both marker forms, normal usage around
+reviews, prefixes/aborts, identity/accounting guards, and settings isolation.
 
 ## Expected normalized facts
 

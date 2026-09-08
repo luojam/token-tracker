@@ -110,15 +110,17 @@ impl ContextState {
         }
     }
 
-    pub(super) fn accept_settings(&mut self, settings: SettingsWire) {
+    pub(super) fn accept_settings(&mut self, settings: SettingsWire, allow_unscoped: bool) {
         let owner = settings.thread_id.as_ref().or(self.scope.as_ref());
         let Some(owner) = owner else { return };
         let Some(thread) = self.threads.get_mut(owner) else {
             return;
         };
-        let raw = settings.thread_settings.0.service_tier.0;
-        let changed = thread.settings.as_ref() != Some(&raw);
-        thread.settings = Some(raw);
+        // Unscoped review events may be forwarded from the child, not local defaults.
+        let raw = (settings.thread_id.is_some() || allow_unscoped)
+            .then_some(settings.thread_settings.0.service_tier.0);
+        let changed = thread.settings != raw;
+        thread.settings = raw;
         // A changed default is not a request-start or served-tier record.
         if changed
             && let Some(turn) = &mut self.active

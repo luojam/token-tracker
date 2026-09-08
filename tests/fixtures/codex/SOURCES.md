@@ -161,6 +161,51 @@ turn into response records remains unsupported: a whole-file parser cannot infer
 old identities once the source has removed them. Detecting such external edits
 across files would require additional provenance outside this slice's scope.
 
+## Review control and forwarded events
+
+A read-only follow-up inspected the 17 rejected review-parent rollouts: one used
+legacy `entered_review_mode` / `exited_review_mode` events (`0.144.1`), and 16 used
+`item_completed` with `EnteredReviewMode` / `ExitedReviewMode` (`0.153.4`). Each had
+a separate child rollout marked `source.subagent = "review"`. Parent review spans
+contained no accounting or turn-context records. Only metadata, event shapes,
+ordering, and identifier equality were inspected; the regression tests use
+invented data, not copied local records.
+
+The matched `0.153.4` producer explains the apparent boundary mismatch:
+
+- The review path explicitly notes that it emits no parent `TurnStarted`.
+  [Review operation](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/review.rs#L197-L210).
+- The delegate filters child `TokenCount` events. Review consumes the child's
+  completion/abort and forwards other events, including the child's start and
+  non-assistant presentation items. The parent later emits its own terminal event.
+  [Delegate filter](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/codex_delegate.rs#L300-L314),
+  [review forwarding](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/tasks/review.rs#L145-L185).
+- Forwarding wraps messages in the parent's runtime event ID, but rollout
+  persistence stores only `event.msg`, retaining embedded child identifiers.
+  Accounting records are written directly to the originating session's rollout.
+  [Event wrapper](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/mod.rs#L2091-L2094),
+  [event persistence](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/mod.rs#L2396-L2399),
+  [usage persistence](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/mod.rs#L4342-L4373).
+- History mode determines whether review markers use legacy events or completed
+  items; this is not a client-version switch. Abort emits review exit before the
+  parent's abort. A null review result alone does not prove abort.
+  [Persistence policy](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/rollout/src/policy.rs#L91-L132),
+  [abort test](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/tests/suite/review.rs#L357-L376).
+
+Therefore review control must not use the child's start as a parent accounting
+boundary. Keep explicit parent review identity until its terminal event, even
+after review exit. Do not relax ordinary boundary matching or silently skip
+accounting inside reviews. The supported shape requires explicit identities:
+optional legacy marker IDs without evidence cannot authorize arbitrary unmatched
+completions. Nested reviews or an already active ordinary parent turn are not
+established by these samples and remain unsupported.
+
+Settings are not excluded by the forwarding filters. Explicit thread ownership
+can distinguish parent defaults from child settings; unscoped review settings are
+ambiguous and must clear local default evidence rather than silently retaining or
+overwriting it. This is a conservative attribution rule, not extra usage.
+[Settings publisher](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/core/src/session/thread_settings.rs#L88-L114).
+
 ## Cache and settings evidence
 
 The subagent fixture uses the serialized `SubAgentSource::ThreadSpawn` object,

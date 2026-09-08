@@ -1,78 +1,21 @@
 use super::{
     CODEX_AGENT_ID, CodexParseError, TokenInfoWire, TokenUsageWire, context::ContextState,
+    lifecycle::AccountingTurn,
 };
 use crate::core::{
-    AgentId, CacheDetail, RequestGranularity, ServiceTier, TierEvidence, Timestamp, UsageEvent,
+    AgentId, CacheDetail, RequestGranularity, ServiceTier, TierEvidence, UsageEvent,
     UsageEventIdentity, UsageKind,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub(super) struct LegacyUsageState {
     pub(super) events: BTreeMap<String, UsageEvent>,
-    active_turn: Option<ActiveTurn>,
-    started_turns: BTreeSet<String>,
     previous_total: Option<TokenUsageWire>,
     checkpoint_before_usage: bool,
 }
 
-struct ActiveTurn {
-    id: String,
-    started_at: Timestamp,
-    has_context: bool,
-}
-
 impl LegacyUsageState {
-    pub(super) fn accept_boundary(
-        &mut self,
-        boundary: &str,
-        turn_id: String,
-        timestamp: Timestamp,
-        line: usize,
-    ) -> Result<(), CodexParseError> {
-        let invalid = || CodexParseError::InvalidField {
-            line,
-            field: "event_msg.payload.turn_id",
-        };
-        if boundary == "task_started" {
-            if self.active_turn.is_some() || !self.started_turns.insert(turn_id.clone()) {
-                return Err(invalid());
-            }
-            self.active_turn = Some(ActiveTurn {
-                id: turn_id,
-                started_at: timestamp,
-                has_context: false,
-            });
-        } else {
-            if self
-                .active_turn
-                .as_ref()
-                .is_none_or(|turn| turn.id != turn_id)
-            {
-                return Err(invalid());
-            }
-            self.active_turn = None;
-        }
-        Ok(())
-    }
-
-    pub(super) fn accept_context(
-        &mut self,
-        turn_id: &str,
-        line: usize,
-    ) -> Result<(), CodexParseError> {
-        let turn = self
-            .active_turn
-            .as_mut()
-            .filter(|turn| turn.id == turn_id)
-            .ok_or(CodexParseError::InvalidField {
-                line,
-                field: "turn_context.payload.turn_id",
-            })?;
-        turn.has_context = true;
-        Ok(())
-    }
-
     pub(super) fn accept_compaction(&mut self) {
         if self.previous_total.is_none() {
             self.checkpoint_before_usage = true;
@@ -88,13 +31,7 @@ impl LegacyUsageState {
         turn_id: &str,
         line: usize,
     ) -> Result<(), CodexParseError> {
-        if self.checkpoint_before_usage
-            || self.events.contains_key(turn_id)
-            || self
-                .active_turn
-                .as_ref()
-                .is_none_or(|turn| turn.id != turn_id || !turn.has_context)
-        {
+        if self.checkpoint_before_usage || self.events.contains_key(turn_id) {
             return Err(CodexParseError::InvalidField {
                 line,
                 field: "token_usage_record.payload.turn_id",
@@ -107,6 +44,7 @@ impl LegacyUsageState {
         &mut self,
         info: TokenInfoWire,
         context: &ContextState,
+        turn: Option<&AccountingTurn>,
         line: usize,
     ) -> Result<(), CodexParseError> {
         const TOTAL: &str = "event_msg.payload.info.total_token_usage";
@@ -128,7 +66,7 @@ impl LegacyUsageState {
         if self.checkpoint_before_usage {
             return Err(invalid());
         }
-        let turn = match self.active_turn.as_ref().filter(|turn| turn.has_context) {
+        let turn = match turn {
             Some(turn) => turn,
             None if unchanged => return Ok(()),
             None => return Err(invalid()),
