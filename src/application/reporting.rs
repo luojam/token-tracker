@@ -155,6 +155,22 @@ fn render_estimate(output: &mut String, estimate: &EstimateSummary) {
             format_integer(row.totals.served_response_event_count),
         )
         .unwrap();
+        if !row.totals.unavailable_reasons.is_empty() {
+            let reasons = row
+                .totals
+                .unavailable_reasons
+                .iter()
+                .map(|(reason, count)| {
+                    format!(
+                        "{}: {}",
+                        unavailable_reason_label(*reason),
+                        format_integer(*count)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            writeln!(output, "  Unpriced: {reasons}").unwrap();
+        }
     }
     if !totals.unavailable_reasons.is_empty() {
         writeln!(output, "Unpriced events:").unwrap();
@@ -214,6 +230,7 @@ fn unavailable_reason_label(reason: EstimateUnavailableReason) -> &'static str {
         EstimateUnavailableReason::UnknownRequestGranularity => {
             "aggregate or unknown request granularity"
         }
+        EstimateUnavailableReason::UnsupportedContextBand => "unsupported context price band",
         EstimateUnavailableReason::IncompleteCacheDetail => "incomplete cache detail",
         EstimateUnavailableReason::ArithmeticOverflow => "arithmetic overflow",
     }

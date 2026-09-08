@@ -185,7 +185,7 @@ pub enum RequestGranularity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CacheDetail {
     Complete,
-    /// A zero subdivision in TokenCounts is not necessarily an observed zero.
+    /// Cache writes may be included in ordinary input instead of reported separately.
     Incomplete,
 }
 
@@ -288,6 +288,7 @@ pub enum EstimateUnavailableReason {
     UnknownTier,
     UnsupportedTier,
     UnknownRequestGranularity,
+    UnsupportedContextBand,
     IncompleteCacheDetail,
     ArithmeticOverflow,
 }

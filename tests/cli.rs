@@ -440,6 +440,88 @@ fn command_preserves_mixed_usage_and_estimates_through_codex_lifecycle() {
 }
 
 #[test]
+fn legacy_pricing_survives_cached_runs_without_inventing_missing_evidence() {
+    use serde_json::{Value, json};
+
+    for (model, tier, cache_complete, expected, reason) in [
+        ("gpt-5.6-sol", Some("default"), true, "$0.001120", None),
+        ("gpt-5.6-sol", Some("priority"), true, "$0.002240", None),
+        (
+            "gpt-5.6-sol",
+            Some("default"),
+            false,
+            "unavailable",
+            Some("incomplete cache detail"),
+        ),
+        ("gpt-5.5", Some("default"), false, "$0.001550", None),
+        ("gpt-5.5", Some("priority"), false, "$0.003875", None),
+        ("gpt-5.4-mini", Some("priority"), false, "$0.000465", None),
+        (
+            "gpt-5.4-mini",
+            None,
+            false,
+            "unavailable",
+            Some("unknown tier"),
+        ),
+        (
+            "codex-auto-review",
+            Some("priority"),
+            true,
+            "unavailable",
+            Some("unsupported model"),
+        ),
+    ] {
+        let tree = TempTree::new();
+        let home = tree.root.join("home");
+        let sessions = home.join(".codex/sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let mut records: Vec<Value> = include_str!("fixtures/codex/legacy-fresh.jsonl")
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        records[2]["payload"]["model"] = json!(model);
+        for record in &mut records {
+            let info = &mut record["payload"]["info"];
+            if cache_complete && info.is_object() {
+                info["total_token_usage"]["cache_write_input_tokens"] = json!(0);
+                info["last_token_usage"]["cache_write_input_tokens"] = json!(0);
+            }
+        }
+        if let Some(tier) = tier {
+            records.insert(1, json!({
+                "timestamp": "2026-01-01T00:00:00Z", "type": "event_msg",
+                "payload": {"type": "thread_settings_applied", "thread_settings": {"service_tier": tier}}
+            }));
+        }
+        let source = sessions.join("rollout-legacy.jsonl");
+        fs::write(
+            &source,
+            records.iter().map(|r| format!("{r}\n")).collect::<String>(),
+        )
+        .unwrap();
+        let run = || successful_report(command(&home).output().unwrap());
+        let report = run();
+        assert!(
+            report.contains(&format!("Estimated total: {expected}\n")),
+            "{model}: {report}"
+        );
+        assert_totals(&report, [120, 30, 100, 0], 1, 1);
+        assert!(!report.contains("Recorded cost:"));
+        if let Some(reason) = reason {
+            assert!(
+                report.contains(&format!("  Unpriced: {reason}: 1\n")),
+                "{report}"
+            );
+        } else {
+            assert!(report.contains("Coverage: 1 / 1 imported canonical Codex events priced"));
+        }
+        assert_eq!(run(), report);
+        fs::remove_file(source).unwrap();
+        assert_eq!(run(), report);
+    }
+}
+
+#[test]
 fn command_returns_failure_when_default_storage_cannot_be_opened() {
     let tree = TempTree::new();
     let sessions = tree.root.join("sessions");
