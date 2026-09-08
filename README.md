@@ -1,12 +1,10 @@
 # Token Tracker
 
-A local CLI for tracking Pi token usage and recorded costs, with an all-time
-terminal summary grouped by provider and model.
+A local CLI for tracking token usage and recorded/estimated costs.
 
 ## Usage
 
-Requires a Unix system, Rust 1.85+, and Pi v3 session files. Windows is not
-supported. Install from this checkout:
+Requires a Unix system, Rust 1.85+. Install from this checkout:
 
 ```sh
 cargo install --path .
@@ -24,20 +22,22 @@ counting shared fork history only once.
 
 ## Local data
 
-Sessions are read from `~/.pi/agent/sessions`, respecting Pi's directory overrides.
+Sessions are read from:
+
+- `~/.pi/agent/sessions`, respecting Pi's directory overrides.
+- `~/.codex/sessions` and `~/.codex/archived_sessions`
+
 Usage is stored in SQLite at `~/.local/share/token-tracker/usage.db` (or under
 `XDG_DATA_HOME` when set to an absolute path).
 
-Only usage and session metadata are stored—not conversation content. Imported
-usage is kept even after session files are deleted.
+Only usage and session metadata are stored. Imported usage is kept even after 
+session files are deleted.
 
 ## Development
 
-See [Architecture and adapter guide](docs/architecture.md) for module boundaries,
-normalization rules, and how to add an agent adapter.
-
 ```sh
 cargo fmt --check
-cargo test
 cargo clippy --all-targets --all-features -- -D warnings
+cargo check
+cargo test
 ```

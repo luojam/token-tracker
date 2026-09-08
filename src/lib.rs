@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
+use adapters::codex::{CodexSessionDiscovery, CodexSessionParser};
 use adapters::pi::{PiSessionDiscovery, PiSessionParser};
 use adapters::sqlite::{SqliteStoreError, SqliteUsageStore};
 use application::{
@@ -22,6 +23,13 @@ pub fn run() -> Result<String, TokenTrackerError> {
         "pi",
         PiSessionDiscovery::for_default_root()
             .map(|discovery| SessionAdapter::new(discovery, PiSessionParser::new())),
+    );
+    register_adapter(
+        &mut adapters,
+        &mut warnings,
+        "codex",
+        CodexSessionDiscovery::for_default_roots()
+            .map(|discovery| SessionAdapter::new(discovery, CodexSessionParser::new())),
     );
     let adapters = adapters.iter().map(Box::as_ref).collect::<Vec<_>>();
     run_all_time_report(&adapters, &mut store, warnings).map_err(TokenTrackerError::Workflow)

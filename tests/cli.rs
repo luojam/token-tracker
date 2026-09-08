@@ -5,6 +5,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const ALL_USAGE: &str = include_str!("fixtures/pi/all-usage.jsonl");
+const CODEX_USAGE: &str = include_str!("fixtures/codex/response-mirrors.jsonl");
 static NEXT_TEMP_TREE: AtomicU64 = AtomicU64::new(0);
 
 struct TempTree {
@@ -35,6 +36,7 @@ fn command(home: &Path) -> Command {
         .env("HOME", home)
         .env_remove("PI_CODING_AGENT_SESSION_DIR")
         .env_remove("PI_CODING_AGENT_DIR")
+        .env_remove("CODEX_HOME")
         .env_remove("XDG_DATA_HOME");
     command
 }
@@ -254,6 +256,76 @@ fn command_reconciles_conflicting_forks_in_either_import_order() {
 }
 
 #[test]
+fn command_reports_both_adapters_with_missing_or_failing_roots() {
+    for (pi_present, codex_present, failing_agent) in [
+        (true, true, None),
+        (false, true, None),
+        (true, false, None),
+        (false, true, Some("pi")),
+        (true, false, Some("codex")),
+    ] {
+        let tree = TempTree::new();
+        let home = tree.root.join("home");
+        let pi_root = home.join(".pi/agent/sessions");
+        let codex_root = home.join(".codex/sessions");
+        for (agent, root, present, filename, content) in [
+            ("pi", &pi_root, pi_present, "history.jsonl", ALL_USAGE),
+            (
+                "codex",
+                &codex_root,
+                codex_present,
+                "rollout-history.jsonl",
+                CODEX_USAGE,
+            ),
+        ] {
+            fs::create_dir_all(root.parent().unwrap()).unwrap();
+            if present {
+                fs::create_dir(root).unwrap();
+                fs::write(root.join(filename), content).unwrap();
+            } else if failing_agent == Some(agent) {
+                fs::write(root, "not a directory").unwrap();
+            }
+        }
+
+        let run = || successful_report(command(&home).output().unwrap());
+        let report = run();
+        let pi = u64::from(pi_present);
+        let codex = u64::from(codex_present);
+        assert_totals(
+            &report,
+            [
+                25 * pi + 120 * codex,
+                38 * pi + 30 * codex,
+                51 * pi + 100 * codex,
+                64 * pi,
+            ],
+            pi + codex,
+            4 * pi + 2 * codex,
+        );
+        assert_eq!(report.contains("Recorded cost: $1.020000\n"), pi_present);
+        assert_eq!(
+            report.contains("API-equivalent estimate (Codex):"),
+            codex_present
+        );
+        if codex_present {
+            assert!(report.contains("Coverage: 1 / 2 imported canonical Codex events priced"));
+            assert!(report.contains("openai / gpt-6-astra / fast:"));
+            assert!(report.contains(" (partial)"));
+        }
+        if let Some(agent) = failing_agent {
+            assert!(report.contains("Warnings (1):\n"), "{report}");
+            assert!(
+                report.contains(&format!("{agent}: could not read directory:")),
+                "{report}"
+            );
+        } else {
+            assert!(!report.contains("Warnings"), "{report}");
+        }
+        assert_eq!(run(), report);
+    }
+}
+
+#[test]
 fn command_returns_failure_when_default_storage_cannot_be_opened() {
     let tree = TempTree::new();
     let sessions = tree.root.join("sessions");
@@ -294,4 +366,5 @@ fn command_reports_stored_usage_when_adapter_setup_is_unavailable() {
     );
     assert_totals(&report, [25, 38, 51, 64], 1, 4);
     assert!(report.contains("pi: could not configure adapter:"));
+    assert!(report.contains("codex: could not configure adapter:"));
 }
