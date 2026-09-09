@@ -17,14 +17,21 @@ Or run without installing:
 cargo run --quiet
 ```
 
-Each run imports new or changed Pi and Codex sessions. Tracks input, output, and
-cache tokens, counting shared fork history only once.
+### Pi
+
+### Codex
 
 Codex cost estimates use bundled API prices. Unknown service tiers use normal
 (standard) rates. Missing cache-write counts are priced as ordinary input, which
 can underestimate cost slightly.
 
+Supported models include `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`,
+`gpt-5.6-luna`, `gpt-5.5`, and `gpt-5.4-mini`, with Standard and Fast pricing.
+
 ## Local data
+
+Each run imports new or changed Pi and Codex sessions. Tracks input, output, and
+cache tokens, counting shared fork history only once.
 
 Sessions are read from:
 

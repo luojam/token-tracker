@@ -2,6 +2,8 @@
 //! - https://developers.openai.com/api/docs/pricing.md (Standard and Fast tables)
 //! - https://developers.openai.com/api/docs/models/gpt-6-astra (request threshold)
 //! - https://developers.openai.com/api/docs/models/gpt-5.6-sol (threshold and alias)
+//! - https://developers.openai.com/api/docs/models/gpt-5.6-terra (threshold and cache writes)
+//! - https://developers.openai.com/api/docs/models/gpt-5.6-luna (threshold and cache writes)
 //! - https://developers.openai.com/api/docs/models/gpt-5.5 (threshold and snapshot)
 //! - https://developers.openai.com/api/docs/models/gpt-5.4-mini (flat rate and snapshot)
 //! - https://developers.openai.com/api/docs/guides/prompt-caching (cache-write charges)
@@ -112,6 +114,32 @@ const GPT_5_6_SOL: ModelRates = ModelRates {
     },
 };
 
+const GPT_5_6_TERRA: ModelRates = ModelRates {
+    standard: ContextRates::Banded {
+        short_input_limit: 272_000,
+        short: TokenRates::new(2_000_000, 200_000, 2_500_000, 12_000_000),
+        long: Some(TokenRates::new(4_000_000, 400_000, 5_000_000, 18_000_000)),
+    },
+    fast: ContextRates::Banded {
+        short_input_limit: 272_000,
+        short: TokenRates::new(4_000_000, 400_000, 5_000_000, 24_000_000),
+        long: Some(TokenRates::new(8_000_000, 800_000, 10_000_000, 36_000_000)),
+    },
+};
+
+const GPT_5_6_LUNA: ModelRates = ModelRates {
+    standard: ContextRates::Banded {
+        short_input_limit: 272_000,
+        short: TokenRates::new(200_000, 20_000, 250_000, 1_200_000),
+        long: Some(TokenRates::new(400_000, 40_000, 500_000, 1_800_000)),
+    },
+    fast: ContextRates::Banded {
+        short_input_limit: 272_000,
+        short: TokenRates::new(400_000, 40_000, 500_000, 2_400_000),
+        long: Some(TokenRates::new(800_000, 80_000, 1_000_000, 3_600_000)),
+    },
+};
+
 const GPT_5_5: ModelRates = ModelRates {
     standard: ContextRates::Banded {
         short_input_limit: 272_000,
@@ -143,6 +171,8 @@ pub(super) fn schedule(
     let model = match attribution.model.as_str() {
         "gpt-6-astra" => &GPT_6_ASTRA,
         "gpt-5.6-sol" | "gpt-5.6" => &GPT_5_6_SOL,
+        "gpt-5.6-terra" => &GPT_5_6_TERRA,
+        "gpt-5.6-luna" => &GPT_5_6_LUNA,
         "gpt-5.5" | "gpt-5.5-2026-04-23" => &GPT_5_5,
         "gpt-5.4-mini" | "gpt-5.4-mini-2026-03-17" => &GPT_5_4_MINI,
         _ => return Err(EstimateUnavailableReason::UnsupportedModel),

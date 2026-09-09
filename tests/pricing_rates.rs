@@ -32,6 +32,30 @@ fn verified_rates_use_the_whole_request_band_and_explicit_model_aliases() {
             Some([16_000_000, 1_600_000, 20_000_000, 60_000_000]),
         ),
         (
+            "gpt-5.6-terra",
+            Standard,
+            [2_000_000, 200_000, 2_500_000, 12_000_000],
+            Some([4_000_000, 400_000, 5_000_000, 18_000_000]),
+        ),
+        (
+            "gpt-5.6-terra",
+            Fast,
+            [4_000_000, 400_000, 5_000_000, 24_000_000],
+            Some([8_000_000, 800_000, 10_000_000, 36_000_000]),
+        ),
+        (
+            "gpt-5.6-luna",
+            Standard,
+            [200_000, 20_000, 250_000, 1_200_000],
+            Some([400_000, 40_000, 500_000, 1_800_000]),
+        ),
+        (
+            "gpt-5.6-luna",
+            Fast,
+            [400_000, 40_000, 500_000, 2_400_000],
+            Some([800_000, 80_000, 1_000_000, 3_600_000]),
+        ),
+        (
             "gpt-5.5",
             Standard,
             [5_000_000, 500_000, 5_000_000, 30_000_000],
@@ -60,7 +84,7 @@ fn verified_rates_use_the_whole_request_band_and_explicit_model_aliases() {
             "gpt-5.6-sol" => &["gpt-5.6-sol", "gpt-5.6"],
             "gpt-5.5" => &["gpt-5.5", "gpt-5.5-2026-04-23"],
             "gpt-5.4-mini" => &["gpt-5.4-mini", "gpt-5.4-mini-2026-03-17"],
-            _ => &["gpt-6-astra"],
+            _ => &[model],
         };
         for name in names {
             let attribution = ModelAttribution {
