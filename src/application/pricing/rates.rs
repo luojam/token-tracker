@@ -6,7 +6,7 @@
 //! - https://developers.openai.com/api/docs/models/gpt-5.4-mini (flat rate and snapshot)
 //! - https://developers.openai.com/api/docs/guides/prompt-caching (cache-write charges)
 //!
-//! Sol prices are promotional, available at least through November 21, 2026.
+//! GPT-5.6 Sol prices are promotional, available at least through November 21, 2026.
 //! Earlier models charge cache writes as ordinary input, with no extra fee.
 //! No published API rate or model mapping was found for codex-auto-review.
 
@@ -77,7 +77,7 @@ struct ModelRates {
     fast: ContextRates,
 }
 
-const ASTRA: ModelRates = ModelRates {
+const GPT_6_ASTRA: ModelRates = ModelRates {
     standard: ContextRates::Banded {
         short_input_limit: 272_000,
         short: TokenRates::new(10_000_000, 1_000_000, 12_500_000, 50_000_000),
@@ -97,7 +97,7 @@ const ASTRA: ModelRates = ModelRates {
     },
 };
 
-const SOL: ModelRates = ModelRates {
+const GPT_5_6_SOL: ModelRates = ModelRates {
     standard: ContextRates::Banded {
         short_input_limit: 272_000,
         short: TokenRates::new(4_000_000, 400_000, 5_000_000, 20_000_000),
@@ -123,6 +123,7 @@ const GPT_5_5: ModelRates = ModelRates {
     fast: ContextRates::Banded {
         short_input_limit: 272_000,
         short: TokenRates::new(12_500_000, 1_250_000, 12_500_000, 75_000_000),
+        // No published GPT-5.5 Fast rate above 272K input tokens.
         long: None,
     },
 };
@@ -140,8 +141,8 @@ pub(super) fn schedule(
         return Err(EstimateUnavailableReason::UnsupportedProvider);
     }
     let model = match attribution.model.as_str() {
-        "gpt-6-astra" => &ASTRA,
-        "gpt-5.6-sol" | "gpt-5.6" => &SOL,
+        "gpt-6-astra" => &GPT_6_ASTRA,
+        "gpt-5.6-sol" | "gpt-5.6" => &GPT_5_6_SOL,
         "gpt-5.5" | "gpt-5.5-2026-04-23" => &GPT_5_5,
         "gpt-5.4-mini" | "gpt-5.4-mini-2026-03-17" => &GPT_5_4_MINI,
         _ => return Err(EstimateUnavailableReason::UnsupportedModel),
