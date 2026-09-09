@@ -197,6 +197,7 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
         tier_evidence: TierEvidence::RequestedSetting,
         request_granularity: RequestGranularity::ExactSingleRequest,
         cache_detail: CacheDetail::Complete,
+        request_usage: None,
     };
     let model = ModelAttribution {
         provider: "openai".into(),
@@ -222,6 +223,11 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
             });
         }
     }
+    let unknown = data.observations[1].event.pricing_context.as_mut().unwrap();
+    unknown.tier = ServiceTier::Unknown;
+    unknown.raw_tier = RawServiceTier::Missing;
+    unknown.tier_evidence = TierEvidence::Unknown;
+    unknown.cache_detail = CacheDetail::Incomplete;
     // The child offers richer context for shared, and conflicting facts for tool.
     let mut conflicting = data.observations[2].clone();
     conflicting.event.identity.adapter_key = "tool".into();
@@ -239,8 +245,9 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
         "Recorded cost: $1.000000\n",
         "Estimated total: $0.000395 (partial)\n",
         "Coverage: 2 / 3 imported canonical Codex events priced\n",
-        "Priced tier evidence: 1 requested setting, 1 served response\n",
-        "Requested settings do not confirm the served tier.\n",
+        "Priced tiers: 0 requested setting, 1 served response, 1 assumed standard\n",
+        "Unknown tiers use standard rates.\n",
+        "Events with missing cache writes priced as ordinary input: 1 (may underestimate cost).\n",
         "- openai / gpt-5.6 / standard: $0.000029",
         "- openai / gpt-5.6 / fast: $0.000366",
         "- missing pricing context: 1\n",
@@ -255,8 +262,15 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
     assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 1.0);
     assert_eq!(estimate.totals.imported_event_count, 3);
     assert_eq!(estimate.totals.priced_event_count, 2);
-    assert_eq!(estimate.totals.requested_setting_event_count, 1);
+    assert_eq!(estimate.totals.requested_setting_event_count, 0);
     assert_eq!(estimate.totals.served_response_event_count, 1);
+    assert_eq!(estimate.totals.assumed_standard_event_count, 1);
+    assert_eq!(estimate.totals.assumed_cache_write_event_count, 1);
+    assert_eq!(
+        estimate.breakdown[0].totals.assumed_cache_write_event_count,
+        1
+    );
+    assert_eq!(estimate.breakdown[0].totals.assumed_standard_event_count, 1);
     assert_eq!(
         estimate.totals.cost,
         EstimateTotal::Available(EstimatedCost::from_picodollars(395_000_000))

@@ -10,6 +10,7 @@ fn context() -> PricingContext {
         tier_evidence: TierEvidence::RequestedSetting,
         request_granularity: RequestGranularity::ExactSingleRequest,
         cache_detail: CacheDetail::Complete,
+        request_usage: None,
     }
 }
 
@@ -60,10 +61,11 @@ fn fresh_database_includes_pricing_columns_and_keeps_pi_context_absent() {
         "pricing_request_granularity",
         "pricing_cache_detail",
     ];
-    assert_eq!(columns.len(), expected.len());
+    assert_eq!(columns.len(), expected.len() + 1);
     for name in expected {
         assert!(columns.contains(&(name.into(), "TEXT".into(), false)));
     }
+    assert!(columns.contains(&("pricing_request_usage".into(), "BLOB".into(), false)));
 }
 
 #[test]
@@ -88,6 +90,7 @@ fn snapshot_round_trips_every_pricing_enum_without_normalizing_facts() {
             tier_evidence: TierEvidence::Unknown,
             request_granularity: RequestGranularity::AggregateOrUnknown,
             cache_detail: CacheDetail::Incomplete,
+            request_usage: None,
         }),
         Some(PricingContext {
             tier: ServiceTier::Unknown,
@@ -107,6 +110,11 @@ fn snapshot_round_trips_every_pricing_enum_without_normalizing_facts() {
         Some(PricingContext {
             tier: ServiceTier::Unsupported(String::new()),
             raw_tier: RawServiceTier::Value(String::new()),
+            ..context()
+        }),
+        Some(PricingContext {
+            request_granularity: RequestGranularity::AggregateOrUnknown,
+            request_usage: Some(vec![base.tokens]),
             ..context()
         }),
     ];
@@ -172,6 +180,21 @@ fn context_only_corrections_update_each_field_after_reopen_and_can_clear_context
     value.request_granularity = RequestGranularity::AggregateOrUnknown;
     corrections.push(Some(value.clone()));
     value.cache_detail = CacheDetail::Incomplete;
+    corrections.push(Some(value.clone()));
+    value.request_usage = Some(vec![import.parsed.events[0].tokens]);
+    corrections.push(Some(value.clone()));
+    value.request_usage = Some(vec![
+        TokenCounts {
+            input: 5,
+            ..TokenCounts::default()
+        },
+        TokenCounts {
+            input: 5,
+            ..import.parsed.events[0].tokens
+        },
+    ]);
+    corrections.push(Some(value.clone()));
+    value.request_usage = None;
     corrections.push(Some(value));
     corrections.push(None);
 
@@ -220,6 +243,9 @@ fn malformed_pricing_columns_fail_constraints_and_reads_even_when_checks_are_byp
         "pricing_request_granularity = NULL",
         "pricing_cache_detail = 'invalid'",
         "pricing_cache_detail = NULL",
+        "pricing_request_usage = X''",
+        "pricing_request_usage = X'00'",
+        "pricing_request_usage = 'invalid'",
     ] {
         let sql = format!("UPDATE source_observations SET {assignment}");
         let error = store.connection.execute(&sql, []).unwrap_err();
@@ -244,4 +270,37 @@ fn malformed_pricing_columns_fail_constraints_and_reads_even_when_checks_are_byp
             import.parsed.events[0]
         );
     }
+}
+
+#[test]
+fn request_breakdowns_must_match_observation_totals_on_import_and_read() {
+    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    let mut import = session_import("/sessions/a.jsonl", 10);
+    import.parsed.events[0].pricing_context = Some(PricingContext {
+        request_usage: Some(vec![import.parsed.events[0].tokens]),
+        ..context()
+    });
+    store.commit_import(&import).unwrap();
+    for requests in [vec![], vec![TokenCounts::default()]] {
+        import.parsed.events[0]
+            .pricing_context
+            .as_mut()
+            .unwrap()
+            .request_usage = Some(requests);
+        assert!(matches!(
+            store.commit_import(&import),
+            Err(SqliteStoreError::InvalidImport(_))
+        ));
+    }
+    store
+        .connection
+        .execute(
+            "UPDATE source_observations SET pricing_request_usage = zeroblob(32)",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.usage_snapshot(),
+        Err(SqliteStoreError::CorruptData(_))
+    ));
 }

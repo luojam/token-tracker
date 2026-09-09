@@ -3,12 +3,14 @@ use std::error::Error;
 use std::fmt;
 use std::path::Path;
 
-use super::pricing::{RATE_DATE, SNAPSHOT_ID, calculate_estimate};
+use super::pricing::{
+    MissingCacheWritePolicy, RATE_DATE, SNAPSHOT_ID, calculate_estimate, estimate_tier,
+};
 use super::{SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot};
 use crate::core::{
     EstimateBreakdown, EstimateSummary, EstimateTotal, EstimateTotals, EstimateUnavailableReason,
-    EstimatedCost, ModelAttribution, ParentSession, RecordedCost, ServiceTier, SummaryBreakdown,
-    SummaryGroup, SummaryTotals, TierEvidence, Timestamp, TokenCounts, UsageEventIdentity,
+    ModelAttribution, ParentSession, RecordedCost, ServiceTier, SummaryBreakdown, SummaryGroup,
+    SummaryTotals, TierEvidence, Timestamp, TokenCounts, UsageEstimate, UsageEventIdentity,
     UsageSummary,
 };
 
@@ -73,11 +75,11 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
             .ok_or(SummaryError::Overflow("event count"))?;
 
         if event.identity.agent.as_str() == "codex" {
-            let estimate = calculate_estimate(event);
+            let estimate = calculate_estimate(event, MissingCacheWritePolicy::TreatAsInput);
             let (tier, evidence) = event
                 .pricing_context
                 .as_ref()
-                .map(|context| (context.tier.clone(), context.tier_evidence))
+                .map(estimate_tier)
                 .unwrap_or((ServiceTier::Unknown, TierEvidence::Unknown));
             let row = estimate_rows
                 .entry((event.attribution.clone(), tier))
@@ -108,23 +110,25 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
 
 fn add_estimate(
     totals: &mut EstimateTotals,
-    estimate: Result<EstimatedCost, EstimateUnavailableReason>,
+    estimate: Result<UsageEstimate, EstimateUnavailableReason>,
     evidence: TierEvidence,
 ) {
     // Counts are bounded by the already-validated canonical event count.
     totals.imported_event_count += 1;
     match estimate {
-        Ok(cost) => {
+        Ok(estimate) => {
             totals.priced_event_count += 1;
+            totals.assumed_cache_write_event_count +=
+                u64::from(estimate.assumed_cache_writes_as_input);
             match evidence {
                 TierEvidence::RequestedSetting => totals.requested_setting_event_count += 1,
                 TierEvidence::ServedResponse => totals.served_response_event_count += 1,
-                TierEvidence::Unknown => {}
+                TierEvidence::Unknown => totals.assumed_standard_event_count += 1,
             }
             totals.cost = match totals.cost {
-                EstimateTotal::Unavailable => EstimateTotal::Available(cost),
+                EstimateTotal::Unavailable => EstimateTotal::Available(estimate.cost),
                 EstimateTotal::Available(current) => current
-                    .checked_add(cost)
+                    .checked_add(estimate.cost)
                     .map(EstimateTotal::Available)
                     .unwrap_or(EstimateTotal::Overflow),
                 EstimateTotal::Overflow => EstimateTotal::Overflow,
@@ -262,6 +266,7 @@ impl Error for SummaryError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::EstimatedCost;
 
     #[test]
     fn estimate_total_overflow_is_sticky_without_losing_coverage() {
@@ -270,7 +275,10 @@ mod tests {
         for cost in [u128::MAX, 1, 0] {
             add_estimate(
                 &mut totals,
-                Ok(EstimatedCost::from_picodollars(cost)),
+                Ok(UsageEstimate {
+                    cost: EstimatedCost::from_picodollars(cost),
+                    ..UsageEstimate::default()
+                }),
                 TierEvidence::RequestedSetting,
             );
         }

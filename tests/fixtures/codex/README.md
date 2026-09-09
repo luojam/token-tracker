@@ -54,10 +54,12 @@ resets/decreases, invalid deltas, unknown accounting checkpoints, overlapping
 legacy turns, or reuse of a closed turn ID. A final open turn may still contribute
 its complete observed usage prefix. Missing lifecycle identity is unsupported.
 
-Legacy events always have aggregate/unknown request granularity. Missing cache
-write means incomplete detail, even though its unreported subdivision is represented
-as zero to preserve known tokens. Do not price aggregate requests using a context
-band inferred from a turn total. Later parser errors retain previous imports.
+Legacy events retain aggregate/unknown granularity and store each validated
+request's token counts within that observation. Pricing selects a context band
+per request, never from the combined turn total when a breakdown is available.
+Missing cache write means incomplete detail, even though its unreported subdivision
+is represented as zero to preserve known tokens. Later parser errors retain
+previous imports.
 
 ### Responses, upgrades, and mirrors
 

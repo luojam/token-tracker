@@ -308,9 +308,9 @@ fn command_reports_both_adapters_with_missing_or_failing_roots() {
             codex_present
         );
         if codex_present {
-            assert!(report.contains("Coverage: 1 / 2 imported canonical Codex events priced"));
+            assert!(report.contains("Coverage: 2 / 2 imported canonical Codex events priced"));
             assert!(report.contains("openai / gpt-6-astra / fast:"));
-            assert!(report.contains(" (partial)"));
+            assert!(!report.contains(" (partial)"));
         }
         if let Some(agent) = failing_agent {
             assert!(report.contains("Warnings (1):\n"), "{report}");
@@ -387,19 +387,21 @@ fn command_preserves_mixed_usage_and_estimates_through_codex_lifecycle() {
         .unwrap();
         let inherited = run();
         assert_totals(&inherited, [325, 98, 271, 64], 5, 8);
-        assert!(inherited.contains("Coverage: 1 / 4 imported canonical Codex events priced"));
+        assert!(inherited.contains("Coverage: 4 / 4 imported canonical Codex events priced"));
 
         append(&response_path, &response[cut..]);
         let completed = run();
         assert_totals(&completed, [385, 118, 331, 64], 5, 9);
         for expected in [
             "Recorded cost: $1.020000\n",
-            "Estimated total: $0.004460 (partial)\n",
-            "Coverage: 2 / 5 imported canonical Codex events priced",
-            "openai / gpt-6-astra / standard: $0.001140, coverage 1 / 1",
+            "Estimated total: $0.009540\n",
+            "Coverage: 5 / 5 imported canonical Codex events priced",
+            "openai / gpt-6-astra / standard: $0.006220, coverage 4 / 4",
             "openai / gpt-6-astra / fast: $0.003320, coverage 1 / 1",
-            "Priced tier evidence: 2 requested setting, 0 served response",
+            "Priced tiers: 2 requested setting, 0 served response, 3 assumed standard",
+            "Events with missing cache writes priced as ordinary input: 2 (may underestimate cost).",
             "Requested settings do not confirm the served tier.",
+            "Unknown tiers use standard rates.",
         ] {
             assert!(completed.contains(expected), "{completed}");
         }
@@ -440,29 +442,86 @@ fn command_preserves_mixed_usage_and_estimates_through_codex_lifecycle() {
 }
 
 #[test]
-fn legacy_pricing_survives_cached_runs_without_inventing_missing_evidence() {
+fn legacy_request_pricing_survives_reopen_corrections_and_source_removal() {
+    use serde_json::{Value, json};
+
+    let tree = TempTree::new();
+    let home = tree.root.join("home");
+    let sessions = home.join(".codex/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let source = sessions.join("rollout-legacy.jsonl");
+    let mut records: Vec<Value> = include_str!("fixtures/codex/legacy-fresh.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    records[2]["payload"]["model"] = json!("gpt-5.5");
+    for record in &mut records {
+        if !record["payload"]["info"].is_object() {
+            continue;
+        }
+        for vector in ["total_token_usage", "last_token_usage"] {
+            if let Some(counters) = record["payload"]["info"][vector].as_object_mut() {
+                for counter in counters.values_mut() {
+                    *counter = json!(counter.as_u64().unwrap() * 2_000);
+                }
+            }
+        }
+    }
+    let write = |records: &[Value]| {
+        fs::write(
+            &source,
+            records.iter().map(|r| format!("{r}\n")).collect::<String>(),
+        )
+        .unwrap();
+    };
+    let run = || successful_report(command(&home).output().unwrap());
+    write(&records);
+    let report = run();
+    assert!(report.contains("Estimated total: $3.100000\n"), "{report}");
+    assert!(report.contains("Coverage: 1 / 1 imported canonical Codex events priced"));
+    assert_totals(
+        &report.replace(',', ""),
+        [240_000, 60_000, 200_000, 0],
+        1,
+        1,
+    );
+    assert_eq!(run(), report);
+
+    records[6]["payload"]["info"]["last_token_usage"] =
+        records[6]["payload"]["info"]["total_token_usage"].clone();
+    records.drain(4..6);
+    write(&records);
+    let corrected = run();
+    assert!(
+        corrected.contains("Estimated total: $5.300000\n"),
+        "{corrected}"
+    );
+    assert_totals(
+        &corrected.replace(',', ""),
+        [240_000, 60_000, 200_000, 0],
+        1,
+        1,
+    );
+    assert_eq!(run(), corrected);
+    fs::remove_file(source).unwrap();
+    assert_eq!(run(), corrected);
+}
+
+#[test]
+fn legacy_pricing_keeps_assumptions_through_cached_runs() {
     use serde_json::{Value, json};
 
     for (model, tier, cache_complete, expected, reason) in [
         ("gpt-5.6-sol", Some("default"), true, "$0.001120", None),
         ("gpt-5.6-sol", Some("priority"), true, "$0.002240", None),
-        (
-            "gpt-5.6-sol",
-            Some("default"),
-            false,
-            "unavailable",
-            Some("incomplete cache detail"),
-        ),
+        ("gpt-5.6-sol", None, true, "$0.001120", None),
+        ("gpt-5.6-sol", Some("default"), false, "$0.001120", None),
         ("gpt-5.5", Some("default"), false, "$0.001550", None),
         ("gpt-5.5", Some("priority"), false, "$0.003875", None),
+        ("gpt-5.5", None, false, "$0.001550", None),
         ("gpt-5.4-mini", Some("priority"), false, "$0.000465", None),
-        (
-            "gpt-5.4-mini",
-            None,
-            false,
-            "unavailable",
-            Some("unknown tier"),
-        ),
+        ("gpt-5.4-mini", None, false, "$0.000233", None),
+        ("gpt-5.4-mini", Some("auto"), false, "$0.000233", None),
         (
             "codex-auto-review",
             Some("priority"),
@@ -507,6 +566,14 @@ fn legacy_pricing_survives_cached_runs_without_inventing_missing_evidence() {
         );
         assert_totals(&report, [120, 30, 100, 0], 1, 1);
         assert!(!report.contains("Recorded cost:"));
+        let assumed_cache_writes = model == "gpt-5.6-sol" && !cache_complete;
+        assert_eq!(
+            report.contains(
+                "Events with missing cache writes priced as ordinary input: 1 (may underestimate cost)."
+            ),
+            assumed_cache_writes,
+            "{report}",
+        );
         if let Some(reason) = reason {
             assert!(
                 report.contains(&format!("  Unpriced: {reason}: 1\n")),
@@ -514,6 +581,24 @@ fn legacy_pricing_survives_cached_runs_without_inventing_missing_evidence() {
             );
         } else {
             assert!(report.contains("Coverage: 1 / 1 imported canonical Codex events priced"));
+            let assumed = tier.is_none() || tier == Some("auto");
+            assert!(
+                report.contains(&format!(
+                    "Priced tiers: {} requested setting, 0 served response, {} assumed standard\n",
+                    u8::from(!assumed),
+                    u8::from(assumed),
+                )),
+                "{report}"
+            );
+            let expected_tier = if tier == Some("priority") {
+                "fast"
+            } else {
+                "standard"
+            };
+            assert!(
+                report.contains(&format!("openai / {model} / {expected_tier}: {expected}")),
+                "{report}"
+            );
         }
         assert_eq!(run(), report);
         fs::remove_file(source).unwrap();

@@ -2,17 +2,34 @@
 //! Excludes regional uplifts, discounts, tool fees, and subscription/credit charges.
 
 use crate::core::{
-    CacheDetail, EstimateUnavailableReason, EstimatedCost, RequestGranularity, TierEvidence,
-    TokenCounts, UsageEvent,
+    CacheDetail, EstimateUnavailableReason, EstimatedCost, PricingContext, RequestGranularity,
+    ServiceTier, TierEvidence, TokenCounts, UsageEstimate, UsageEvent,
 };
 
 mod rates;
 pub use rates::{RATE_DATE, SNAPSHOT_ID, TokenRates, lookup_rates};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissingCacheWritePolicy {
+    Reject,
+    TreatAsInput,
+}
+
+pub(super) fn estimate_tier(context: &PricingContext) -> (ServiceTier, TierEvidence) {
+    match context.tier {
+        ServiceTier::Unknown => (ServiceTier::Standard, TierEvidence::Unknown),
+        _ => (context.tier.clone(), context.tier_evidence),
+    }
+}
+
 /// Prices one complete observation without changing its facts or recorded cost.
+/// Unknown tiers use standard rates; the caller chooses how to handle missing writes.
 /// Failures prefer context, attribution/rate support, tier evidence, granularity,
 /// then cache detail. The caller selects canonical Codex observations.
-pub fn calculate_estimate(event: &UsageEvent) -> Result<EstimatedCost, EstimateUnavailableReason> {
+pub fn calculate_estimate(
+    event: &UsageEvent,
+    missing_cache_writes: MissingCacheWritePolicy,
+) -> Result<UsageEstimate, EstimateUnavailableReason> {
     use EstimateUnavailableReason as Reason;
 
     let context = event
@@ -23,26 +40,67 @@ pub fn calculate_estimate(event: &UsageEvent) -> Result<EstimatedCost, EstimateU
         .attribution
         .as_ref()
         .ok_or(Reason::UnknownAttribution)?;
-    let request_input = u128::from(event.tokens.input)
-        .checked_add(u128::from(event.tokens.cache_read))
-        .and_then(|input| input.checked_add(u128::from(event.tokens.cache_write)))
-        .ok_or(Reason::ArithmeticOverflow)?;
-    let schedule = rates::schedule(attribution, &context.tier)?;
-    if context.tier_evidence == TierEvidence::Unknown {
+    let (tier, evidence) = estimate_tier(context);
+    let schedule = rates::schedule(attribution, &tier)?;
+    if context.tier != ServiceTier::Unknown && evidence == TierEvidence::Unknown {
         return Err(Reason::UnknownTier);
     }
+    if !context.request_usage_matches(event.tokens) {
+        return Err(Reason::UnknownRequestGranularity);
+    }
+    if let Some(requests) = &context.request_usage {
+        return requests
+            .iter()
+            .try_fold(UsageEstimate::default(), |total, tokens| {
+                let estimate =
+                    price_tokens(*tokens, context, schedule, true, missing_cache_writes)?;
+                Ok(UsageEstimate {
+                    cost: total
+                        .cost
+                        .checked_add(estimate.cost)
+                        .ok_or(Reason::ArithmeticOverflow)?,
+                    assumed_cache_writes_as_input: total.assumed_cache_writes_as_input
+                        || estimate.assumed_cache_writes_as_input,
+                })
+            });
+    }
+    price_tokens(
+        event.tokens,
+        context,
+        schedule,
+        context.request_granularity == RequestGranularity::ExactSingleRequest,
+        missing_cache_writes,
+    )
+}
+
+fn price_tokens(
+    tokens: TokenCounts,
+    context: &PricingContext,
+    schedule: &rates::ContextRates,
+    exact_request: bool,
+    missing_cache_writes: MissingCacheWritePolicy,
+) -> Result<UsageEstimate, EstimateUnavailableReason> {
+    use EstimateUnavailableReason as Reason;
+
+    let request_input =
+        u128::from(tokens.input) + u128::from(tokens.cache_read) + u128::from(tokens.cache_write);
     // An aggregate below the threshold bounds every constituent request below it.
-    if context.request_granularity != RequestGranularity::ExactSingleRequest
-        && !schedule.supports_aggregate(request_input)
-    {
+    if !exact_request && !schedule.supports_aggregate(request_input) {
         return Err(Reason::UnknownRequestGranularity);
     }
     let rates = schedule.for_input(request_input)?;
-    // Missing cache-write subdivision is harmless only when it costs ordinary input.
-    if context.cache_detail != CacheDetail::Complete && rates.cache_write != rates.input {
+    if context.cache_detail != CacheDetail::Complete
+        && rates.cache_write != rates.input
+        && missing_cache_writes == MissingCacheWritePolicy::Reject
+    {
         return Err(Reason::IncompleteCacheDetail);
     }
-    calculate_cost(event.tokens, rates)
+    Ok(UsageEstimate {
+        cost: calculate_cost(tokens, rates)?,
+        assumed_cache_writes_as_input: context.cache_detail == CacheDetail::Incomplete
+            && rates.cache_write != rates.input
+            && tokens.input > 0,
+    })
 }
 
 fn calculate_cost(

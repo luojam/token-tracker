@@ -81,6 +81,10 @@ CREATE TABLE source_observations (
         CHECK (pricing_request_granularity IN ('exact_single_request', 'aggregate_or_unknown')),
     pricing_cache_detail TEXT
         CHECK (pricing_cache_detail IN ('complete', 'incomplete')),
+    pricing_request_usage BLOB
+        CHECK (pricing_request_usage IS NULL OR
+               (pricing_tier IS NOT NULL AND typeof(pricing_request_usage) = 'blob'
+                AND length(pricing_request_usage) > 0 AND length(pricing_request_usage) % 32 = 0)),
     CHECK (
         (pricing_tier IS NULL AND pricing_unsupported_tier IS NULL
          AND pricing_raw_tier_kind IS NULL AND pricing_raw_tier_value IS NULL

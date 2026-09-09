@@ -20,8 +20,9 @@ cargo run --quiet
 Each run imports new or changed Pi and Codex sessions. Tracks input, output, and
 cache tokens, counting shared fork history only once.
 
-Codex cost estimates use bundled API prices and are shown separately from recorded
-costs. They may cover only part of your usage and do not reflect subscription bills.
+Codex cost estimates use bundled API prices. Unknown service tiers use normal
+(standard) rates. Missing cache-write counts are priced as ordinary input, which
+can underestimate cost slightly.
 
 ## Local data
 

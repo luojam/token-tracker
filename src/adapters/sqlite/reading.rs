@@ -51,7 +51,7 @@ pub(super) fn load_stored_observations(
                 observation.pricing_tier, observation.pricing_unsupported_tier,
                 observation.pricing_raw_tier_kind, observation.pricing_raw_tier_value,
                 observation.pricing_tier_evidence, observation.pricing_request_granularity,
-                observation.pricing_cache_detail
+                observation.pricing_cache_detail, observation.pricing_request_usage
            FROM source_observations observation
            JOIN usage_events event ON event.id = observation.event_id",
     )?;
@@ -78,6 +78,7 @@ pub(super) fn load_stored_observations(
                 row.get::<_, Option<String>>(17)?,
                 row.get::<_, Option<String>>(18)?,
             ],
+            row.get::<_, Option<Vec<u8>>>(19)?,
         ))
     })?;
 
@@ -97,6 +98,7 @@ pub(super) fn load_stored_observations(
             recorded_cost,
             timestamp_ms,
             pricing,
+            request_usage,
         ) = row?;
         let attribution = match (provider, model) {
             (Some(provider), Some(model)) => Some(ModelAttribution { provider, model }),
@@ -119,6 +121,21 @@ pub(super) fn load_stored_observations(
             ))?
             .key
             .clone();
+        let tokens = TokenCounts {
+            input: decode_u64(&input)?,
+            output: decode_u64(&output)?,
+            cache_read: decode_u64(&cache_read)?,
+            cache_write: decode_u64(&cache_write)?,
+        };
+        let pricing_context = pricing_context::decode(pricing, request_usage)?;
+        if pricing_context
+            .as_ref()
+            .is_some_and(|context| !context.request_usage_matches(tokens))
+        {
+            return Err(SqliteStoreError::CorruptData(
+                "a request usage breakdown that differs from its total",
+            ));
+        }
         observations.push(UsageObservation {
             session,
             event: UsageEvent {
@@ -129,14 +146,9 @@ pub(super) fn load_stored_observations(
                 timestamp: Timestamp::from_unix_milliseconds(timestamp_ms),
                 kind: usage_kind_from_str(&kind)?,
                 attribution,
-                tokens: TokenCounts {
-                    input: decode_u64(&input)?,
-                    output: decode_u64(&output)?,
-                    cache_read: decode_u64(&cache_read)?,
-                    cache_write: decode_u64(&cache_write)?,
-                },
+                tokens,
                 recorded_cost,
-                pricing_context: pricing_context::decode(pricing)?,
+                pricing_context,
             },
         });
     }

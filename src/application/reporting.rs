@@ -130,19 +130,31 @@ fn render_estimate(output: &mut String, estimate: &EstimateSummary) {
     .unwrap();
     writeln!(
         output,
-        "Priced tier evidence: {} requested setting, {} served response",
+        "Priced tiers: {} requested setting, {} served response, {} assumed standard",
         format_integer(totals.requested_setting_event_count),
         format_integer(totals.served_response_event_count),
+        format_integer(totals.assumed_standard_event_count),
     )
     .unwrap();
     if totals.requested_setting_event_count > 0 {
         writeln!(output, "Requested settings do not confirm the served tier.").unwrap();
     }
+    if totals.assumed_standard_event_count > 0 {
+        writeln!(output, "Unknown tiers use standard rates.").unwrap();
+    }
+    if totals.assumed_cache_write_event_count > 0 {
+        writeln!(
+            output,
+            "Events with missing cache writes priced as ordinary input: {} (may underestimate cost).",
+            format_integer(totals.assumed_cache_write_event_count),
+        )
+        .unwrap();
+    }
     writeln!(output, "Estimates by provider/model/tier:").unwrap();
     for row in &estimate.breakdown {
         writeln!(
             output,
-            "- {} / {}: {}, coverage {} / {}, requested setting {}, served response {}",
+            "- {} / {}: {}, coverage {} / {}, requested setting {}, served response {}, assumed standard {}",
             row.attribution
                 .as_ref()
                 .map(model_label)
@@ -153,8 +165,17 @@ fn render_estimate(output: &mut String, estimate: &EstimateSummary) {
             format_integer(row.totals.imported_event_count),
             format_integer(row.totals.requested_setting_event_count),
             format_integer(row.totals.served_response_event_count),
+            format_integer(row.totals.assumed_standard_event_count),
         )
         .unwrap();
+        if row.totals.assumed_cache_write_event_count > 0 {
+            writeln!(
+                output,
+                "  Events with missing cache writes priced as ordinary input: {}",
+                format_integer(row.totals.assumed_cache_write_event_count),
+            )
+            .unwrap();
+        }
         if !row.totals.unavailable_reasons.is_empty() {
             let reasons = row
                 .totals

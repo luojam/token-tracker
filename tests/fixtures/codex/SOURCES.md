@@ -63,13 +63,16 @@ Consequences of the chosen key, independent of token values:
   Without that parent, only the observed prefix is known. New child work has its
   own key and remains additive. No canonical-selection change is required.
 
-Always mark legacy turn aggregates as **aggregate/unknown request granularity**,
-even if a sample has one increasing notification. The format does not prove the
-number of requests in arbitrary prefixes. This preserves tokens and identity at
-the cost of exact legacy request boundaries; source-reported cost remains absent.
-A pricing policy can still use flat rates, or the short-context rate when the
-entire aggregate's input bounds every request below the threshold. This does not
-change the aggregate's identity or assert a request count.
+Legacy observations retain aggregate granularity and their original turn identity,
+with a complete request-usage breakdown for pricing. Rechecked the matched
+0.128.0 producer on 2026-09-09: `ResponseEvent::Completed` passes that response's
+usage to `update_token_usage_info`, which appends it and emits the snapshot;
+`append_last_usage` adds the same vector to cumulative usage and replaces last
+usage. Thus a validated cumulative delta equal to last usage preserves the
+reported request's token counts without needing a persisted response ID.
+Unchanged snapshots and recomputed context estimates add no request usage.
+The breakdown must sum to the aggregate, and corrections replace it under the
+same turn identity. Each request selects its own context price band.
 A zero-valued aggregate is not a claim that a request took place. Response records
 retain exact per-response granularity and `response-v1:<response_id>` keys.
 
@@ -221,8 +224,9 @@ the shared `session_id` and `root_turn_id` do not establish it on their own.
 0.128.0's `TokenUsage` has no cache-write member and its API conversion cannot
 preserve such a subdivision. 0.153.4 includes the field with a deserialization
 default. A compatibility default is not proof the source reported zero. Preserve
-known tokens and mark omitted cache-write detail incomplete. Pricing requires
-this subdivision only for models whose cache writes cost more than ordinary input.
+known tokens and mark omitted cache-write detail incomplete. Exact pricing needs
+this subdivision only when writes cost more than ordinary input. The Codex report
+explicitly estimates missing writes as ordinary input and counts that assumption.
 [Old usage type](https://github.com/openai/codex/blob/e4310be51f617f5e60382038fa9cbf53a2429ca4/codex-rs/protocol/src/protocol.rs#L2057),
 [old API conversion](https://github.com/openai/codex/blob/e4310be51f617f5e60382038fa9cbf53a2429ca4/codex-rs/codex-api/src/sse/responses.rs#L142),
 [new usage type](https://github.com/openai/codex/blob/3d2ee51ca2d5db578f328aa75e20aa22c0197c9a/codex-rs/protocol/src/protocol.rs#L2214).

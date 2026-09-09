@@ -169,6 +169,7 @@ impl ContextState {
                 tier_evidence: tier.evidence,
                 request_granularity: granularity,
                 cache_detail,
+                request_usage: None,
             },
         )
     }

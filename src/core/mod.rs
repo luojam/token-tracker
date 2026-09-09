@@ -199,6 +199,22 @@ pub struct PricingContext {
     pub tier_evidence: TierEvidence,
     pub request_granularity: RequestGranularity,
     pub cache_detail: CacheDetail,
+    /// Complete per-request breakdown, retaining the aggregate's ledger identity.
+    pub request_usage: Option<Vec<TokenCounts>>,
+}
+
+impl PricingContext {
+    pub fn request_usage_matches(&self, tokens: TokenCounts) -> bool {
+        self.request_usage.as_ref().is_none_or(|requests| {
+            !requests.is_empty()
+                && requests
+                    .iter()
+                    .try_fold(TokenCounts::default(), |sum, request| {
+                        sum.checked_add(*request)
+                    })
+                    == Some(tokens)
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -293,6 +309,12 @@ pub enum EstimateUnavailableReason {
     ArithmeticOverflow,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UsageEstimate {
+    pub cost: EstimatedCost,
+    pub assumed_cache_writes_as_input: bool,
+}
+
 /// An available total covers only priced events; coverage determines partiality.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum EstimateTotal {
@@ -312,6 +334,9 @@ pub struct EstimateTotals {
     /// Evidence counts include priced events only.
     pub requested_setting_event_count: u64,
     pub served_response_event_count: u64,
+    pub assumed_standard_event_count: u64,
+    /// Priced events where missing cache writes may change the cost.
+    pub assumed_cache_write_event_count: u64,
     /// Exactly one deterministic reason per unpriced event.
     pub unavailable_reasons: BTreeMap<EstimateUnavailableReason, u64>,
 }
@@ -329,7 +354,7 @@ pub struct EstimateSummary {
     /// Price snapshot date (YYYY-MM-DD), not the usage date.
     pub rate_date: String,
     pub totals: EstimateTotals,
-    /// Ordered by original attribution and normalized tier, retaining unsupported values.
+    /// Ordered by original attribution and estimated tier, retaining unsupported values.
     pub breakdown: Vec<EstimateBreakdown>,
 }
 

@@ -1,6 +1,7 @@
-use super::SqliteStoreError;
+use super::{SqliteStoreError, decode_u64};
 use crate::core::{
     CacheDetail, PricingContext, RawServiceTier, RequestGranularity, ServiceTier, TierEvidence,
+    TokenCounts,
 };
 
 pub(super) fn encode(context: Option<&PricingContext>) -> [Option<&str>; 7] {
@@ -41,8 +42,9 @@ pub(super) fn encode(context: Option<&PricingContext>) -> [Option<&str>; 7] {
 
 pub(super) fn decode(
     columns: [Option<String>; 7],
+    request_usage: Option<Vec<u8>>,
 ) -> Result<Option<PricingContext>, SqliteStoreError> {
-    if columns.iter().all(Option::is_none) {
+    if columns.iter().all(Option::is_none) && request_usage.is_none() {
         return Ok(None);
     }
     let invalid = || SqliteStoreError::CorruptData("an invalid pricing context");
@@ -85,5 +87,48 @@ pub(super) fn decode(
             Some("incomplete") => CacheDetail::Incomplete,
             _ => return Err(invalid()),
         },
+        request_usage: request_usage
+            .map(|bytes| decode_requests(&bytes))
+            .transpose()?,
     }))
+}
+
+pub(super) fn encode_requests(context: Option<&PricingContext>) -> Option<Vec<u8>> {
+    Some(
+        context?
+            .request_usage
+            .as_ref()?
+            .iter()
+            .flat_map(|tokens| {
+                [
+                    tokens.input,
+                    tokens.output,
+                    tokens.cache_read,
+                    tokens.cache_write,
+                ]
+                .into_iter()
+                .flat_map(u64::to_be_bytes)
+            })
+            .collect(),
+    )
+}
+
+fn decode_requests(bytes: &[u8]) -> Result<Vec<TokenCounts>, SqliteStoreError> {
+    let (requests, remainder) = bytes.as_chunks::<32>();
+    if requests.is_empty() || !remainder.is_empty() {
+        return Err(SqliteStoreError::CorruptData(
+            "an invalid request usage breakdown",
+        ));
+    }
+    requests
+        .iter()
+        .map(|request| {
+            Ok(TokenCounts {
+                input: decode_u64(&request[..8])?,
+                output: decode_u64(&request[8..16])?,
+                cache_read: decode_u64(&request[16..24])?,
+                cache_write: decode_u64(&request[24..])?,
+            })
+        })
+        .collect()
 }

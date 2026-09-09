@@ -112,6 +112,10 @@ impl LegacyUsageState {
             event.attribution = None;
         }
         if let Some(existing) = &mut event.pricing_context {
+            existing
+                .request_usage
+                .get_or_insert_with(Vec::new)
+                .push(tokens);
             if existing.tier != pricing_context.tier
                 || existing.raw_tier != pricing_context.raw_tier
                 || existing.tier_evidence != pricing_context.tier_evidence
