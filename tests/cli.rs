@@ -128,7 +128,7 @@ fn command_preserves_history_and_privacy_through_the_session_lifecycle() {
     let run = || successful_report(command(&home).output().unwrap());
     let report = run();
     assert_totals(&report, [25, 38, 51, 64], 1, 4);
-    assert!(report.contains("Recorded cost: $1.020000\n"));
+    assert!(report.contains("Total cost: $1.020000\n"));
     for group in [
         "provider-a / model-resolved",
         "Unattributed tool results",
@@ -174,7 +174,7 @@ fn command_preserves_history_and_privacy_through_the_session_lifecycle() {
     fs::write(&path, format!("{rewritten}\n")).unwrap();
     let retained = run();
     assert_totals(&retained, [130, 42, 57, 72], 1, 6);
-    assert!(retained.contains("Recorded cost: $1.020000\n"));
+    assert!(retained.contains("Total cost: $1.020000\n"));
 
     // Even valid new usage before a malformed complete line must not be committed.
     append(&path, &event("must-not-commit", 99));
@@ -224,7 +224,7 @@ fn command_reconciles_conflicting_forks_in_either_import_order() {
 
         let report = run();
         assert_totals(&report, [25, 38, 51, 64], 2, 4);
-        assert!(report.contains("Recorded cost: $1.020000\n"));
+        assert!(report.contains("Total cost: $1.020000\n"));
         assert!(!report.contains("Warnings"));
         assert_eq!(run(), report);
 
@@ -246,7 +246,7 @@ fn command_reconciles_conflicting_forks_in_either_import_order() {
         .unwrap();
         let updated = run();
         assert_totals(&updated, [115, 38, 51, 64], 2, 4);
-        assert!(updated.contains("Recorded cost: $1.020000\n"));
+        assert!(updated.contains("Total cost: $1.020000\n"));
         fs::remove_file(&parent_path).unwrap();
         assert_eq!(run(), updated);
         assert_no_content_persisted(&data_home.join("token-tracker"));
@@ -302,14 +302,28 @@ fn command_reports_both_adapters_with_missing_or_failing_roots() {
             pi + codex,
             4 * pi + 2 * codex,
         );
-        assert_eq!(report.contains("Recorded cost: $1.020000\n"), pi_present);
-        assert_eq!(
-            report.contains("API-equivalent estimate (Codex):"),
-            codex_present
-        );
+        let cost = match (pi_present, codex_present) {
+            (true, true) => Some("$1.024460"),
+            (true, false) => Some("$1.020000"),
+            (false, true) => Some("$0.004460"),
+            (false, false) => None,
+        };
+        if let Some(cost) = cost {
+            assert!(
+                report.contains(&format!("Total cost: {cost}\n")),
+                "{report}"
+            );
+        } else {
+            assert!(!report.contains("Total cost:"));
+        }
+        assert!(!report.contains("API-equivalent estimate (Codex):"));
         if codex_present {
-            assert!(report.contains("Coverage: 2 / 2 imported canonical Codex events priced"));
-            assert!(report.contains("openai / gpt-6-astra / fast:"));
+            assert!(
+                report.lines().any(|line| {
+                    line.starts_with("  openai / gpt-6-astra ") && line.ends_with("$0.004460")
+                }),
+                "{report}"
+            );
             assert!(!report.contains(" (partial)"));
         }
         if let Some(agent) = failing_agent {
@@ -362,8 +376,7 @@ fn command_preserves_mixed_usage_and_estimates_through_codex_lifecycle() {
         };
         let partial = run();
         assert_totals(&partial, [85, 48, 91, 64], 2, 5);
-        assert!(partial.contains("Estimated total: $0.001140\n"));
-        assert!(partial.contains("Coverage: 1 / 1 imported canonical Codex events priced"));
+        assert!(partial.contains("Total cost: $1.021140\n"));
         assert_eq!(run(), partial);
 
         let sources = [
@@ -387,24 +400,17 @@ fn command_preserves_mixed_usage_and_estimates_through_codex_lifecycle() {
         .unwrap();
         let inherited = run();
         assert_totals(&inherited, [325, 98, 271, 64], 5, 8);
-        assert!(inherited.contains("Coverage: 4 / 4 imported canonical Codex events priced"));
 
         append(&response_path, &response[cut..]);
         let completed = run();
         assert_totals(&completed, [385, 118, 331, 64], 5, 9);
-        for expected in [
-            "Recorded cost: $1.020000\n",
-            "Estimated total: $0.009540\n",
-            "Coverage: 5 / 5 imported canonical Codex events priced",
-            "openai / gpt-6-astra / standard: $0.006220, coverage 4 / 4",
-            "openai / gpt-6-astra / fast: $0.003320, coverage 1 / 1",
-            "Priced tiers: 2 requested setting, 0 served response, 3 assumed standard",
-            "Events with missing cache writes priced as ordinary input: 2 (may underestimate cost).",
-            "Requested settings do not confirm the served tier.",
-            "Unknown tiers use standard rates.",
-        ] {
-            assert!(completed.contains(expected), "{completed}");
-        }
+        assert!(completed.contains("Total cost: $1.029540\n"), "{completed}");
+        assert!(
+            completed.lines().any(|line| {
+                line.starts_with("  openai / gpt-6-astra ") && line.ends_with("$0.009540")
+            }),
+            "{completed}"
+        );
         assert!(!completed.contains("Warnings"), "{completed}");
 
         let archived_response = archive.join("rollout-renamed.jsonl");
@@ -477,8 +483,7 @@ fn legacy_request_pricing_survives_reopen_corrections_and_source_removal() {
     let run = || successful_report(command(&home).output().unwrap());
     write(&records);
     let report = run();
-    assert!(report.contains("Estimated total: $3.100000\n"), "{report}");
-    assert!(report.contains("Coverage: 1 / 1 imported canonical Codex events priced"));
+    assert!(report.contains("Total cost: $3.100000\n"), "{report}");
     assert_totals(
         &report.replace(',', ""),
         [240_000, 60_000, 200_000, 0],
@@ -492,10 +497,7 @@ fn legacy_request_pricing_survives_reopen_corrections_and_source_removal() {
     records.drain(4..6);
     write(&records);
     let corrected = run();
-    assert!(
-        corrected.contains("Estimated total: $5.300000\n"),
-        "{corrected}"
-    );
+    assert!(corrected.contains("Total cost: $5.300000\n"), "{corrected}");
     assert_totals(
         &corrected.replace(',', ""),
         [240_000, 60_000, 200_000, 0],
@@ -511,24 +513,18 @@ fn legacy_request_pricing_survives_reopen_corrections_and_source_removal() {
 fn legacy_pricing_keeps_assumptions_through_cached_runs() {
     use serde_json::{Value, json};
 
-    for (model, tier, cache_complete, expected, reason) in [
-        ("gpt-5.6-sol", Some("default"), true, "$0.001120", None),
-        ("gpt-5.6-sol", Some("priority"), true, "$0.002240", None),
-        ("gpt-5.6-sol", None, true, "$0.001120", None),
-        ("gpt-5.6-sol", Some("default"), false, "$0.001120", None),
-        ("gpt-5.5", Some("default"), false, "$0.001550", None),
-        ("gpt-5.5", Some("priority"), false, "$0.003875", None),
-        ("gpt-5.5", None, false, "$0.001550", None),
-        ("gpt-5.4-mini", Some("priority"), false, "$0.000465", None),
-        ("gpt-5.4-mini", None, false, "$0.000233", None),
-        ("gpt-5.4-mini", Some("auto"), false, "$0.000233", None),
-        (
-            "codex-auto-review",
-            Some("priority"),
-            true,
-            "unavailable",
-            Some("unsupported model"),
-        ),
+    for (model, tier, cache_complete, expected) in [
+        ("gpt-5.6-sol", Some("default"), true, "$0.001120"),
+        ("gpt-5.6-sol", Some("priority"), true, "$0.002240"),
+        ("gpt-5.6-sol", None, true, "$0.001120"),
+        ("gpt-5.6-sol", Some("default"), false, "$0.001120"),
+        ("gpt-5.5", Some("default"), false, "$0.001550"),
+        ("gpt-5.5", Some("priority"), false, "$0.003875"),
+        ("gpt-5.5", None, false, "$0.001550"),
+        ("gpt-5.4-mini", Some("priority"), false, "$0.000465"),
+        ("gpt-5.4-mini", None, false, "$0.000233"),
+        ("gpt-5.4-mini", Some("auto"), false, "$0.000233"),
+        ("codex-auto-review", Some("priority"), true, "unavailable"),
     ] {
         let tree = TempTree::new();
         let home = tree.root.join("home");
@@ -561,45 +557,16 @@ fn legacy_pricing_keeps_assumptions_through_cached_runs() {
         let run = || successful_report(command(&home).output().unwrap());
         let report = run();
         assert!(
-            report.contains(&format!("Estimated total: {expected}\n")),
+            report.contains(&format!("Total cost: {expected}\n")),
             "{model}: {report}"
         );
         assert_totals(&report, [120, 30, 100, 0], 1, 1);
-        assert!(!report.contains("Recorded cost:"));
-        let assumed_cache_writes = model == "gpt-5.6-sol" && !cache_complete;
-        assert_eq!(
-            report.contains(
-                "Events with missing cache writes priced as ordinary input: 1 (may underestimate cost)."
-            ),
-            assumed_cache_writes,
-            "{report}",
+        assert!(
+            report.lines().any(|line| {
+                line.starts_with(&format!("  openai / {model} ")) && line.ends_with(expected)
+            }),
+            "{report}"
         );
-        if let Some(reason) = reason {
-            assert!(
-                report.contains(&format!("  Unpriced: {reason}: 1\n")),
-                "{report}"
-            );
-        } else {
-            assert!(report.contains("Coverage: 1 / 1 imported canonical Codex events priced"));
-            let assumed = tier.is_none() || tier == Some("auto");
-            assert!(
-                report.contains(&format!(
-                    "Priced tiers: {} requested setting, 0 served response, {} assumed standard\n",
-                    u8::from(!assumed),
-                    u8::from(assumed),
-                )),
-                "{report}"
-            );
-            let expected_tier = if tier == Some("priority") {
-                "fast"
-            } else {
-                "standard"
-            };
-            assert!(
-                report.contains(&format!("openai / {model} / {expected_tier}: {expected}")),
-                "{report}"
-            );
-        }
         assert_eq!(run(), report);
         fs::remove_file(source).unwrap();
         assert_eq!(run(), report);

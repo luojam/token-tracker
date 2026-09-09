@@ -289,6 +289,7 @@ pub enum SummaryGroup {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SummaryBreakdown {
+    pub agent: AgentId,
     pub group: SummaryGroup,
     pub tokens: TokenCounts,
     pub recorded_cost: Option<RecordedCost>,
@@ -361,7 +362,7 @@ pub struct EstimateSummary {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UsageSummary {
     pub totals: SummaryTotals,
-    /// Rows must be ordered deterministically by group.
+    /// Rows must be ordered deterministically by agent, then group.
     pub breakdown: Vec<SummaryBreakdown>,
     /// Separate from recorded costs; absent when there are no Codex observations.
     pub estimate: Option<EstimateSummary>,

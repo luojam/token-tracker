@@ -169,19 +169,22 @@ fn summary_reconciles_and_renders_independently_of_observation_order() {
         ),
         "Token Tracker — All Time\n\
          \n\
+         Total tokens: 49\n\
          Input tokens: 16\n\
          Output tokens: 9\n\
          Cache-read tokens: 11\n\
          Cache-write tokens: 13\n\
-         Total tokens: 49\n\
-         Recorded cost: $0.750000\n\
+         Total cost: $0.750000\n\
          Sessions: 2\n\
          Unique usage events: 3\n\
          \n\
          Usage by provider/model:\n\
-         - provider-a / model-a: input 10, output 2, cache read 3, cache write 4, total 19, events 1, cost $0.250000\n\
-         - Unattributed tool results: input 1, output 1, cache read 1, cache write 1, total 4, events 1\n\
-         - Unattributed branch summaries: input 5, output 6, cache read 7, cache write 8, total 26, events 1, cost $0.500000\n\
+         \n\
+         Pi usage:\n\
+         \x20\x20Provider / model               Input  Output  Cache read  Cache write  Total  Events       Cost\n\
+         \x20\x20provider-a / model-a              10       2           3            4     19       1  $0.250000\n\
+         \x20\x20Unattributed tool results          1       1           1            1      4       1          -\n\
+         \x20\x20Unattributed branch summaries      5       6           7            8     26       1  $0.500000\n\
          \n\
          Warnings (2):\n\
          - discovery warning\n\
@@ -232,7 +235,8 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
     let mut conflicting = data.observations[2].clone();
     conflicting.event.identity.adapter_key = "tool".into();
     data.observations.push(conflicting);
-    let (pi, observations) = sessions().into_iter().next().unwrap();
+    let (pi, mut observations) = sessions().into_iter().next().unwrap();
+    observations[0].event.attribution = Some(model.clone());
     data.sessions.push(pi);
     data.observations.extend(observations);
 
@@ -241,22 +245,35 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
     data.observations.reverse();
     assert_eq!(summarize_usage(&data).unwrap(), summary);
     let report = render_terminal_report(&summary, &[]);
-    for expected in [
-        "Recorded cost: $1.000000\n",
-        "Estimated total: $0.000395 (partial)\n",
-        "Coverage: 2 / 3 imported canonical Codex events priced\n",
-        "Priced tiers: 0 requested setting, 1 served response, 1 assumed standard\n",
-        "Unknown tiers use standard rates.\n",
-        "Events with missing cache writes priced as ordinary input: 1 (may underestimate cost).\n",
-        "- openai / gpt-5.6 / standard: $0.000029",
-        "- openai / gpt-5.6 / fast: $0.000366",
-        "- missing pricing context: 1\n",
+    assert!(report.contains("Total cost: $1.000395 (partial)\n"));
+    let model_line = report
+        .lines()
+        .find(|line| line.starts_with("  openai / gpt-5.6 "))
+        .unwrap();
+    assert!(model_line.ends_with("$0.500395"), "{model_line}");
+    let (codex_report, pi_report) = report.split_once("\n\nPi usage:\n").unwrap();
+    assert!(codex_report.contains("\n\nCodex usage:\n"));
+    for (section, expected) in [
+        (codex_report, "openai / gpt-5.6 6 7 8 9 30 2 $0.500395"),
+        (pi_report, "openai / gpt-5.6 10 2 3 4 19 1 $0.250000"),
     ] {
         assert!(
-            report.contains(expected),
-            "missing {expected:?} in {report}"
+            section
+                .lines()
+                .any(|line| { line.split_whitespace().collect::<Vec<_>>().join(" ") == expected }),
+            "{section}"
         );
     }
+    let header = |section: &str| {
+        section
+            .lines()
+            .find(|line| line.contains("Provider / model"))
+            .unwrap()
+            .to_owned()
+    };
+    assert_eq!(header(codex_report), header(pi_report));
+    assert!(pi_report.contains("Unattributed tool results"));
+    assert!(!report.contains("API-equivalent estimate"));
     let estimate = summary.estimate.unwrap();
     assert_eq!(summary.totals.tokens.input, 27);
     assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 1.0);

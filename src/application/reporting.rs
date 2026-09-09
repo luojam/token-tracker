@@ -2,8 +2,8 @@ use std::fmt::Write;
 
 use super::ImportWarning;
 use crate::core::{
-    EstimateSummary, EstimateTotal, EstimateTotals, EstimateUnavailableReason, ModelAttribution,
-    ServiceTier, SummaryGroup, UsageKind, UsageSummary,
+    EstimateTotal, EstimateTotals, EstimatedCost, ModelAttribution, RecordedCost, SummaryGroup,
+    UsageKind, UsageSummary,
 };
 
 pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]) -> String {
@@ -12,6 +12,12 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
 
     writeln!(output, "Token Tracker — All Time").unwrap();
     writeln!(output).unwrap();
+    writeln!(
+        output,
+        "Total tokens: {}",
+        format_integer(totals.tokens.total())
+    )
+    .unwrap();
     writeln!(
         output,
         "Input tokens: {}",
@@ -36,14 +42,11 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
         format_integer(totals.tokens.cache_write)
     )
     .unwrap();
-    writeln!(
-        output,
-        "Total tokens: {}",
-        format_integer(totals.tokens.total())
-    )
-    .unwrap();
-    if let Some(cost) = totals.recorded_cost {
-        writeln!(output, "Recorded cost: ${:.6}", cost.as_usd()).unwrap();
+    if let Some(cost) = cost_label(
+        totals.recorded_cost,
+        summary.estimate.iter().map(|estimate| &estimate.totals),
+    ) {
+        writeln!(output, "Total cost: {cost}").unwrap();
     }
     writeln!(output, "Sessions: {}", format_integer(totals.session_count)).unwrap();
     writeln!(
@@ -58,28 +61,69 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
     if summary.breakdown.is_empty() {
         writeln!(output, "- none").unwrap();
     } else {
-        for row in &summary.breakdown {
-            write!(
-                output,
-                "- {}: input {}, output {}, cache read {}, cache write {}, total {}, events {}",
-                group_label(&row.group),
-                format_integer(row.tokens.input),
-                format_integer(row.tokens.output),
-                format_integer(row.tokens.cache_read),
-                format_integer(row.tokens.cache_write),
-                format_integer(row.tokens.total()),
-                format_integer(row.unique_usage_event_count),
-            )
-            .unwrap();
-            if let Some(cost) = row.recorded_cost {
-                write!(output, ", cost ${:.6}", cost.as_usd()).unwrap();
+        let headers = [
+            "Provider / model",
+            "Input",
+            "Output",
+            "Cache read",
+            "Cache write",
+            "Total",
+            "Events",
+            "Cost",
+        ]
+        .map(str::to_owned);
+        let rows = summary
+            .breakdown
+            .iter()
+            .map(|row| {
+                let estimates = summary
+                    .estimate
+                    .iter()
+                    .filter(|_| row.agent.as_str() == "codex")
+                    .flat_map(|estimate| &estimate.breakdown)
+                    .filter(|estimate| match &row.group {
+                        SummaryGroup::ProviderModel(attribution) => {
+                            estimate.attribution.as_ref() == Some(attribution)
+                        }
+                        SummaryGroup::Unattributed(_) => false,
+                    })
+                    .map(|estimate| &estimate.totals);
+                (
+                    &row.agent,
+                    [
+                        group_label(&row.group),
+                        format_integer(row.tokens.input),
+                        format_integer(row.tokens.output),
+                        format_integer(row.tokens.cache_read),
+                        format_integer(row.tokens.cache_write),
+                        format_integer(row.tokens.total()),
+                        format_integer(row.unique_usage_event_count),
+                        cost_label(row.recorded_cost, estimates).unwrap_or_else(|| "-".into()),
+                    ],
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut widths = headers.each_ref().map(|header| header.chars().count());
+        for (_, cells) in &rows {
+            for (width, cell) in widths.iter_mut().zip(cells) {
+                *width = (*width).max(cell.chars().count());
             }
-            writeln!(output).unwrap();
         }
-    }
-
-    if let Some(estimate) = &summary.estimate {
-        render_estimate(&mut output, estimate);
+        let mut previous_agent = None;
+        for (agent, cells) in &rows {
+            if previous_agent != Some(agent) {
+                let label = match agent.as_str() {
+                    "pi" => "Pi".into(),
+                    "codex" => "Codex".into(),
+                    agent => one_line(agent),
+                };
+                writeln!(output).unwrap();
+                writeln!(output, "{label} usage:").unwrap();
+                render_table_row(&mut output, &headers, &widths);
+                previous_agent = Some(agent);
+            }
+            render_table_row(&mut output, cells, &widths);
+        }
     }
 
     if !warnings.is_empty() {
@@ -109,152 +153,60 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
     output
 }
 
-fn render_estimate(output: &mut String, estimate: &EstimateSummary) {
-    let totals = &estimate.totals;
+fn render_table_row(output: &mut String, cells: &[String; 8], widths: &[usize; 8]) {
+    for (index, (cell, width)) in cells.iter().zip(widths).enumerate() {
+        if index == 0 {
+            write!(output, "  {cell:<width$}").unwrap();
+        } else {
+            write!(output, "  {cell:>width$}").unwrap();
+        }
+    }
     writeln!(output).unwrap();
-    writeln!(output, "API-equivalent estimate (Codex):").unwrap();
-    writeln!(
-        output,
-        "Rate date: {} (snapshot: {})",
-        one_line(&estimate.rate_date),
-        one_line(&estimate.snapshot_id),
-    )
-    .unwrap();
-    writeln!(output, "Estimated total: {}", estimate_cost_label(totals)).unwrap();
-    writeln!(
-        output,
-        "Coverage: {} / {} imported canonical Codex events priced",
-        format_integer(totals.priced_event_count),
-        format_integer(totals.imported_event_count),
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "Priced tiers: {} requested setting, {} served response, {} assumed standard",
-        format_integer(totals.requested_setting_event_count),
-        format_integer(totals.served_response_event_count),
-        format_integer(totals.assumed_standard_event_count),
-    )
-    .unwrap();
-    if totals.requested_setting_event_count > 0 {
-        writeln!(output, "Requested settings do not confirm the served tier.").unwrap();
-    }
-    if totals.assumed_standard_event_count > 0 {
-        writeln!(output, "Unknown tiers use standard rates.").unwrap();
-    }
-    if totals.assumed_cache_write_event_count > 0 {
-        writeln!(
-            output,
-            "Events with missing cache writes priced as ordinary input: {} (may underestimate cost).",
-            format_integer(totals.assumed_cache_write_event_count),
-        )
-        .unwrap();
-    }
-    writeln!(output, "Estimates by provider/model/tier:").unwrap();
-    for row in &estimate.breakdown {
-        writeln!(
-            output,
-            "- {} / {}: {}, coverage {} / {}, requested setting {}, served response {}, assumed standard {}",
-            row.attribution
-                .as_ref()
-                .map(model_label)
-                .unwrap_or_else(|| "Unattributed".into()),
-            tier_label(&row.tier),
-            estimate_cost_label(&row.totals),
-            format_integer(row.totals.priced_event_count),
-            format_integer(row.totals.imported_event_count),
-            format_integer(row.totals.requested_setting_event_count),
-            format_integer(row.totals.served_response_event_count),
-            format_integer(row.totals.assumed_standard_event_count),
-        )
-        .unwrap();
-        if row.totals.assumed_cache_write_event_count > 0 {
-            writeln!(
-                output,
-                "  Events with missing cache writes priced as ordinary input: {}",
-                format_integer(row.totals.assumed_cache_write_event_count),
-            )
-            .unwrap();
-        }
-        if !row.totals.unavailable_reasons.is_empty() {
-            let reasons = row
-                .totals
-                .unavailable_reasons
-                .iter()
-                .map(|(reason, count)| {
-                    format!(
-                        "{}: {}",
-                        unavailable_reason_label(*reason),
-                        format_integer(*count)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            writeln!(output, "  Unpriced: {reasons}").unwrap();
-        }
-    }
-    if !totals.unavailable_reasons.is_empty() {
-        writeln!(output, "Unpriced events:").unwrap();
-        for (reason, count) in &totals.unavailable_reasons {
-            writeln!(
-                output,
-                "- {}: {}",
-                unavailable_reason_label(*reason),
-                format_integer(*count),
-            )
-            .unwrap();
-        }
-    }
-    writeln!(
-        output,
-        "Coverage excludes Pi; unparsed files have unknown usage outside this denominator."
-    )
-    .unwrap();
-    writeln!(
-        output,
-        "Public API token prices at this snapshot, not historical rates or actual subscription charges. \
-         Excludes regional uplifts, discounts, tool fees, and subscription/credit charges."
-    )
-    .unwrap();
 }
 
-fn estimate_cost_label(totals: &EstimateTotals) -> String {
-    match totals.cost {
-        EstimateTotal::Available(cost)
-            if totals.priced_event_count < totals.imported_event_count =>
-        {
-            format!("{cost} (partial)")
+fn cost_label<'a>(
+    recorded: Option<RecordedCost>,
+    estimates: impl Iterator<Item = &'a EstimateTotals>,
+) -> Option<String> {
+    let mut estimated = None;
+    let mut has_estimates = false;
+    let mut partial = false;
+    for totals in estimates {
+        has_estimates = true;
+        partial |= totals.priced_event_count < totals.imported_event_count;
+        match totals.cost {
+            EstimateTotal::Available(cost) => {
+                let current = estimated.unwrap_or(EstimatedCost::default());
+                let Some(combined) = current.checked_add(cost) else {
+                    return Some("unavailable (arithmetic overflow)".into());
+                };
+                estimated = Some(combined);
+            }
+            EstimateTotal::Unavailable => {}
+            EstimateTotal::Overflow => return Some("unavailable (arithmetic overflow)".into()),
         }
-        EstimateTotal::Available(cost) => cost.to_string(),
-        EstimateTotal::Unavailable => "unavailable".into(),
-        EstimateTotal::Overflow => "unavailable (arithmetic overflow)".into(),
     }
-}
-
-fn tier_label(tier: &ServiceTier) -> String {
-    match tier {
-        ServiceTier::Standard => "standard".into(),
-        ServiceTier::Fast => "fast".into(),
-        ServiceTier::Unknown => "unknown".into(),
-        ServiceTier::Unsupported(raw) => format!("unsupported ({})", one_line(raw)),
-    }
-}
-
-fn unavailable_reason_label(reason: EstimateUnavailableReason) -> &'static str {
-    match reason {
-        EstimateUnavailableReason::MissingPricingContext => "missing pricing context",
-        EstimateUnavailableReason::UnknownAttribution => "unknown provider/model attribution",
-        EstimateUnavailableReason::UnsupportedProvider => "unsupported provider",
-        EstimateUnavailableReason::UnsupportedModel => "unsupported model",
-        EstimateUnavailableReason::UnknownTier => "unknown tier",
-        EstimateUnavailableReason::UnsupportedTier => "unsupported tier",
-        EstimateUnavailableReason::UnknownRequestGranularity => {
-            "aggregate or unknown request granularity"
+    let mut label = match (recorded, estimated) {
+        (Some(recorded), estimated) => {
+            let cost = recorded.as_usd()
+                + estimated.map_or(0.0, |cost| cost.as_picodollars() as f64 / 1e12);
+            if !cost.is_finite() {
+                return Some("unavailable (arithmetic overflow)".into());
+            }
+            if cost > 0.0 && cost < 0.000001 {
+                "<$0.000001".into()
+            } else {
+                format!("${cost:.6}")
+            }
         }
-        EstimateUnavailableReason::UnsupportedContextBand => "unsupported context price band",
-        EstimateUnavailableReason::IncompleteCacheDetail => "incomplete cache detail",
-        EstimateUnavailableReason::ArithmeticOverflow => "arithmetic overflow",
+        (None, Some(estimated)) => estimated.to_string(),
+        (None, None) if has_estimates => return Some("unavailable".into()),
+        (None, None) => return None,
+    };
+    if partial {
+        label.push_str(" (partial)");
     }
+    Some(label)
 }
 
 fn model_label(attribution: &ModelAttribution) -> String {

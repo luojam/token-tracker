@@ -170,7 +170,10 @@ fn a_second_adapter_preserves_identity_lineage_and_failure_isolation() {
     assert!(report.contains("Input tokens: 17\n"), "{report}");
     assert!(report.contains("Sessions: 3\n"));
     assert!(report.contains("Unique usage events: 2\n"));
-    assert!(report.contains("Unattributed other usage: input 10"));
+    assert!(report.lines().any(|line| {
+        line.split_whitespace().collect::<Vec<_>>().join(" ")
+            == "Unattributed other usage 10 0 0 0 10 1 -"
+    }));
     // The overlapping discovery root must not mark Pi's file missing.
     assert!(store.source_states(&"pi".into()).unwrap()[0].present);
     assert_eq!(store.source_states(&"test-agent".into()).unwrap().len(), 2);

@@ -8,10 +8,10 @@ use super::pricing::{
 };
 use super::{SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot};
 use crate::core::{
-    EstimateBreakdown, EstimateSummary, EstimateTotal, EstimateTotals, EstimateUnavailableReason,
-    ModelAttribution, ParentSession, RecordedCost, ServiceTier, SummaryBreakdown, SummaryGroup,
-    SummaryTotals, TierEvidence, Timestamp, TokenCounts, UsageEstimate, UsageEventIdentity,
-    UsageSummary,
+    AgentId, EstimateBreakdown, EstimateSummary, EstimateTotal, EstimateTotals,
+    EstimateUnavailableReason, ModelAttribution, ParentSession, RecordedCost, ServiceTier,
+    SummaryBreakdown, SummaryGroup, SummaryTotals, TierEvidence, Timestamp, TokenCounts,
+    UsageEstimate, UsageEventIdentity, UsageSummary,
 };
 
 /// Count each logical event once. Prefer its earliest known ancestor observation,
@@ -47,7 +47,7 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
         unique_usage_event_count: count(by_event.len())?,
         ..SummaryTotals::default()
     };
-    let mut breakdown = BTreeMap::<SummaryGroup, SummaryBreakdown>::new();
+    let mut breakdown = BTreeMap::<(AgentId, SummaryGroup), SummaryBreakdown>::new();
     let mut estimate_totals = EstimateTotals::default();
     let mut estimate_rows =
         BTreeMap::<(Option<ModelAttribution>, ServiceTier), EstimateTotals>::new();
@@ -61,12 +61,15 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
             Some(attribution) => SummaryGroup::ProviderModel(attribution.clone()),
             None => SummaryGroup::Unattributed(event.kind),
         };
-        let row = breakdown.entry(group.clone()).or_insert(SummaryBreakdown {
-            group,
-            tokens: TokenCounts::default(),
-            recorded_cost: None,
-            unique_usage_event_count: 0,
-        });
+        let row = breakdown
+            .entry((event.identity.agent.clone(), group.clone()))
+            .or_insert(SummaryBreakdown {
+                agent: event.identity.agent.clone(),
+                group,
+                tokens: TokenCounts::default(),
+                recorded_cost: None,
+                unique_usage_event_count: 0,
+            });
         row.tokens = add_tokens(row.tokens, event.tokens)?;
         add_cost(&mut row.recorded_cost, event.recorded_cost)?;
         row.unique_usage_event_count = row
