@@ -362,7 +362,7 @@ pub enum EstimateTotal {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EstimateTotals {
     pub cost: EstimateTotal,
-    /// Imported canonical Codex events only, not completeness of local history.
+    /// Imported canonical events for this agent, not completeness of local history.
     pub imported_event_count: u64,
     pub priced_event_count: u64,
     /// Evidence counts include priced events only.
@@ -377,7 +377,8 @@ pub struct EstimateTotals {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EstimateBreakdown {
-    pub attribution: Option<ModelAttribution>,
+    pub group: SummaryGroup,
+    /// Codex pricing tier or Claude served capacity tier; Claude speed is separate.
     pub tier: ServiceTier,
     pub totals: EstimateTotals,
 }
@@ -388,7 +389,7 @@ pub struct EstimateSummary {
     /// Price snapshot date (YYYY-MM-DD), not the usage date.
     pub rate_date: String,
     pub totals: EstimateTotals,
-    /// Ordered by original attribution and estimated tier, retaining unsupported values.
+    /// Ordered by token group and tier, retaining unsupported values.
     pub breakdown: Vec<EstimateBreakdown>,
 }
 
@@ -397,6 +398,6 @@ pub struct UsageSummary {
     pub totals: SummaryTotals,
     /// Rows must be ordered deterministically by agent, then group.
     pub breakdown: Vec<SummaryBreakdown>,
-    /// Separate from recorded costs; absent when there are no Codex observations.
-    pub estimate: Option<EstimateSummary>,
+    /// Separate from recorded costs; keyed by agent with imported events eligible for estimation.
+    pub estimates: BTreeMap<AgentId, EstimateSummary>,
 }

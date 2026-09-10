@@ -275,7 +275,7 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
     assert_eq!(header(codex_report), header(pi_report));
     assert!(pi_report.contains("Unattributed tool results"));
     assert!(!report.contains("API-equivalent estimate"));
-    let estimate = summary.estimate.unwrap();
+    let estimate = summary.estimates[&AgentId::from("codex")].clone();
     assert_eq!(summary.totals.tokens.input, 27);
     assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 1.0);
     assert_eq!(estimate.totals.imported_event_count, 3);
@@ -312,19 +312,19 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
 
     data.observations.reverse();
     data.observations.truncate(1);
-    let unpriced = summarize_usage(&data).unwrap().estimate.unwrap();
+    let unpriced = summarize_usage(&data).unwrap().estimates[&AgentId::from("codex")].clone();
     assert_eq!(unpriced.totals.cost, EstimateTotal::Unavailable);
     let event = &mut data.observations[0].event;
     event.attribution = Some(model);
     event.pricing_context = Some(context);
     event.tokens = TokenCounts::default();
-    let zero = summarize_usage(&data).unwrap().estimate.unwrap();
+    let zero = summarize_usage(&data).unwrap().estimates[&AgentId::from("codex")].clone();
     assert_eq!(
         zero.totals.cost,
         EstimateTotal::Available(EstimatedCost::default())
     );
     data.observations.clear();
-    assert!(summarize_usage(&data).unwrap().estimate.is_none());
+    assert!(summarize_usage(&data).unwrap().estimates.is_empty());
 }
 
 #[test]

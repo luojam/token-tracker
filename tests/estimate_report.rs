@@ -7,18 +7,21 @@ use token_tracker::core::{
 
 fn summary(cost: EstimateTotal, priced: u64) -> UsageSummary {
     UsageSummary {
-        estimate: Some(EstimateSummary {
-            snapshot_id: "test-snapshot".into(),
-            rate_date: "2026-09-07".into(),
-            totals: EstimateTotals {
-                cost,
-                imported_event_count: 1,
-                priced_event_count: priced,
-                served_response_event_count: priced,
-                ..EstimateTotals::default()
+        estimates: std::collections::BTreeMap::from([(
+            "codex".into(),
+            EstimateSummary {
+                snapshot_id: "test-snapshot".into(),
+                rate_date: "2026-09-07".into(),
+                totals: EstimateTotals {
+                    cost,
+                    imported_event_count: 1,
+                    priced_event_count: priced,
+                    served_response_event_count: priced,
+                    ..EstimateTotals::default()
+                },
+                breakdown: vec![],
             },
-            breakdown: vec![],
-        }),
+        )]),
         ..UsageSummary::default()
     }
 }
@@ -60,13 +63,13 @@ fn cost_states_stay_distinct_without_hiding_import_warnings() {
 #[test]
 fn estimate_labels_escape_source_control_characters() {
     let mut summary = summary(EstimateTotal::Unavailable, 0);
-    let estimate = summary.estimate.as_mut().unwrap();
+    let estimate = summary.estimates.get_mut(&"codex".into()).unwrap();
     let attribution = ModelAttribution {
         provider: "custom\nprovider".into(),
         model: "model\t".into(),
     };
     estimate.breakdown.push(EstimateBreakdown {
-        attribution: Some(attribution.clone()),
+        group: SummaryGroup::ProviderModel(attribution.clone()),
         tier: ServiceTier::Unsupported("priority\r\u{1b}".into()),
         totals: estimate.totals.clone(),
     });
@@ -91,8 +94,8 @@ fn model_costs_combine_tiers_and_recorded_costs_without_mixing_providers() {
     );
     summary.totals.recorded_cost = Some(RecordedCost::from_usd(1.0).unwrap());
     summary
-        .estimate
-        .as_mut()
+        .estimates
+        .get_mut(&"codex".into())
         .unwrap()
         .totals
         .imported_event_count = 4;
@@ -115,12 +118,12 @@ fn model_costs_combine_tiers_and_recorded_costs_without_mixing_providers() {
         ("other", ServiceTier::Unsupported("custom".into()), None),
     ] {
         summary
-            .estimate
-            .as_mut()
+            .estimates
+            .get_mut(&"codex".into())
             .unwrap()
             .breakdown
             .push(EstimateBreakdown {
-                attribution: Some(ModelAttribution {
+                group: SummaryGroup::ProviderModel(ModelAttribution {
                     provider: provider.into(),
                     model: "model".into(),
                 }),
@@ -149,4 +152,28 @@ fn model_costs_combine_tiers_and_recorded_costs_without_mixing_providers() {
     }
     assert!(!report.contains("API-equivalent estimate"));
     assert!(!report.contains("Estimates by provider/model/tier"));
+}
+
+#[test]
+fn combined_adapter_cost_overflow_never_displays_a_partial_amount() {
+    for claude_cost in [
+        EstimateTotal::Overflow,
+        EstimateTotal::Available(EstimatedCost::from_picodollars(u128::MAX)),
+    ] {
+        let mut combined = summary(
+            EstimateTotal::Available(EstimatedCost::from_picodollars(1)),
+            1,
+        );
+        combined.totals.recorded_cost = Some(RecordedCost::from_usd(1.0).unwrap());
+        combined.estimates.insert(
+            "claude".into(),
+            summary(claude_cost, 1)
+                .estimates
+                .remove(&"codex".into())
+                .unwrap(),
+        );
+        let report = render_terminal_report(&combined, &[]);
+        assert!(report.contains("Total cost: unavailable (arithmetic overflow)\n"));
+        assert!(!report.contains("(partial)"));
+    }
 }

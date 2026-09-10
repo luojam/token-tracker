@@ -4,12 +4,12 @@ use std::fmt;
 use std::path::Path;
 
 use super::pricing::{
-    MissingCacheWritePolicy, RATE_DATE, SNAPSHOT_ID, calculate_estimate, estimate_tier,
+    MissingCacheWritePolicy, RATE_DATE, SNAPSHOT_ID, anthropic, calculate_estimate, estimate_tier,
 };
 use super::{SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot};
 use crate::core::{
     AgentId, EstimateBreakdown, EstimateSummary, EstimateTotal, EstimateTotals,
-    EstimateUnavailableReason, ModelAttribution, ParentSession, RecordedCost, ServiceTier,
+    EstimateUnavailableReason, ParentSession, RawServedValue, RecordedCost, ServiceTier,
     SummaryBreakdown, SummaryGroup, SummaryTotals, TierEvidence, Timestamp, TokenCounts,
     UsageEstimate, UsageEventIdentity, UsageSummary,
 };
@@ -48,9 +48,8 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
         ..SummaryTotals::default()
     };
     let mut breakdown = BTreeMap::<(AgentId, SummaryGroup), SummaryBreakdown>::new();
-    let mut estimate_totals = EstimateTotals::default();
-    let mut estimate_rows =
-        BTreeMap::<(Option<ModelAttribution>, ServiceTier), EstimateTotals>::new();
+    let mut estimates = BTreeMap::<AgentId, EstimateSummary>::new();
+    let mut estimate_rows = BTreeMap::<(AgentId, SummaryGroup, ServiceTier), EstimateTotals>::new();
     // Stable event order also makes floating-point cost accumulation deterministic.
     for observations in by_event.values() {
         let canonical = select_canonical_observation(observations, &sessions, &parents);
@@ -65,7 +64,7 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
             .entry((event.identity.agent.clone(), group.clone()))
             .or_insert(SummaryBreakdown {
                 agent: event.identity.agent.clone(),
-                group,
+                group: group.clone(),
                 tokens: TokenCounts::default(),
                 recorded_cost: None,
                 unique_usage_event_count: 0,
@@ -77,37 +76,74 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
             .checked_add(1)
             .ok_or(SummaryError::Overflow("event count"))?;
 
-        if event.identity.agent.as_str() == "codex" {
-            let estimate = calculate_estimate(event, MissingCacheWritePolicy::TreatAsInput);
-            let (tier, evidence) = event
-                .pricing_context
-                .as_ref()
-                .map(estimate_tier)
-                .unwrap_or((ServiceTier::Unknown, TierEvidence::Unknown));
-            let row = estimate_rows
-                .entry((event.attribution.clone(), tier))
-                .or_default();
-            add_estimate(&mut estimate_totals, estimate, evidence);
-            add_estimate(row, estimate, evidence);
-        }
+        let (estimate, tier, evidence, snapshot_id, rate_date) = match event.identity.agent.as_str()
+        {
+            "codex" => {
+                let (tier, evidence) = event
+                    .pricing_context
+                    .as_ref()
+                    .map(estimate_tier)
+                    .unwrap_or((ServiceTier::Unknown, TierEvidence::Unknown));
+                (
+                    calculate_estimate(event, MissingCacheWritePolicy::TreatAsInput),
+                    tier,
+                    evidence,
+                    SNAPSHOT_ID,
+                    RATE_DATE,
+                )
+            }
+            "claude" => {
+                let tier = match event
+                    .pricing_context
+                    .as_ref()
+                    .and_then(|context| context.anthropic.as_ref())
+                    .map(|facts| &facts.service_tier)
+                {
+                    Some(RawServedValue::Value(value)) if value == "standard" => {
+                        ServiceTier::Standard
+                    }
+                    Some(RawServedValue::Value(value)) => ServiceTier::Unsupported(value.clone()),
+                    _ => ServiceTier::Unknown,
+                };
+                (
+                    anthropic::calculate_estimate(event),
+                    tier,
+                    TierEvidence::ServedResponse,
+                    anthropic::SNAPSHOT_ID,
+                    anthropic::RATE_DATE,
+                )
+            }
+            _ => continue,
+        };
+        let summary = estimates
+            .entry(event.identity.agent.clone())
+            .or_insert_with(|| EstimateSummary {
+                snapshot_id: snapshot_id.into(),
+                rate_date: rate_date.into(),
+                totals: EstimateTotals::default(),
+                breakdown: Vec::new(),
+            });
+        let row = estimate_rows
+            .entry((event.identity.agent.clone(), group, tier))
+            .or_default();
+        add_estimate(&mut summary.totals, estimate, evidence);
+        add_estimate(row, estimate, evidence);
     }
-    let estimate = (estimate_totals.imported_event_count > 0).then(|| EstimateSummary {
-        snapshot_id: SNAPSHOT_ID.into(),
-        rate_date: RATE_DATE.into(),
-        totals: estimate_totals,
-        breakdown: estimate_rows
-            .into_iter()
-            .map(|((attribution, tier), totals)| EstimateBreakdown {
-                attribution,
+    for ((agent, group, tier), totals) in estimate_rows {
+        estimates
+            .get_mut(&agent)
+            .expect("estimate rows have summaries")
+            .breakdown
+            .push(EstimateBreakdown {
+                group,
                 tier,
                 totals,
-            })
-            .collect(),
-    });
+            });
+    }
     Ok(UsageSummary {
         totals,
         breakdown: breakdown.into_values().collect(),
-        estimate,
+        estimates,
     })
 }
 

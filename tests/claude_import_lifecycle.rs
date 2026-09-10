@@ -8,8 +8,8 @@ use serde_json::Value;
 use token_tracker::adapters::claude::{ClaudeSessionDiscovery, ClaudeSessionParser};
 use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{
-    SourceState, SynchronizationReport, UsageReadStore, UsageSnapshot, UsageStore, summarize_usage,
-    synchronize_sessions_at,
+    SourceState, SynchronizationReport, UsageReadStore, UsageSnapshot, UsageStore,
+    render_terminal_report, summarize_usage, synchronize_sessions_at,
 };
 use token_tracker::core::{
     AgentId, AnthropicUsage, CacheCreationTokens, ParentSession, RawServedValue, Timestamp,
@@ -293,6 +293,16 @@ fn failed_inaccessible_deleted_and_rewritten_sources_retain_usage_and_notices() 
     let unchanged = ledger.sync();
     assert_eq!(unchanged.counts.files_unchanged, 1);
     assert_eq!(unchanged.warnings, initial.warnings);
+    let summary = summarize_usage(&snapshot).unwrap();
+    let estimate = &summary.estimates[&AgentId::from("claude")];
+    assert_eq!(estimate.totals.imported_event_count, 1);
+    assert_eq!(estimate.totals.priced_event_count, 1);
+    let report = render_terminal_report(&summary, &unchanged.warnings);
+    assert!(report.contains("Claude Code usage:"));
+    assert!(report.contains("Total cost: $0.000085\n"));
+    assert!(!report.contains("(partial)"));
+    assert!(report.contains("Warnings (1):"));
+    assert!(report.contains(&initial.warnings[0].message));
 
     ledger.write_fixture("reject-malformed.jsonl");
     let failed = ledger.sync();

@@ -44,7 +44,7 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
     .unwrap();
     if let Some(cost) = cost_label(
         totals.recorded_cost,
-        summary.estimate.iter().map(|estimate| &estimate.totals),
+        summary.estimates.values().map(|estimate| &estimate.totals),
     ) {
         writeln!(output, "Total cost: {cost}").unwrap();
     }
@@ -77,16 +77,11 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
             .iter()
             .map(|row| {
                 let estimates = summary
-                    .estimate
-                    .iter()
-                    .filter(|_| row.agent.as_str() == "codex")
+                    .estimates
+                    .get(&row.agent)
+                    .into_iter()
                     .flat_map(|estimate| &estimate.breakdown)
-                    .filter(|estimate| match &row.group {
-                        SummaryGroup::ProviderModel(attribution) => {
-                            estimate.attribution.as_ref() == Some(attribution)
-                        }
-                        SummaryGroup::Unattributed(_) => false,
-                    })
+                    .filter(|estimate| estimate.group == row.group)
                     .map(|estimate| &estimate.totals);
                 (
                     &row.agent,
@@ -115,6 +110,7 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
                 let label = match agent.as_str() {
                     "pi" => "Pi".into(),
                     "codex" => "Codex".into(),
+                    "claude" => "Claude Code".into(),
                     agent => one_line(agent),
                 };
                 writeln!(output).unwrap();
