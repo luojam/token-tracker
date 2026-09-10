@@ -6,6 +6,7 @@ use crate::core::{
     ServiceTier, TierEvidence, TokenCounts, UsageEstimate, UsageEvent,
 };
 
+pub mod anthropic;
 mod rates;
 pub use rates::{RATE_DATE, SNAPSHOT_ID, TokenRates, lookup_rates};
 
