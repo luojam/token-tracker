@@ -51,7 +51,8 @@ pub(super) fn load_stored_observations(
                 observation.pricing_tier, observation.pricing_unsupported_tier,
                 observation.pricing_raw_tier_kind, observation.pricing_raw_tier_value,
                 observation.pricing_tier_evidence, observation.pricing_request_granularity,
-                observation.pricing_cache_detail, observation.pricing_request_usage
+                observation.pricing_cache_detail, observation.pricing_request_usage,
+                observation.pricing_anthropic
            FROM source_observations observation
            JOIN usage_events event ON event.id = observation.event_id",
     )?;
@@ -79,6 +80,7 @@ pub(super) fn load_stored_observations(
                 row.get::<_, Option<String>>(18)?,
             ],
             row.get::<_, Option<Vec<u8>>>(19)?,
+            row.get::<_, Option<String>>(20)?,
         ))
     })?;
 
@@ -99,6 +101,7 @@ pub(super) fn load_stored_observations(
             timestamp_ms,
             pricing,
             request_usage,
+            anthropic,
         ) = row?;
         let attribution = match (provider, model) {
             (Some(provider), Some(model)) => Some(ModelAttribution { provider, model }),
@@ -127,13 +130,13 @@ pub(super) fn load_stored_observations(
             cache_read: decode_u64(&cache_read)?,
             cache_write: decode_u64(&cache_write)?,
         };
-        let pricing_context = pricing_context::decode(pricing, request_usage)?;
+        let pricing_context = pricing_context::decode(pricing, request_usage, anthropic)?;
         if pricing_context
             .as_ref()
-            .is_some_and(|context| !context.request_usage_matches(tokens))
+            .is_some_and(|context| !context.usage_matches(tokens))
         {
             return Err(SqliteStoreError::CorruptData(
-                "a request usage breakdown that differs from its total",
+                "invalid pricing usage components or totals",
             ));
         }
         observations.push(UsageObservation {

@@ -181,9 +181,10 @@ pub(super) fn insert_observation(
             cache_write_tokens, recorded_cost_usd,
             pricing_tier, pricing_unsupported_tier, pricing_raw_tier_kind,
             pricing_raw_tier_value, pricing_tier_evidence,
-            pricing_request_granularity, pricing_cache_detail, pricing_request_usage
+            pricing_request_granularity, pricing_cache_detail, pricing_request_usage,
+            pricing_anthropic
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
-                   ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+                   ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
          ON CONFLICT(source_session_id, event_id) DO NOTHING",
         params![
             source_id,
@@ -206,6 +207,7 @@ pub(super) fn insert_observation(
             pricing[5],
             pricing[6],
             pricing_context::encode_requests(event.pricing_context.as_ref()),
+            pricing_context::encode_anthropic(event.pricing_context.as_ref())?,
         ],
     )?;
     Ok(changed == 1)
@@ -239,7 +241,8 @@ pub(super) fn update_observation(
                     pricing_tier_evidence = ?17,
                     pricing_request_granularity = ?18,
                     pricing_cache_detail = ?19,
-                    pricing_request_usage = ?20
+                    pricing_request_usage = ?20,
+                    pricing_anthropic = ?21
               WHERE source_id = ?10 AND source_session_id = ?11 AND event_id = ?12
                 AND (timestamp_ms IS NOT ?1
                      OR usage_kind IS NOT ?2
@@ -257,7 +260,8 @@ pub(super) fn update_observation(
                      OR pricing_tier_evidence IS NOT ?17
                      OR pricing_request_granularity IS NOT ?18
                      OR pricing_cache_detail IS NOT ?19
-                     OR pricing_request_usage IS NOT ?20)",
+                     OR pricing_request_usage IS NOT ?20
+                     OR pricing_anthropic IS NOT ?21)",
             params![
                 event.timestamp.as_unix_milliseconds(),
                 usage_kind_to_str(event.kind),
@@ -279,6 +283,7 @@ pub(super) fn update_observation(
                 pricing[5],
                 pricing[6],
                 pricing_context::encode_requests(event.pricing_context.as_ref()),
+                pricing_context::encode_anthropic(event.pricing_context.as_ref())?,
             ],
         )
         .map_err(Into::into)
@@ -289,10 +294,10 @@ pub(super) fn validate_import(import: &SessionImport) -> Result<(), SqliteStoreE
         event
             .pricing_context
             .as_ref()
-            .is_some_and(|context| !context.request_usage_matches(event.tokens))
+            .is_some_and(|context| !context.usage_matches(event.tokens))
     }) {
         return Err(SqliteStoreError::InvalidImport(
-            "a request usage breakdown differs from its total",
+            "invalid pricing usage components or totals",
         ));
     }
     if import

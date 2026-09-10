@@ -1,3 +1,10 @@
+mod anthropic;
+
+pub use anthropic::{
+    AnthropicIteration, AnthropicIterationKind, AnthropicPricingContext, AnthropicUsage,
+    AnthropicUsageComponent, CacheCreationTokens, RawServedValue,
+};
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -49,7 +56,8 @@ impl Timestamp {
 
 /// Disjoint token categories: input excludes cache reads/writes, and output
 /// includes any reasoning tokens. Adapters normalize overlapping source counters.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TokenCounts {
     pub input: u64,
     pub output: u64,
@@ -201,9 +209,31 @@ pub struct PricingContext {
     pub cache_detail: CacheDetail,
     /// Complete per-request breakdown, retaining the aggregate's ledger identity.
     pub request_usage: Option<Vec<TokenCounts>>,
+    /// Uses its own served evidence and replaces the request_usage breakdown.
+    pub anthropic: Option<AnthropicPricingContext>,
 }
 
 impl PricingContext {
+    pub fn for_anthropic(facts: AnthropicPricingContext) -> Self {
+        Self {
+            tier: ServiceTier::Unknown,
+            raw_tier: RawServiceTier::Missing,
+            tier_evidence: TierEvidence::Unknown,
+            request_granularity: RequestGranularity::ExactSingleRequest,
+            cache_detail: CacheDetail::Complete,
+            request_usage: None,
+            anthropic: Some(facts),
+        }
+    }
+
+    pub fn usage_matches(&self, tokens: TokenCounts) -> bool {
+        self.request_usage_matches(tokens)
+            && self
+                .anthropic
+                .as_ref()
+                .is_none_or(|facts| self.request_usage.is_none() && facts.usage_matches(tokens))
+    }
+
     pub fn request_usage_matches(&self, tokens: TokenCounts) -> bool {
         self.request_usage.as_ref().is_none_or(|requests| {
             !requests.is_empty()

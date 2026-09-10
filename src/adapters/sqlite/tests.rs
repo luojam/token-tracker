@@ -1,3 +1,4 @@
+mod anthropic;
 mod parse_notices;
 mod pricing;
 

@@ -170,6 +170,7 @@ impl ContextState {
                 request_granularity: granularity,
                 cache_detail,
                 request_usage: None,
+                anthropic: None,
             },
         )
     }

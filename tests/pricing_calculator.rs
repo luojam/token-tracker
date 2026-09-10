@@ -31,6 +31,7 @@ fn event() -> UsageEvent {
             request_granularity: RequestGranularity::ExactSingleRequest,
             cache_detail: CacheDetail::Complete,
             request_usage: None,
+            anthropic: None,
         }),
     }
 }

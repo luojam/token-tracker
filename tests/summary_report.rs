@@ -201,6 +201,7 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
         request_granularity: RequestGranularity::ExactSingleRequest,
         cache_detail: CacheDetail::Complete,
         request_usage: None,
+        anthropic: None,
     };
     let model = ModelAttribution {
         provider: "openai".into(),

@@ -10,58 +10,83 @@ fn notice() -> ParseNotice {
 }
 
 #[test]
-fn version_one_migration_preserves_existing_observations() {
-    let database = TempDatabase::new();
-    let mut connection = Connection::open(&database.path).unwrap();
-    connection
-        .execute_batch(include_str!("../schema_v1.sql"))
-        .unwrap();
-    let import = session_import("/sessions/existing.jsonl", u64::MAX);
-    let transaction = connection.transaction().unwrap();
-    transaction
-        .execute(
-            "INSERT INTO sources (
+fn old_schema_migrations_preserve_existing_observations() {
+    for version in [1, 2] {
+        let database = TempDatabase::new();
+        let mut connection = Connection::open(&database.path).unwrap();
+        connection
+            .execute_batch(include_str!("../schema_v1.sql"))
+            .unwrap();
+        if version == 2 {
+            connection
+                .execute_batch(include_str!("../schema_v2.sql"))
+                .unwrap();
+        }
+        let import = session_import("/sessions/existing.jsonl", u64::MAX);
+        let transaction = connection.transaction().unwrap();
+        transaction
+            .execute(
+                "INSERT INTO sources (
             id, path, agent, last_observed_size, last_observed_modified_seconds,
             last_observed_modified_nanos, last_imported_size, last_imported_modified_seconds,
             last_imported_modified_nanos, last_discovery_scan_ms, last_successful_scan_ms,
             last_parse_completion, present
          ) VALUES (1, ?1, 'pi', ?2, 1700000000, 123, ?2, 1700000000, 123,
                    1700000001000, 1700000001000, 'complete', 1)",
-            params![
-                encode_path(&import.source.path),
-                encode_u64(import.source.revision.size)
-            ],
-        )
-        .unwrap();
-    let session_id = upsert_source_session(&transaction, 1, &import).unwrap();
-    transaction
+                params![
+                    encode_path(&import.source.path),
+                    encode_u64(import.source.revision.size)
+                ],
+            )
+            .unwrap();
+        let session_id = upsert_source_session(&transaction, 1, &import).unwrap();
+        transaction
         .execute(
             "INSERT INTO usage_events (id, agent, adapter_key) VALUES (1, 'pi', 'shared-event')",
             [],
         )
         .unwrap();
-    insert_observation(&transaction, 1, session_id, 1, &import.parsed.events[0]).unwrap();
-    transaction.commit().unwrap();
-    let legacy_store = SqliteUsageStore { connection };
-    let before = legacy_store.usage_snapshot().unwrap();
-    drop(legacy_store);
+        let event = &import.parsed.events[0];
+        transaction
+            .execute(
+                "INSERT INTO source_observations (
+                source_id, source_session_id, event_id, timestamp_ms, usage_kind,
+                provider, model, input_tokens, output_tokens, cache_read_tokens,
+                cache_write_tokens, recorded_cost_usd
+             ) VALUES (1, ?1, 1, ?2, 'assistant', 'provider', 'model', ?3, ?4, ?5, ?6, 0.25)",
+                params![
+                    session_id,
+                    event.timestamp.as_unix_milliseconds(),
+                    encode_u64(event.tokens.input),
+                    encode_u64(event.tokens.output),
+                    encode_u64(event.tokens.cache_read),
+                    encode_u64(event.tokens.cache_write),
+                ],
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        drop(connection);
 
-    let store = SqliteUsageStore::open(&database.path).unwrap();
-    assert_eq!(store.usage_snapshot().unwrap(), before);
-    let states = store.source_states(&"pi".into()).unwrap();
-    assert!(states[0].notices.is_empty());
-    assert_eq!(
-        states[0].last_imported_revision,
-        Some(import.source.revision)
-    );
-    assert_eq!(states[0].last_successful_scan, Some(import.scanned_at));
-    assert_eq!(
-        store
-            .connection
-            .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
-            .unwrap(),
-        migrations::SCHEMA_VERSION
-    );
+        let store = SqliteUsageStore::open(&database.path).unwrap();
+        let snapshot = store.usage_snapshot().unwrap();
+        assert_eq!(snapshot.observations.len(), 1);
+        assert_eq!(&snapshot.observations[0].event, event);
+        assert_eq!(snapshot.observations[0].session, snapshot.sessions[0].key);
+        let states = store.source_states(&"pi".into()).unwrap();
+        assert!(states[0].notices.is_empty());
+        assert_eq!(
+            states[0].last_imported_revision,
+            Some(import.source.revision)
+        );
+        assert_eq!(states[0].last_successful_scan, Some(import.scanned_at));
+        assert_eq!(
+            store
+                .connection
+                .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                .unwrap(),
+            migrations::SCHEMA_VERSION
+        );
+    }
 }
 
 #[test]

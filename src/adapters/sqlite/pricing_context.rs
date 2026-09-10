@@ -43,8 +43,9 @@ pub(super) fn encode(context: Option<&PricingContext>) -> [Option<&str>; 7] {
 pub(super) fn decode(
     columns: [Option<String>; 7],
     request_usage: Option<Vec<u8>>,
+    anthropic: Option<String>,
 ) -> Result<Option<PricingContext>, SqliteStoreError> {
-    if columns.iter().all(Option::is_none) && request_usage.is_none() {
+    if columns.iter().all(Option::is_none) && request_usage.is_none() && anthropic.is_none() {
         return Ok(None);
     }
     let invalid = || SqliteStoreError::CorruptData("an invalid pricing context");
@@ -90,7 +91,25 @@ pub(super) fn decode(
         request_usage: request_usage
             .map(|bytes| decode_requests(&bytes))
             .transpose()?,
+        anthropic: anthropic
+            .map(|json| {
+                serde_json::from_str(&json)
+                    .map_err(|_| SqliteStoreError::CorruptData("invalid Anthropic pricing facts"))
+            })
+            .transpose()?,
     }))
+}
+
+pub(super) fn encode_anthropic(
+    context: Option<&PricingContext>,
+) -> Result<Option<String>, SqliteStoreError> {
+    context
+        .and_then(|context| context.anthropic.as_ref())
+        .map(|facts| {
+            serde_json::to_string(facts)
+                .map_err(|_| SqliteStoreError::InvalidImport("invalid Anthropic pricing facts"))
+        })
+        .transpose()
 }
 
 pub(super) fn encode_requests(context: Option<&PricingContext>) -> Option<Vec<u8>> {

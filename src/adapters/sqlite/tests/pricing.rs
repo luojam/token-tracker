@@ -11,6 +11,7 @@ fn context() -> PricingContext {
         request_granularity: RequestGranularity::ExactSingleRequest,
         cache_detail: CacheDetail::Complete,
         request_usage: None,
+        anthropic: None,
     }
 }
 
@@ -61,11 +62,12 @@ fn fresh_database_includes_pricing_columns_and_keeps_pi_context_absent() {
         "pricing_request_granularity",
         "pricing_cache_detail",
     ];
-    assert_eq!(columns.len(), expected.len() + 1);
+    assert_eq!(columns.len(), expected.len() + 2);
     for name in expected {
         assert!(columns.contains(&(name.into(), "TEXT".into(), false)));
     }
     assert!(columns.contains(&("pricing_request_usage".into(), "BLOB".into(), false)));
+    assert!(columns.contains(&("pricing_anthropic".into(), "TEXT".into(), false)));
 }
 
 #[test]
@@ -91,6 +93,7 @@ fn snapshot_round_trips_every_pricing_enum_without_normalizing_facts() {
             request_granularity: RequestGranularity::AggregateOrUnknown,
             cache_detail: CacheDetail::Incomplete,
             request_usage: None,
+            anthropic: None,
         }),
         Some(PricingContext {
             tier: ServiceTier::Unknown,
