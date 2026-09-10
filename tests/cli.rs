@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const ALL_USAGE: &str = include_str!("fixtures/pi/all-usage.jsonl");
 const CODEX_USAGE: &str = include_str!("fixtures/codex/response-mirrors.jsonl");
+const CLAUDE_USAGE: &str = include_str!("fixtures/claude/snapshots.jsonl");
+const CLAUDE_SESSION_ID: &str = "11111111-1111-4111-8111-111111111111";
 static NEXT_TEMP_TREE: AtomicU64 = AtomicU64::new(0);
 
 struct TempTree {
@@ -37,6 +39,7 @@ fn command(home: &Path) -> Command {
         .env_remove("PI_CODING_AGENT_SESSION_DIR")
         .env_remove("PI_CODING_AGENT_DIR")
         .env_remove("CODEX_HOME")
+        .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("XDG_DATA_HOME");
     command
 }
@@ -256,13 +259,14 @@ fn command_reconciles_conflicting_forks_in_either_import_order() {
 }
 
 #[test]
-fn command_reports_both_adapters_with_missing_or_failing_roots() {
+fn command_reports_pi_and_codex_with_missing_or_failing_roots() {
     for (pi_present, codex_present, failing_agent) in [
         (true, true, None),
         (false, true, None),
         (true, false, None),
         (false, true, Some("pi")),
         (true, false, Some("codex")),
+        (true, true, Some("claude")),
     ] {
         let tree = TempTree::new();
         let home = tree.root.join("home");
@@ -285,6 +289,11 @@ fn command_reports_both_adapters_with_missing_or_failing_roots() {
             } else if failing_agent == Some(agent) {
                 fs::write(root, "not a directory").unwrap();
             }
+        }
+        if failing_agent == Some("claude") {
+            let config = home.join(".claude");
+            fs::create_dir(&config).unwrap();
+            fs::write(config.join("projects"), "not a directory").unwrap();
         }
 
         let run = || successful_report(command(&home).output().unwrap());
@@ -337,6 +346,73 @@ fn command_reports_both_adapters_with_missing_or_failing_roots() {
         }
         assert_eq!(run(), report);
     }
+}
+
+#[test]
+fn command_imports_all_adapters_and_retains_claude_partial_imports_privately() {
+    let tree = TempTree::new();
+    let home = tree.root.join("home");
+    let data_home = tree.root.join("data");
+    let config = tree.root.join("custom-claude");
+    let project = config.join("projects/invented-project");
+    let source = project.join(format!("{CLAUDE_SESSION_ID}.jsonl"));
+    let claude = CLAUDE_USAGE
+        .replace(
+            "\"type\":\"text\"",
+            "\"type\":\"text\",\"text\":\"SECRET_CLAUDE_RESPONSE\"",
+        )
+        .replace(
+            "\"content\":[]",
+            "\"content\":[{\"type\":\"tool_result\",\"content\":\"SECRET_CLAUDE_TOOL\"}]",
+        );
+    for (path, content) in [
+        (home.join(".pi/agent/sessions/history.jsonl"), ALL_USAGE),
+        (
+            home.join(".codex/sessions/rollout-history.jsonl"),
+            CODEX_USAGE,
+        ),
+        (source.clone(), claude.as_str()),
+    ] {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, content).unwrap();
+    }
+    let run = || {
+        successful_report(
+            command(&home)
+                .env("XDG_DATA_HOME", &data_home)
+                .env("CLAUDE_CONFIG_DIR", &config)
+                .output()
+                .unwrap(),
+        )
+    };
+    let report = run();
+    assert_totals(&report, [163, 113, 341, 144], 3, 8);
+    assert!(report.contains("Total cost: $1.026345\n"), "{report}");
+    assert!(report.contains("Claude Code usage:"), "{report}");
+    assert!(report.contains("anthropic / claude-opus-5"), "{report}");
+    assert!(!report.contains("Warnings"), "{report}");
+    assert_eq!(run(), report);
+
+    append(
+        &source,
+        include_str!("fixtures/claude/partial-ignored.jsonl"),
+    );
+    fs::write(
+        project.join("22222222-2222-4222-8222-222222222222.jsonl"),
+        "{SECRET_CLAUDE_MALFORMED}\n",
+    )
+    .unwrap();
+    let partial = run();
+    assert_totals(&partial, [165, 116, 341, 144], 3, 9);
+    for warning in [
+        "Warnings (2):\n",
+        "omitted 2 responses with incomplete usage",
+        "malformed Claude session line 1",
+    ] {
+        assert!(partial.contains(warning), "{partial}");
+    }
+    assert_eq!(run(), partial);
+    assert_no_content_persisted(&data_home.join("token-tracker"));
 }
 
 #[test]
@@ -621,4 +697,5 @@ fn command_reports_stored_usage_when_adapter_setup_is_unavailable() {
     assert_totals(&report, [25, 38, 51, 64], 1, 4);
     assert!(report.contains("pi: could not configure adapter:"));
     assert!(report.contains("codex: could not configure adapter:"));
+    assert!(report.contains("claude: could not configure adapter:"));
 }

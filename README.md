@@ -28,15 +28,23 @@ can underestimate cost slightly.
 Supported models include `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`,
 `gpt-5.6-luna`, `gpt-5.5`, and `gpt-5.4-mini`, with Standard and Fast pricing.
 
+### Claude Code
+
+Claude Code estimates use bundled API prices.
+
+Supported models are `claude-opus-5` (Standard and Fast), `claude-sonnet-5`, and
+`claude-haiku-4-5-20251001` (Standard).
+
 ## Local data
 
-Each run imports new or changed Pi and Codex sessions. Tracks input, output, and
-cache tokens, counting shared fork history only once.
+Each run imports new or changed Pi, Codex, and Claude Code sessions. Tracks input,
+output, and cache tokens, counting shared fork history only once.
 
 Sessions are read from:
 
 - `~/.pi/agent/sessions`, respecting Pi's directory overrides.
 - `~/.codex/sessions` and `~/.codex/archived_sessions`, respecting `CODEX_HOME`.
+- `~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`.
 
 Usage is stored in SQLite at `~/.local/share/token-tracker/usage.db` (or under
 `XDG_DATA_HOME` when set to an absolute path).
