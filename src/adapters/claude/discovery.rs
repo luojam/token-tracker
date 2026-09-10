@@ -119,13 +119,17 @@ impl Layout {
             Self::Subagents => stem
                 .to_str()
                 .and_then(|stem| stem.strip_prefix("agent-"))
-                .is_some_and(|id| !id.is_empty() && !id.contains([':', '/', '\\'])),
+                .is_some_and(is_agent_id),
             _ => false,
         }
     }
 }
 
-fn is_session_id(name: &OsStr) -> bool {
+pub(super) fn is_agent_id(id: &str) -> bool {
+    !id.is_empty() && !id.contains([':', '/', '\\'])
+}
+
+pub(super) fn is_session_id(name: &OsStr) -> bool {
     let bytes = name.as_encoded_bytes();
     bytes.len() == 36
         && bytes.iter().enumerate().all(|(index, byte)| {
