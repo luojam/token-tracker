@@ -47,6 +47,11 @@ The fixture filenames describe scenarios. Use each expectation's absolute
 temporary root for discovery tests), rather than parsing the descriptive filename
 as a session ID. Supported layouts are `<project>/<session-id>.jsonl` and
 `<project>/<session-id>/subagents/**/agent-<agent-id>.jsonl`.
+CL02 discovery recognizes UUID-shaped main-session filenames/directories
+(hexadecimal groups of 8-4-4-4-12), as used by these expectations, to exclude
+unrelated JSONL artifacts without reading their contents. Agent filename components
+must be nonempty and exclude colons and path separators; no hex-only restriction
+is imposed. `tests/claude_discovery.rs` checks these layout rules separately.
 
 Camel-case `sessionId` must agree with the owning main-session filename/directory.
 Subagents also require their own `agentId`, matching the filename, and normalize to
