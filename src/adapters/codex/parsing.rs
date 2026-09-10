@@ -103,6 +103,7 @@ impl SessionParser for CodexSessionParser {
                 )
                 .collect(),
             completion,
+            notices: Vec::new(),
         })
     }
 }

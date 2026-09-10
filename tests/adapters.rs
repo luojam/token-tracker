@@ -129,6 +129,7 @@ impl SessionParser for TestParser {
                 pricing_context: None,
             }],
             completion: ParseCompletion::Complete,
+            notices: Vec::new(),
         })
     }
 }

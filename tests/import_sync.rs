@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use token_tracker::adapters::pi::{PiParseError, PiSessionDiscovery, PiSessionParser};
 use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{
-    ParseContext, ParsedSession, SessionParser, UsageStore, synchronize_sessions_at,
+    ParseContext, ParseNotice, ParseNoticeCode, ParsedSession, SessionParser, UsageReadStore,
+    UsageStore, synchronize_sessions_at,
 };
 use token_tracker::core::{AgentId, Timestamp};
 
@@ -156,6 +157,165 @@ fn incomplete_final_lines_are_committed_and_retried_without_a_revision_change() 
     assert_eq!(retried.counts.files_imported, 1);
     assert_eq!(retried.counts.incomplete_files_imported, 1);
     assert_eq!(retried.counts.observations_inserted, 0);
+}
+
+struct NoticeParser(Vec<ParseNotice>);
+
+impl SessionParser for NoticeParser {
+    type Error = PiParseError;
+
+    fn parse(
+        &self,
+        input: &mut dyn BufRead,
+        context: ParseContext<'_>,
+    ) -> Result<ParsedSession, Self::Error> {
+        let mut parsed = PiSessionParser::new().parse(input, context)?;
+        parsed.notices = self.0.clone();
+        Ok(parsed)
+    }
+}
+
+#[test]
+fn notices_survive_scans_reopen_and_failures_until_a_successful_replacement() {
+    let tree = TempTree::new();
+    let root = tree.root.join("sessions");
+    fs::create_dir(&root).unwrap();
+    let path = root.join("session.jsonl");
+    let source = session("partial", None, &[("final-response", 10)]);
+    fs::write(&path, &source).unwrap();
+    let database = tree.root.join("usage.db");
+    let mut store = SqliteUsageStore::open(&database).unwrap();
+    let notices = vec![
+        ParseNotice {
+            code: ParseNoticeCode::IncompleteResponseUsage,
+            count: 2.try_into().unwrap(),
+            line: None,
+        },
+        ParseNotice {
+            code: ParseNoticeCode::UnsupportedResponseAccounting,
+            count: 3.try_into().unwrap(),
+            line: Some(4.try_into().unwrap()),
+        },
+    ];
+    let first = synchronize_sessions_at(
+        &PiSessionDiscovery::new(&root),
+        &NoticeParser(notices.clone()),
+        &mut store,
+        scan_time(1_000),
+    )
+    .unwrap();
+    assert_eq!(first.counts.files_imported, 1);
+    assert_eq!(first.counts.incomplete_files_imported, 0);
+    assert_eq!(first.warnings.len(), 2);
+    assert_eq!(first.warnings[0].path.as_ref(), Some(&path));
+    assert_eq!(
+        first.warnings[0].message,
+        "omitted 2 responses with incomplete usage"
+    );
+    assert_eq!(
+        first.warnings[1].message,
+        "omitted 3 responses with unsupported accounting (first affected line: 4)"
+    );
+    let snapshot = store.usage_snapshot().unwrap();
+
+    let unchanged = synchronize(&root, &mut store, 2_000);
+    assert_eq!(unchanged.counts.files_unchanged, 1);
+    assert_eq!(unchanged.warnings, first.warnings);
+    drop(store);
+    let mut store = SqliteUsageStore::open(&database).unwrap();
+    let reopened = synchronize(&root, &mut store, 3_000);
+    assert_eq!(reopened.counts.files_unchanged, 1);
+    assert_eq!(reopened.warnings, first.warnings);
+    assert_eq!(
+        store.source_states(&"pi".into()).unwrap()[0].notices,
+        notices
+    );
+
+    fs::write(&path, format!("{}{{malformed}}\n", header("partial", None))).unwrap();
+    let failed = synchronize(&root, &mut store, 4_000);
+    assert_eq!(failed.counts.files_failed, 1);
+    assert_eq!(failed.warnings.len(), 3);
+    assert!(
+        first
+            .warnings
+            .iter()
+            .all(|warning| failed.warnings.contains(warning))
+    );
+    assert_eq!(store.usage_snapshot().unwrap(), snapshot);
+    assert_eq!(
+        store.source_states(&"pi".into()).unwrap()[0].notices,
+        notices
+    );
+
+    let moved = tree.root.join("unavailable");
+    fs::rename(&root, &moved).unwrap();
+    fs::write(&root, b"temporarily not a directory").unwrap();
+    let inaccessible = synchronize(&root, &mut store, 5_000);
+    assert_eq!(inaccessible.counts.files_discovered, 0);
+    assert!(
+        first
+            .warnings
+            .iter()
+            .all(|warning| inaccessible.warnings.contains(warning))
+    );
+    assert!(store.source_states(&"pi".into()).unwrap()[0].present);
+    fs::remove_file(&root).unwrap();
+    fs::rename(&moved, &root).unwrap();
+
+    fs::remove_file(&path).unwrap();
+    let missing = synchronize(&root, &mut store, 6_000);
+    assert_eq!(missing.warnings, first.warnings);
+    assert!(!store.source_states(&"pi".into()).unwrap()[0].present);
+    assert_eq!(store.usage_snapshot().unwrap(), snapshot);
+
+    fs::write(&path, session("partial", None, &[("final-response", 999)])).unwrap();
+    let replaced = synchronize(&root, &mut store, 7_000);
+    assert_eq!(replaced.counts.files_imported, 1);
+    assert_eq!(replaced.counts.observations_updated, 1);
+    assert!(replaced.warnings.is_empty());
+    drop(store);
+    let mut store = SqliteUsageStore::open(&database).unwrap();
+    assert!(
+        store.source_states(&"pi".into()).unwrap()[0]
+            .notices
+            .is_empty()
+    );
+    let unchanged = synchronize(&root, &mut store, 8_000);
+    assert_eq!(unchanged.counts.files_unchanged, 1);
+    assert!(unchanged.warnings.is_empty());
+}
+
+#[test]
+fn truncated_tail_notice_counts_tails_and_still_retries_incomplete_files() {
+    let tree = TempTree::new();
+    let path = tree.root.join("session.jsonl");
+    fs::write(
+        &path,
+        format!("{}{{\"type\":", session("partial", None, &[("final", 10)])),
+    )
+    .unwrap();
+    let parser = NoticeParser(vec![ParseNotice {
+        code: ParseNoticeCode::TruncatedTail,
+        count: 1.try_into().unwrap(),
+        line: Some(3.try_into().unwrap()),
+    }]);
+    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    for time in [1_000, 2_000] {
+        let report = synchronize_sessions_at(
+            &PiSessionDiscovery::new(&tree.root),
+            &parser,
+            &mut store,
+            scan_time(time),
+        )
+        .unwrap();
+        assert_eq!(report.counts.files_imported, 1);
+        assert_eq!(report.counts.incomplete_files_imported, 1);
+        assert_eq!(report.warnings.len(), 1);
+        assert_eq!(
+            report.warnings[0].message,
+            "omitted 1 truncated JSON tail; usage may be missing (first affected line: 3)"
+        );
+    }
 }
 
 #[test]

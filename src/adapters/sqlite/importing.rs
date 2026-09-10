@@ -1,6 +1,6 @@
 use super::{
     SqliteStoreError, attribution_parts, completion_to_str, encode_parent, encode_path, encode_u64,
-    pricing_context, system_time_to_parts, usage_kind_to_str,
+    parse_notices, pricing_context, system_time_to_parts, usage_kind_to_str,
 };
 use crate::application::SessionImport;
 use crate::core::{RecordedCost, UsageEvent};
@@ -21,6 +21,7 @@ pub(super) fn upsert_imported_source(
     let (modified_seconds, modified_nanos) =
         system_time_to_parts(import.source.revision.modified_at)?;
     let size = encode_u64(import.source.revision.size);
+    let notices = parse_notices::encode(&import.parsed.notices)?;
 
     transaction.execute(
         "INSERT INTO sources (
@@ -31,10 +32,10 @@ pub(super) fn upsert_imported_source(
             last_imported_size, last_imported_modified_seconds,
             last_imported_modified_nanos,
             last_discovery_scan_ms, last_successful_scan_ms,
-            last_parse_completion, present, parent_kind
+            last_parse_completion, present, parent_kind, parse_notices
          ) VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-            ?9, ?10, ?11, ?9, ?10, ?11, ?12, ?12, ?13, 1, ?14
+            ?9, ?10, ?11, ?9, ?10, ?11, ?12, ?12, ?13, 1, ?14, ?15
          )
          ON CONFLICT(agent, path) DO UPDATE SET
             agent = excluded.agent,
@@ -65,6 +66,7 @@ pub(super) fn upsert_imported_source(
             ),
             last_successful_scan_ms = excluded.last_successful_scan_ms,
             last_parse_completion = excluded.last_parse_completion,
+            parse_notices = excluded.parse_notices,
             present = CASE
                 WHEN excluded.last_discovery_scan_ms >= sources.last_discovery_scan_ms
                 THEN 1 ELSE sources.present END",
@@ -83,6 +85,7 @@ pub(super) fn upsert_imported_source(
             import.scanned_at.as_unix_milliseconds(),
             completion_to_str(import.parsed.completion),
             parent_kind,
+            notices,
         ],
     )?;
 

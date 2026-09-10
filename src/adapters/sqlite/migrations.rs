@@ -1,7 +1,7 @@
 use super::SqliteStoreError;
 use rusqlite::Connection;
 
-const MIGRATIONS: &[&str] = &[include_str!("schema_v1.sql")];
+const MIGRATIONS: &[&str] = &[include_str!("schema_v1.sql"), include_str!("schema_v2.sql")];
 pub(super) const SCHEMA_VERSION: i64 = MIGRATIONS.len() as i64;
 
 pub(super) fn migrate(connection: &mut Connection) -> Result<(), SqliteStoreError> {

@@ -1,5 +1,6 @@
 mod importing;
 mod migrations;
+mod parse_notices;
 mod pricing_context;
 mod reading;
 #[cfg(test)]
@@ -126,7 +127,7 @@ impl UsageStore for SqliteUsageStore {
                     last_observed_modified_nanos,
                     last_imported_size, last_imported_modified_seconds,
                     last_imported_modified_nanos,
-                    last_successful_scan_ms, last_parse_completion, present
+                    last_successful_scan_ms, last_parse_completion, present, parse_notices
                FROM sources
               WHERE agent = ?1
               ORDER BY path",
@@ -279,6 +280,8 @@ fn source_state_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SourceStat
         last_imported_revision,
         last_successful_scan,
         last_parse_completion,
+        notices: parse_notices::decode(&row.get::<_, String>(10)?)
+            .map_err(to_sql_conversion_error)?,
         present,
     })
 }

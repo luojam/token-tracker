@@ -1,3 +1,4 @@
+mod parse_notices;
 mod pricing;
 
 use super::*;
@@ -76,6 +77,7 @@ fn session_import(path: &str, input_tokens: u64) -> SessionImport {
                 pricing_context: None,
             }],
             completion: ParseCompletion::Complete,
+            notices: Vec::new(),
         },
     }
 }

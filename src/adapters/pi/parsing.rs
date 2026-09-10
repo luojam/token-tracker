@@ -127,6 +127,7 @@ impl SessionParser for PiSessionParser {
             metadata,
             events,
             completion,
+            notices: Vec::new(),
         })
     }
 }

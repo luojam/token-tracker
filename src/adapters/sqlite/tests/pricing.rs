@@ -14,20 +14,20 @@ fn context() -> PricingContext {
     }
 }
 
-fn assert_version_one(store: &SqliteUsageStore) {
+fn assert_current_version(store: &SqliteUsageStore) {
     assert_eq!(
         store
             .connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        1
+        migrations::SCHEMA_VERSION
     );
 }
 
 #[test]
 fn fresh_database_includes_pricing_columns_and_keeps_pi_context_absent() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
-    assert_version_one(&store);
+    assert_current_version(&store);
     let import = session_import("/sessions/pi.jsonl", 10);
     store.commit_import(&import).unwrap();
     let snapshot = store.usage_snapshot().unwrap();

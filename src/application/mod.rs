@@ -14,6 +14,7 @@ pub use workflow::{AllTimeReportError, ImportAdapter, SessionAdapter, run_all_ti
 
 use std::error::Error;
 use std::io::BufRead;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -65,11 +66,30 @@ pub enum ParseCompletion {
     IncompleteFinalLine,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParseNoticeCode {
+    IncompleteResponseUsage,
+    UnsupportedResponseAccounting,
+    TruncatedTail,
+}
+
+/// One counted reason per source. Counts refer to responses, except truncated tails.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParseNotice {
+    pub code: ParseNoticeCode,
+    pub count: NonZeroU64,
+    /// Optional first affected line, one-based.
+    pub line: Option<NonZeroU64>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ParsedSession {
     pub metadata: SessionMetadata,
     pub events: Vec<UsageEvent>,
     pub completion: ParseCompletion,
+    pub notices: Vec<ParseNotice>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -98,6 +118,7 @@ pub struct SourceState {
     pub last_imported_revision: Option<FileRevision>,
     pub last_successful_scan: Option<Timestamp>,
     pub last_parse_completion: Option<ParseCompletion>,
+    pub notices: Vec<ParseNotice>,
     pub present: bool,
 }
 

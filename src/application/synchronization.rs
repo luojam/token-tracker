@@ -8,7 +8,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
     CommitImportOutcome, DiscoveredSessionFile, ImportStats, ParseCompletion, ParseContext,
-    ParsedSession, SessionDiscovery, SessionImport, SessionParser, SourceState, UsageStore,
+    ParseNotice, ParseNoticeCode, ParsedSession, SessionDiscovery, SessionImport, SessionParser,
+    SourceState, UsageStore,
 };
 use crate::core::Timestamp;
 
@@ -203,12 +204,48 @@ where
         }
     }
 
+    let retained_states =
+        store
+            .source_states(&agent)
+            .map_err(|source| ImportSynchronizationError::Storage {
+                operation: "loading retained parse notices",
+                source: Box::new(source),
+            })?;
+    for state in retained_states {
+        for notice in state.notices {
+            report.warnings.push(ImportWarning {
+                path: Some(state.path.clone()),
+                message: notice_message(&notice),
+            });
+        }
+    }
+
     report.warnings.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
             .then_with(|| left.message.cmp(&right.message))
     });
     Ok(report)
+}
+
+fn notice_message(notice: &ParseNotice) -> String {
+    let count = notice.count.get();
+    let plural = if count == 1 { "" } else { "s" };
+    let mut message = match notice.code {
+        ParseNoticeCode::IncompleteResponseUsage => {
+            format!("omitted {count} response{plural} with incomplete usage")
+        }
+        ParseNoticeCode::UnsupportedResponseAccounting => {
+            format!("omitted {count} response{plural} with unsupported accounting")
+        }
+        ParseNoticeCode::TruncatedTail => {
+            format!("omitted {count} truncated JSON tail{plural}; usage may be missing")
+        }
+    };
+    if let Some(line) = notice.line {
+        message.push_str(&format!(" (first affected line: {line})"));
+    }
+    message
 }
 
 fn source_is_unchanged(state: &SourceState, discovered: &DiscoveredSessionFile) -> bool {
@@ -236,7 +273,7 @@ fn load_stable_session<P: SessionParser>(
 
     for _ in 0..STABLE_READ_ATTEMPTS {
         match load_session_once(path, parser) {
-            LoadAttempt::Stable(result) => return result,
+            LoadAttempt::Stable(result) => return *result,
             LoadAttempt::Retry(error) => last_retry = error,
         }
     }
@@ -284,7 +321,7 @@ fn load_session_once<P: SessionParser>(path: &Path, parser: &P) -> LoadAttempt {
         return LoadAttempt::Retry(SourceLoadError::ChangedDuringRead);
     }
 
-    LoadAttempt::Stable(parsed.map(|parsed| (parsed, revision)))
+    LoadAttempt::Stable(Box::new(parsed.map(|parsed| (parsed, revision))))
 }
 
 fn revision_from_metadata(metadata: &Metadata) -> io::Result<super::FileRevision> {
@@ -306,7 +343,7 @@ fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
 }
 
 enum LoadAttempt {
-    Stable(Result<(ParsedSession, super::FileRevision), SourceLoadError>),
+    Stable(Box<Result<(ParsedSession, super::FileRevision), SourceLoadError>>),
     Retry(SourceLoadError),
 }
 
