@@ -188,3 +188,25 @@ fn distinguishes_an_incomplete_final_line_from_a_malformed_complete_line() {
     assert_eq!(parsed.completion, ParseCompletion::IncompleteFinalLine);
     assert_eq!(parsed.events.len(), 1);
 }
+
+#[test]
+fn validates_json_before_interpreting_headers_and_records() {
+    let original = ALL_USAGE.trim_end();
+    let expected = parse(original).unwrap();
+    let tail = r#"{"type":"future","ignored":1e+"#;
+    assert!(matches!(parse(tail), Err(PiParseError::IncompleteHeader)));
+    let parsed = parse(&format!("{original}\n{tail}")).unwrap();
+    assert_eq!(parsed.events, expected.events);
+    assert_eq!(parsed.metadata, expected.metadata);
+    assert_eq!(parsed.completion, ParseCompletion::IncompleteFinalLine);
+    let malformed = r#"{"type":"future","ignored":"\uX"#;
+    assert!(matches!(
+        parse(malformed),
+        Err(PiParseError::MalformedLine { line: 1 })
+    ));
+    let line_number = original.lines().count() + 1;
+    assert!(matches!(
+        parse(&format!("{original}\n{malformed}")),
+        Err(PiParseError::MalformedLine { line }) if line == line_number
+    ));
+}

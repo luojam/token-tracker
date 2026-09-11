@@ -1,5 +1,6 @@
 use super::CLAUDE_AGENT_ID;
 use super::discovery::{is_agent_id, is_session_id};
+use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
 use crate::application::{
     ParseCompletion, ParseContext, ParseNotice, ParsedSession, SessionParser,
 };
@@ -9,13 +10,13 @@ use crate::domain::{
     UsageEvent, UsageEventIdentity, UsageKind,
 };
 use chrono::DateTime;
-use serde::{Deserialize, de::IgnoredAny};
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::io::{self, BufRead};
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::{error::Error, ffi::OsStr, fmt, str};
+use std::{error::Error, ffi::OsStr, fmt};
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ClaudeSessionParser;
@@ -42,22 +43,16 @@ impl SessionParser for ClaudeSessionParser {
         let mut responses = BTreeMap::<String, Response>::new();
         let mut notices = Vec::new();
         let mut completion = ParseCompletion::Complete;
-        let mut bytes = Vec::new();
-        let mut line = 0;
+        let mut lines = JsonlReader::new(input);
         loop {
-            line += 1;
-            bytes.clear();
-            if input
-                .read_until(b'\n', &mut bytes)
-                .map_err(|source| ClaudeParseError::Io { line, source })?
-                == 0
-            {
-                break;
-            }
-            let Some(text) = complete_line(&bytes, line)? else {
-                completion = ParseCompletion::IncompleteFinalLine;
-                add_notice(&mut notices, ParseNoticeCode::TruncatedTail, line)?;
-                break;
+            let (line, text) = match lines.next_line()? {
+                JsonlLine::Complete { number, text } => (number, text),
+                JsonlLine::Incomplete { number } => {
+                    completion = ParseCompletion::IncompleteFinalLine;
+                    add_notice(&mut notices, ParseNoticeCode::TruncatedTail, number)?;
+                    break;
+                }
+                JsonlLine::Eof => break,
             };
             let record: Record = serde_json::from_str(text).map_err(|_| invalid(line, "record"))?;
             let timestamp = metadata.observe(&record, line)?;
@@ -112,57 +107,6 @@ impl SessionParser for ClaudeSessionParser {
             notices,
         })
     }
-}
-
-fn complete_line(bytes: &[u8], line: usize) -> Result<Option<&str>, ClaudeParseError> {
-    let terminated = bytes.ends_with(b"\n");
-    let text = match str::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(error) if !terminated && error.error_len().is_none() => {
-            let prefix = str::from_utf8(&bytes[..error.valid_up_to()]).unwrap();
-            if serde_json::from_str::<IgnoredAny>(&format!("{prefix}\u{fffd}"))
-                .is_err_and(|error| error.is_eof())
-                && valid_unicode_escape_prefixes(bytes)
-            {
-                return Ok(None);
-            }
-            return Err(ClaudeParseError::InvalidUtf8 { line });
-        }
-        Err(_) => return Err(ClaudeParseError::InvalidUtf8 { line }),
-    };
-    match serde_json::from_str::<IgnoredAny>(text) {
-        Ok(_) => Ok(Some(text)),
-        Err(error) if !terminated && error.is_eof() && valid_unicode_escape_prefixes(bytes) => {
-            Ok(None)
-        }
-        Err(_) if !terminated && text.ends_with(['.', 'e', 'E', '+', '-']) => {
-            // Appending a digit distinguishes a truncated number from invalid syntax.
-            match serde_json::from_str::<IgnoredAny>(&format!("{text}0")) {
-                Ok(_) => Ok(None),
-                Err(error) if error.is_eof() && valid_unicode_escape_prefixes(bytes) => Ok(None),
-                Err(_) => Err(ClaudeParseError::MalformedLine { line }),
-            }
-        }
-        Err(_) => Err(ClaudeParseError::MalformedLine { line }),
-    }
-}
-
-fn valid_unicode_escape_prefixes(bytes: &[u8]) -> bool {
-    // serde_json reports EOF before validating partial Unicode escapes.
-    let mut bytes = bytes.iter();
-    let mut in_string = false;
-    while let Some(&byte) = bytes.next() {
-        if byte == b'"' {
-            in_string = !in_string;
-        } else if in_string
-            && byte == b'\\'
-            && bytes.next() == Some(&b'u')
-            && !bytes.by_ref().take(4).all(u8::is_ascii_hexdigit)
-        {
-            return false;
-        }
-    }
-    true
 }
 
 #[derive(Deserialize)]
@@ -659,6 +603,16 @@ impl Error for ClaudeParseError {
         match self {
             Self::Io { source, .. } => Some(source),
             _ => None,
+        }
+    }
+}
+
+impl From<JsonlError> for ClaudeParseError {
+    fn from(error: JsonlError) -> Self {
+        match error {
+            JsonlError::MalformedLine { line } => Self::MalformedLine { line },
+            JsonlError::InvalidUtf8 { line } => Self::InvalidUtf8 { line },
+            JsonlError::Io { line, source } => Self::Io { line, source },
         }
     }
 }

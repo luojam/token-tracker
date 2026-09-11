@@ -1,17 +1,18 @@
 use super::CODEX_AGENT_ID;
+use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
 use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
 use crate::domain::{
     AgentId, CacheDetail, ParentSession, RequestGranularity, SessionMetadata, Timestamp,
     TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
 use chrono::DateTime;
-use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, Visitor, value::MapAccessDeserializer};
+use serde::de::{DeserializeOwned, MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeMap;
 use std::io::{self, BufRead};
 use std::marker::PhantomData;
 use std::path::PathBuf;
-use std::{error::Error, fmt, str};
+use std::{error::Error, fmt};
 
 mod context;
 mod legacy;
@@ -44,31 +45,21 @@ impl SessionParser for CodexSessionParser {
         input: &mut dyn BufRead,
         _context: ParseContext<'_>,
     ) -> Result<ParsedSession, Self::Error> {
-        let mut line = Vec::new();
-        let mut line_number = 0;
+        let mut lines = JsonlReader::new(input);
         let mut session: Option<SessionState> = None;
         let mut completion = ParseCompletion::Complete;
 
         loop {
-            line.clear();
-            line_number += 1;
-            if input
-                .read_until(b'\n', &mut line)
-                .map_err(|error| CodexParseError::Io {
-                    line: line_number,
-                    kind: error.kind(),
-                })?
-                == 0
-            {
-                break;
-            }
-
-            let Some(text) = complete_line(&line, line_number)? else {
-                if session.is_none() {
-                    return Err(CodexParseError::IncompleteHeader);
+            let (line_number, text) = match lines.next_line()? {
+                JsonlLine::Complete { number, text } => (number, text),
+                JsonlLine::Incomplete { .. } => {
+                    if session.is_none() {
+                        return Err(CodexParseError::IncompleteHeader);
+                    }
+                    completion = ParseCompletion::IncompleteFinalLine;
+                    break;
                 }
-                completion = ParseCompletion::IncompleteFinalLine;
-                break;
+                JsonlLine::Eof => break,
             };
             let entry: TypeWire = decode(text, line_number, "type")?;
             if entry.entry_type == "session_meta" {
@@ -110,55 +101,6 @@ impl SessionParser for CodexSessionParser {
             notices: Vec::new(),
         })
     }
-}
-
-fn complete_line(bytes: &[u8], line: usize) -> Result<Option<&str>, CodexParseError> {
-    let terminated = bytes.ends_with(b"\n");
-    let text = match str::from_utf8(bytes) {
-        Ok(text) => text,
-        Err(error) if !terminated && error.error_len().is_none() => {
-            return match serde_json::from_slice::<IgnoredAny>(bytes) {
-                Err(error) if error.is_eof() && valid_unicode_escape_prefixes(bytes) => Ok(None),
-                _ => Err(CodexParseError::MalformedLine { line }),
-            };
-        }
-        Err(_) => return Err(CodexParseError::InvalidUtf8 { line }),
-    };
-
-    // Check syntax independently of field types, including ignored content.
-    match serde_json::from_str::<IgnoredAny>(text) {
-        Ok(_) => Ok(Some(text)),
-        Err(error) if !terminated && error.is_eof() && valid_unicode_escape_prefixes(bytes) => {
-            Ok(None)
-        }
-        Err(_) if !terminated && text.ends_with(['.', 'e', 'E', '+', '-']) => {
-            // Appending a digit distinguishes a truncated number from invalid syntax.
-            match serde_json::from_str::<IgnoredAny>(&format!("{text}0")) {
-                Ok(_) => Ok(None),
-                Err(error) if error.is_eof() && valid_unicode_escape_prefixes(bytes) => Ok(None),
-                Err(_) => Err(CodexParseError::MalformedLine { line }),
-            }
-        }
-        Err(_) => Err(CodexParseError::MalformedLine { line }),
-    }
-}
-
-fn valid_unicode_escape_prefixes(bytes: &[u8]) -> bool {
-    // serde_json reports EOF before validating partial Unicode escapes.
-    let mut bytes = bytes.iter();
-    let mut in_string = false;
-    while let Some(&byte) = bytes.next() {
-        if byte == b'"' {
-            in_string = !in_string;
-        } else if in_string
-            && byte == b'\\'
-            && bytes.next() == Some(&b'u')
-            && !bytes.by_ref().take(4).all(u8::is_ascii_hexdigit)
-        {
-            return false;
-        }
-    }
-    true
 }
 
 fn decode<T: DeserializeOwned>(
@@ -816,3 +758,16 @@ impl fmt::Display for CodexParseError {
 }
 
 impl Error for CodexParseError {}
+
+impl From<JsonlError> for CodexParseError {
+    fn from(error: JsonlError) -> Self {
+        match error {
+            JsonlError::MalformedLine { line } => Self::MalformedLine { line },
+            JsonlError::InvalidUtf8 { line } => Self::InvalidUtf8 { line },
+            JsonlError::Io { line, source } => Self::Io {
+                line,
+                kind: source.kind(),
+            },
+        }
+    }
+}

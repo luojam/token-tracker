@@ -1,4 +1,5 @@
 use super::PI_AGENT_ID;
+use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
 use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
 use crate::domain::{
     AgentId, InvalidRecordedCost, ModelAttribution, ParentSession, RecordedCost, SessionMetadata,
@@ -8,7 +9,7 @@ use chrono::DateTime;
 use serde::{Deserialize, de::IgnoredAny};
 use std::io::{self, BufRead};
 use std::path::PathBuf;
-use std::{error::Error, fmt, str};
+use std::{error::Error, fmt};
 
 const SUPPORTED_SESSION_VERSION: u32 = 3;
 
@@ -33,30 +34,14 @@ impl SessionParser for PiSessionParser {
         input: &mut dyn BufRead,
         _context: ParseContext<'_>,
     ) -> Result<ParsedSession, Self::Error> {
-        let mut line = Vec::new();
-        let bytes_read = input
-            .read_until(b'\n', &mut line)
-            .map_err(|source| PiParseError::Io { line: 1, source })?;
-
-        if bytes_read == 0 {
-            return Err(PiParseError::MissingHeader);
-        }
-
-        let terminated = line.ends_with(b"\n");
-        let header_line = match str::from_utf8(&line) {
-            Ok(line) => line,
-            Err(source) if !terminated && source.error_len().is_none() => {
-                return Err(PiParseError::IncompleteHeader);
-            }
-            Err(_) => return Err(PiParseError::InvalidUtf8 { line: 1 }),
+        let mut lines = JsonlReader::new(input);
+        let header_line = match lines.next_line()? {
+            JsonlLine::Complete { text, .. } => text,
+            JsonlLine::Incomplete { .. } => return Err(PiParseError::IncompleteHeader),
+            JsonlLine::Eof => return Err(PiParseError::MissingHeader),
         };
-        let header: HeaderWire = match serde_json::from_str(header_line) {
-            Ok(header) => header,
-            Err(source) if !terminated && source.is_eof() => {
-                return Err(PiParseError::IncompleteHeader);
-            }
-            Err(_) => return Err(PiParseError::MalformedLine { line: 1 }),
-        };
+        let header: HeaderWire = serde_json::from_str(header_line)
+            .map_err(|_| PiParseError::MalformedLine { line: 1 })?;
 
         if header.entry_type != "session" {
             return Err(PiParseError::InvalidHeader);
@@ -89,42 +74,19 @@ impl SessionParser for PiSessionParser {
                 .map(|path| ParentSession::SourcePath(path.into())),
         };
         let mut events = Vec::new();
-        let mut line_number = 1;
         let mut completion = ParseCompletion::Complete;
 
         loop {
-            line.clear();
-            line_number += 1;
-            let bytes_read =
-                input
-                    .read_until(b'\n', &mut line)
-                    .map_err(|source| PiParseError::Io {
-                        line: line_number,
-                        source,
-                    })?;
-
-            if bytes_read == 0 {
-                break;
-            }
-
-            let terminated = line.ends_with(b"\n");
-            let entry_line = match str::from_utf8(&line) {
-                Ok(line) => line,
-                Err(source) if !terminated && source.error_len().is_none() => {
+            let (line_number, text) = match lines.next_line()? {
+                JsonlLine::Complete { number, text } => (number, text),
+                JsonlLine::Incomplete { .. } => {
                     completion = ParseCompletion::IncompleteFinalLine;
                     break;
                 }
-                Err(_) => return Err(PiParseError::InvalidUtf8 { line: line_number }),
+                JsonlLine::Eof => break,
             };
-
-            match parse_entry_line(entry_line, &mut metadata, &mut events) {
-                Ok(()) => {}
-                Err(EntryError::Json(source)) if !terminated && source.is_eof() => {
-                    completion = ParseCompletion::IncompleteFinalLine;
-                    break;
-                }
-                Err(error) => return Err(error.into_parse_error(line_number)),
-            }
+            parse_entry_line(text, &mut metadata, &mut events)
+                .map_err(|error| error.into_parse_error(line_number))?;
         }
 
         Ok(ParsedSession {
@@ -449,7 +411,7 @@ struct CostWire {
 
 #[derive(Debug)]
 enum EntryError {
-    Json(serde_json::Error),
+    Json,
     InvalidTimestamp(chrono::ParseError),
     InvalidRecordedCost(InvalidRecordedCost),
     InvalidField(&'static str),
@@ -458,7 +420,7 @@ enum EntryError {
 impl EntryError {
     fn into_parse_error(self, line: usize) -> PiParseError {
         match self {
-            Self::Json(_) => PiParseError::MalformedLine { line },
+            Self::Json => PiParseError::MalformedLine { line },
             Self::InvalidTimestamp(source) => PiParseError::InvalidTimestamp { line, source },
             Self::InvalidRecordedCost(source) => PiParseError::InvalidRecordedCost { line, source },
             Self::InvalidField(field) => PiParseError::InvalidField { line, field },
@@ -467,8 +429,8 @@ impl EntryError {
 }
 
 impl From<serde_json::Error> for EntryError {
-    fn from(source: serde_json::Error) -> Self {
-        Self::Json(source)
+    fn from(_: serde_json::Error) -> Self {
+        Self::Json
     }
 }
 
@@ -481,5 +443,15 @@ impl From<chrono::ParseError> for EntryError {
 impl From<InvalidRecordedCost> for EntryError {
     fn from(source: InvalidRecordedCost) -> Self {
         Self::InvalidRecordedCost(source)
+    }
+}
+
+impl From<JsonlError> for PiParseError {
+    fn from(error: JsonlError) -> Self {
+        match error {
+            JsonlError::MalformedLine { line } => Self::MalformedLine { line },
+            JsonlError::InvalidUtf8 { line } => Self::InvalidUtf8 { line },
+            JsonlError::Io { line, source } => Self::Io { line, source },
+        }
     }
 }
