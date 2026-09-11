@@ -1,11 +1,9 @@
 use super::CODEX_AGENT_ID;
-use crate::application::{
-    DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, DiscoveryWarning, FileRevision,
-    SessionDiscovery,
-};
+use crate::adapters::discovery::{self, RecursiveLayout};
+use crate::application::{DiscoveryReport, SessionDiscovery};
 use crate::domain::AgentId;
 use std::path::{Component, Path, PathBuf};
-use std::{env, error::Error, ffi::OsStr, fmt, fs, io};
+use std::{env, error::Error, ffi::OsStr, fmt, io};
 
 pub fn default_session_roots() -> Result<Vec<PathBuf>, CodexDiscoveryError> {
     default_session_roots_from(
@@ -76,35 +74,10 @@ impl SessionDiscovery for CodexSessionDiscovery {
             }
         }
 
-        let mut report = DiscoveryReport {
-            files: Vec::new(),
-            warnings: Vec::new(),
-            coverage: DiscoveryCoverage {
-                inspected_roots: Vec::new(),
-                inaccessible_paths: Vec::new(),
-            },
-        };
-        for root in distinct_roots {
-            let mut pending = vec![root.clone()];
-            while let Some(directory) = pending.pop() {
-                let inspected = scan_directory(&directory, &mut pending, &mut report);
-                if directory == root && inspected {
-                    report.coverage.inspected_roots.push(root.clone());
-                }
-            }
-        }
-
-        report
-            .files
-            .sort_by(|left, right| left.path.cmp(&right.path));
-        report.coverage.inaccessible_paths.sort_unstable();
-        report.coverage.inaccessible_paths.dedup();
-        report.warnings.sort_by(|left, right| {
-            left.path
-                .cmp(&right.path)
-                .then_with(|| left.message.cmp(&right.message))
-        });
-        Ok(report)
+        Ok(discovery::discover(
+            distinct_roots,
+            RecursiveLayout(is_rollout),
+        ))
     }
 }
 
@@ -117,135 +90,11 @@ fn absolute_root(root: &Path) -> Result<PathBuf, CodexDiscoveryError> {
         .map_err(|source| CodexDiscoveryError::SessionRootResolution { source })
 }
 
-// False prevents marking retained sources under this directory as missing.
-fn scan_directory(
-    directory: &Path,
-    pending: &mut Vec<PathBuf>,
-    report: &mut DiscoveryReport,
-) -> bool {
-    match fs::symlink_metadata(directory) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            record_inaccessible(
-                report,
-                directory,
-                "directory symlinks are not inspected".into(),
-            );
-            return false;
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return true,
-        Err(error) => {
-            record_inaccessible(
-                report,
-                directory,
-                format!("could not inspect directory: {error}"),
-            );
-            return false;
-        }
-    }
-    let entries = match fs::read_dir(directory) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return true,
-        Err(error) => {
-            record_inaccessible(
-                report,
-                directory,
-                format!("could not read directory: {error}"),
-            );
-            return false;
-        }
-    };
-
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                record_inaccessible(
-                    report,
-                    directory,
-                    format!("could not read directory entry: {error}"),
-                );
-                continue;
-            }
-        };
-        let path = entry.path();
-        let file_type = match entry.file_type() {
-            Ok(file_type) => file_type,
-            Err(error) => {
-                record_inaccessible(report, &path, format!("could not inspect path: {error}"));
-                continue;
-            }
-        };
-        if file_type.is_dir() {
-            pending.push(path);
-            continue;
-        }
-        let candidate = is_rollout(&path);
-        if !candidate && !file_type.is_symlink() {
-            continue;
-        }
-        let metadata = match fs::metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                if candidate {
-                    record_inaccessible(
-                        report,
-                        &path,
-                        format!("could not read file metadata: {error}"),
-                    );
-                } else {
-                    // An unresolved link could have been a directory in a prior scan.
-                    record_inaccessible(
-                        report,
-                        &path,
-                        format!("could not inspect symlink target: {error}"),
-                    );
-                }
-                continue;
-            }
-        };
-        if metadata.is_dir() {
-            record_inaccessible(report, &path, "directory symlinks are not inspected".into());
-            continue;
-        }
-        if !candidate || !metadata.is_file() {
-            continue;
-        }
-        let modified_at = match metadata.modified() {
-            Ok(modified_at) => modified_at,
-            Err(error) => {
-                record_inaccessible(
-                    report,
-                    &path,
-                    format!("could not read modification time: {error}"),
-                );
-                continue;
-            }
-        };
-        report.files.push(DiscoveredSessionFile {
-            path,
-            revision: FileRevision {
-                size: metadata.len(),
-                modified_at,
-            },
-        });
-    }
-    true
-}
-
 fn is_rollout(path: &Path) -> bool {
     path.extension() == Some(OsStr::new("jsonl"))
         && path
             .file_name()
             .is_some_and(|name| name.as_encoded_bytes().starts_with(b"rollout-"))
-}
-
-fn record_inaccessible(report: &mut DiscoveryReport, path: &Path, message: String) {
-    report.coverage.inaccessible_paths.push(path.to_owned());
-    report.warnings.push(DiscoveryWarning {
-        path: Some(path.to_owned()),
-        message,
-    });
 }
 
 #[derive(Debug)]
