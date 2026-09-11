@@ -32,8 +32,8 @@ Supported models include `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`,
 
 Claude Code estimates use bundled API prices.
 
-Supported models are `claude-opus-5` (Standard and Fast), `claude-sonnet-5`, and
-`claude-haiku-4-5-20251001` (Standard).
+Supported models are `claude-opus-5` (Standard and Fast), plus `claude-fable-5`,
+`claude-fable-5-1`, `claude-sonnet-5`, and `claude-haiku-4-5-20251001` (Standard).
 
 ## Local data
 

@@ -1,4 +1,4 @@
-//! Global API token prices, verified 2026-09-10:
+//! Global API token prices, verified 2026-09-11:
 //! - https://platform.claude.com/docs/en/about-claude/pricing
 //! - https://platform.claude.com/docs/en/models/overview
 //!
@@ -9,8 +9,8 @@ use crate::core::{
     EstimatedCost, ModelAttribution, RawServedValue, UsageEstimate, UsageEvent,
 };
 
-pub const SNAPSHOT_ID: &str = "anthropic-api-2026-09-10";
-pub const RATE_DATE: &str = "2026-09-10";
+pub const SNAPSHOT_ID: &str = "anthropic-api-2026-09-11";
+pub const RATE_DATE: &str = "2026-09-11";
 
 /// Integer microdollars per million tokens; count times rate gives picodollars.
 #[derive(Clone, Copy)]
@@ -22,28 +22,39 @@ struct TokenRates {
     cache_write_1h: u64,
 }
 
-const OPUS: TokenRates = TokenRates {
-    input: 5_000_000,
-    output: 25_000_000,
-    cache_read: 500_000,
-    cache_write_5m: 6_250_000,
-    cache_write_1h: 10_000_000,
-};
-const OPUS_FAST: TokenRates = TokenRates {
+const FABLE_5: TokenRates = TokenRates {
     input: 10_000_000,
     output: 50_000_000,
     cache_read: 1_000_000,
     cache_write_5m: 12_500_000,
     cache_write_1h: 20_000_000,
 };
-const SONNET: TokenRates = TokenRates {
+const FABLE_5_1: TokenRates = TokenRates {
+    cache_read: 250_000,
+    ..FABLE_5
+};
+const OPUS_5: TokenRates = TokenRates {
+    input: 5_000_000,
+    output: 25_000_000,
+    cache_read: 500_000,
+    cache_write_5m: 6_250_000,
+    cache_write_1h: 10_000_000,
+};
+const OPUS_5_FAST: TokenRates = TokenRates {
+    input: 10_000_000,
+    output: 50_000_000,
+    cache_read: 1_000_000,
+    cache_write_5m: 12_500_000,
+    cache_write_1h: 20_000_000,
+};
+const SONNET_5: TokenRates = TokenRates {
     input: 2_000_000,
     output: 10_000_000,
     cache_read: 200_000,
     cache_write_5m: 2_500_000,
     cache_write_1h: 4_000_000,
 };
-const HAIKU: TokenRates = TokenRates {
+const HAIKU_4_5: TokenRates = TokenRates {
     input: 1_000_000,
     output: 5_000_000,
     cache_read: 100_000,
@@ -62,9 +73,11 @@ fn lookup_rates(
         return Err(Reason::UnsupportedProvider);
     }
     let standard = match attribution.model.as_str() {
-        "claude-opus-5" => OPUS,
-        "claude-sonnet-5" => SONNET,
-        "claude-haiku-4-5-20251001" => HAIKU,
+        "claude-fable-5" => FABLE_5,
+        "claude-fable-5-1" => FABLE_5_1,
+        "claude-opus-5" => OPUS_5,
+        "claude-sonnet-5" => SONNET_5,
+        "claude-haiku-4-5-20251001" => HAIKU_4_5,
         _ => return Err(Reason::UnsupportedModel),
     };
     match tier {
@@ -76,7 +89,7 @@ fn lookup_rates(
         RawServedValue::Missing | RawServedValue::Null => Err(Reason::UnknownSpeed),
         RawServedValue::Value(value) if value == "standard" => Ok(standard),
         RawServedValue::Value(value) if value == "fast" && attribution.model == "claude-opus-5" => {
-            Ok(OPUS_FAST)
+            Ok(OPUS_5_FAST)
         }
         RawServedValue::Value(_) => Err(Reason::UnsupportedSpeed),
     }
@@ -162,7 +175,7 @@ mod tests {
         let rates = TokenRates {
             input: u64::MAX,
             output: u64::MAX,
-            ..OPUS
+            ..OPUS_5
         };
         let mut component = AnthropicUsageComponent {
             tokens: TokenCounts {

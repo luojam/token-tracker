@@ -101,8 +101,52 @@ fn fixture_costs_include_cache_durations_and_compaction_once() {
 }
 
 #[test]
+fn fable_transcripts_price_cache_and_compaction() {
+    for (model, cost) in [
+        ("claude-fable-5", 2_323_000_000),
+        ("claude-fable-5-1", 2_242_000_000),
+    ] {
+        let source =
+            include_str!("fixtures/claude/cache-iterations.jsonl").replace("claude-opus-5", model);
+        let parsed = ClaudeSessionParser::new()
+            .parse(
+                &mut Cursor::new(source),
+                ParseContext {
+                    source_path: Path::new("/invented/11111111-1111-4111-8111-111111111111.jsonl"),
+                },
+            )
+            .unwrap();
+        let event = parsed
+            .events
+            .iter()
+            .find(|event| event.identity.adapter_key == "response-v1:msg_compaction")
+            .unwrap();
+        assert_eq!(
+            event.attribution,
+            Some(ModelAttribution {
+                provider: "anthropic".into(),
+                model: model.into(),
+            })
+        );
+        assert_eq!(calculate_estimate(event), expected(cost), "{model}");
+    }
+}
+
+#[test]
 fn bundled_models_use_exact_flat_rates() {
     for (model, speed, oracle, long_input) in [
+        (
+            "claude-fable-5",
+            "standard",
+            1_775_000_000,
+            9_000_000_000_000,
+        ),
+        (
+            "claude-fable-5-1",
+            "standard",
+            1_700_000_000,
+            9_000_000_000_000,
+        ),
         ("claude-opus-5", "standard", 887_500_000, 4_500_000_000_000),
         ("claude-opus-5", "fast", 1_775_000_000, 9_000_000_000_000),
         (
@@ -200,7 +244,12 @@ fn served_evidence_is_required_and_failures_have_stable_precedence() {
         facts(&mut event).speed = speed;
         assert_eq!(calculate_estimate(&event), Err(reason));
     }
-    for model in ["claude-sonnet-5", "claude-haiku-4-5-20251001"] {
+    for model in [
+        "claude-fable-5",
+        "claude-fable-5-1",
+        "claude-sonnet-5",
+        "claude-haiku-4-5-20251001",
+    ] {
         let mut event = event();
         event.attribution.as_mut().unwrap().model = model.into();
         facts(&mut event).speed = served("fast");
