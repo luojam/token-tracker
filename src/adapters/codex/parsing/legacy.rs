@@ -1,8 +1,9 @@
 use super::{
-    CODEX_AGENT_ID, CodexParseError, TokenInfoWire, TokenUsageWire, context::ContextState,
+    CODEX_AGENT_ID, CodexParseError, TokenInfoWire, TokenUsageWire,
+    context::{ContextState, RawServiceTier},
     lifecycle::AccountingTurn,
 };
-use crate::core::{
+use crate::domain::{
     AgentId, CacheDetail, RequestGranularity, ServiceTier, TierEvidence, UsageEvent,
     UsageEventIdentity, UsageKind,
 };
@@ -11,6 +12,7 @@ use std::collections::BTreeMap;
 #[derive(Default)]
 pub(super) struct LegacyUsageState {
     pub(super) events: BTreeMap<String, UsageEvent>,
+    raw_tiers: BTreeMap<String, RawServiceTier>,
     previous_total: Option<TokenUsageWire>,
     checkpoint_before_usage: bool,
 }
@@ -87,12 +89,16 @@ impl LegacyUsageState {
         } else {
             CacheDetail::Incomplete
         };
-        let (attribution, pricing_context) = context.observation(
+        let (attribution, pricing_context, raw_tier) = context.observation(
             &turn.id,
             None,
             RequestGranularity::AggregateOrUnknown,
             cache_detail,
         );
+        let original_tier = self
+            .raw_tiers
+            .entry(turn.id.clone())
+            .or_insert_with(|| raw_tier.clone());
         let event = self
             .events
             .entry(turn.id.clone())
@@ -117,7 +123,7 @@ impl LegacyUsageState {
                 .get_or_insert_with(Vec::new)
                 .push(tokens);
             if existing.tier != pricing_context.tier
-                || existing.raw_tier != pricing_context.raw_tier
+                || *original_tier != raw_tier
                 || existing.tier_evidence != pricing_context.tier_evidence
             {
                 existing.tier = ServiceTier::Unknown;

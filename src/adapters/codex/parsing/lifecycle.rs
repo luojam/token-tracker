@@ -1,5 +1,5 @@
 use super::CodexParseError;
-use crate::core::Timestamp;
+use crate::domain::Timestamp;
 use std::collections::BTreeSet;
 
 #[derive(Default)]
@@ -36,7 +36,7 @@ pub(super) enum ReviewBoundary {
 }
 
 impl TurnLifecycle {
-    /// Only accounting boundaries may start or clear the pricing context.
+    /// Returns whether the boundary should update pricing context.
     pub(super) fn accept_boundary(
         &mut self,
         boundary: &str,
@@ -107,7 +107,7 @@ impl TurnLifecycle {
                 if self.active.is_some() || !self.started_turns.insert(turn_id.clone()) {
                     return Err(invalid());
                 }
-                // Review has no parent task_started; child starts are presentation events.
+                // Review entry starts the parent turn; forwarded child starts do not.
                 self.active = Some(ActiveTurn::Review(ReviewTurn {
                     id: turn_id,
                     thread_id,

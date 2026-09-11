@@ -1,15 +1,23 @@
-mod anthropic;
+mod billing;
 mod parse_notices;
-mod pricing;
 
+use super::paths::default_database_path_from;
 use super::*;
 use crate::application::{
     DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, ParsedSession,
 };
-use crate::core::{
+use crate::application::{FileRevision, ParseCompletion};
+use crate::domain::{
     AgentId, ModelAttribution, RecordedCost, SessionMetadata, TokenCounts, UsageEventIdentity,
 };
+use crate::domain::{ParentSession, UsageEvent, UsageKind};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    env,
+    ffi::OsStr,
+    path::PathBuf,
+    time::{Duration, UNIX_EPOCH},
+};
 
 static NEXT_TEMP_DATABASE: AtomicU64 = AtomicU64::new(0);
 
@@ -39,6 +47,7 @@ impl Drop for TempDatabase {
 
 fn session_import(path: &str, input_tokens: u64) -> SessionImport {
     SessionImport {
+        normalization_version: 1,
         source: DiscoveredSessionFile {
             path: PathBuf::from(path),
             revision: FileRevision {
@@ -51,7 +60,7 @@ fn session_import(path: &str, input_tokens: u64) -> SessionImport {
             metadata: SessionMetadata {
                 agent: AgentId::from("pi"),
                 session_id: format!("session-{path}"),
-                format_version: Some("3".into()),
+
                 working_directory: Some(PathBuf::from("/work/project")),
                 started_at: Timestamp::from_unix_milliseconds(1_700_000_000_000),
                 name: Some("Stored session".into()),
@@ -178,7 +187,7 @@ fn a_newer_session_can_replace_metadata_at_the_same_source_path() {
         .connection
         .query_row(
             "SELECT session_id, working_directory, started_at_ms, name, parent_session
-               FROM sources",
+               FROM sessions WHERE session_id = 'replacement-session'",
             [],
             |row| {
                 Ok((
@@ -204,12 +213,12 @@ fn a_newer_session_can_replace_metadata_at_the_same_source_path() {
     );
     let mut statement = store
         .connection
-        .prepare("SELECT input_tokens FROM source_observations ORDER BY input_tokens")
+        .prepare("SELECT input_tokens FROM usage_observations ORDER BY input_tokens")
         .unwrap();
     let stored_tokens = statement
-        .query_map([], |row| row.get::<_, Vec<u8>>(0))
+        .query_map([], |row| row.get::<_, i64>(0))
         .unwrap()
-        .map(|value| decode_u64(&value.unwrap()).unwrap())
+        .map(|value| decode_u64(value.unwrap()).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(stored_tokens, vec![10, 99]);
 }
@@ -234,17 +243,21 @@ fn a_late_import_from_the_replaced_session_is_ignored() {
 
     let stored_session: String = store
         .connection
-        .query_row("SELECT session_id FROM sources", [], |row| row.get(0))
+        .query_row(
+            "SELECT session_id FROM sessions ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(stored_session, "replacement-session");
     let mut statement = store
         .connection
-        .prepare("SELECT input_tokens FROM source_observations ORDER BY input_tokens")
+        .prepare("SELECT input_tokens FROM usage_observations ORDER BY input_tokens")
         .unwrap();
     let stored_tokens = statement
-        .query_map([], |row| row.get::<_, Vec<u8>>(0))
+        .query_map([], |row| row.get::<_, i64>(0))
         .unwrap()
-        .map(|value| decode_u64(&value.unwrap()).unwrap())
+        .map(|value| decode_u64(value.unwrap()).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(stored_tokens, vec![10, 99]);
 }
@@ -285,7 +298,11 @@ fn a_stale_first_import_cannot_claim_a_newer_discovered_source() {
     );
     let stored_session: String = store
         .connection
-        .query_row("SELECT session_id FROM sources", [], |row| row.get(0))
+        .query_row(
+            "SELECT session_id FROM sessions ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
         .unwrap();
     assert_eq!(stored_session, "current-session");
 }
@@ -345,11 +362,11 @@ fn stale_imports_and_discoveries_do_not_regress_source_state() {
     assert!(!states[0].present);
     let stored_tokens = store
         .connection
-        .query_row("SELECT input_tokens FROM source_observations", [], |row| {
-            row.get::<_, Vec<u8>>(0)
+        .query_row("SELECT input_tokens FROM usage_observations", [], |row| {
+            row.get::<_, i64>(0)
         })
         .unwrap();
-    assert_eq!(decode_u64(&stored_tokens).unwrap(), 99);
+    assert_eq!(decode_u64(stored_tokens).unwrap(), 99);
 }
 
 #[test]
@@ -358,7 +375,7 @@ fn reopening_a_database_preserves_imported_state() {
     {
         let mut store = SqliteUsageStore::open(&database.path).unwrap();
         store
-            .commit_import(&session_import("/sessions/a.jsonl", u64::MAX))
+            .commit_import(&session_import("/sessions/a.jsonl", i64::MAX as u64))
             .unwrap();
     }
 
@@ -374,11 +391,11 @@ fn reopening_a_database_preserves_imported_state() {
 
     let stored_tokens = store
         .connection
-        .query_row("SELECT input_tokens FROM source_observations", [], |row| {
-            row.get::<_, Vec<u8>>(0)
+        .query_row("SELECT input_tokens FROM usage_observations", [], |row| {
+            row.get::<_, i64>(0)
         })
         .unwrap();
-    assert_eq!(decode_u64(&stored_tokens).unwrap(), u64::MAX);
+    assert_eq!(decode_u64(stored_tokens).unwrap(), i64::MAX as u64);
 }
 
 #[test]
@@ -395,16 +412,16 @@ fn different_sources_retain_different_observations_for_one_event() {
         .connection
         .prepare(
             "SELECT o.input_tokens
-               FROM source_observations o
+               FROM usage_observations o
                JOIN usage_events e ON e.id = o.event_id
               WHERE e.agent = 'pi' AND e.adapter_key = 'shared-event'
               ORDER BY o.input_tokens",
         )
         .unwrap();
     let values = statement
-        .query_map([], |row| row.get::<_, Vec<u8>>(0))
+        .query_map([], |row| row.get::<_, i64>(0))
         .unwrap()
-        .map(|value| decode_u64(&value.unwrap()).unwrap())
+        .map(|value| decode_u64(value.unwrap()).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(values, vec![10, 99]);
 }
@@ -430,9 +447,9 @@ fn conflicting_observations_are_order_independent() {
             .connection
             .prepare(
                 "SELECT source.path, session.session_id, observation.input_tokens
-                   FROM source_observations observation
-                   JOIN sources source ON source.id = observation.source_id
-                   JOIN source_sessions session
+                   FROM usage_observations observation
+                   JOIN import_sources source ON source.id = observation.source_id
+                   JOIN sessions session
                      ON session.id = observation.source_session_id
                   ORDER BY source.path",
             )
@@ -440,8 +457,7 @@ fn conflicting_observations_are_order_independent() {
         statement
             .query_map([], |row| {
                 let path = decode_path(row.get(0)?);
-                let tokens =
-                    decode_u64(&row.get::<_, Vec<u8>>(2)?).map_err(to_sql_conversion_error)?;
+                let tokens = decode_u64(row.get::<_, i64>(2)?).map_err(to_sql_conversion_error)?;
                 Ok((path, row.get(1)?, tokens))
             })
             .unwrap()
@@ -469,9 +485,9 @@ fn a_replaced_source_keeps_the_session_provenance_of_absent_observations() {
         .connection
         .prepare(
             "SELECT event.adapter_key, session.session_id
-               FROM source_observations observation
+               FROM usage_observations observation
                JOIN usage_events event ON event.id = observation.event_id
-               JOIN source_sessions session
+               JOIN sessions session
                  ON session.id = observation.source_session_id
               ORDER BY event.adapter_key",
         )
@@ -491,6 +507,30 @@ fn a_replaced_source_keeps_the_session_provenance_of_absent_observations() {
             ("shared-event".into(), "original-session".into()),
         ]
     );
+}
+
+#[test]
+fn normalization_changes_preserve_history_from_rewritten_sources() {
+    for reuse_session in [false, true] {
+        let mut store = SqliteUsageStore::open_in_memory().unwrap();
+        let original = session_import("/sessions/a.jsonl", 10);
+        store.commit_import(&original).unwrap();
+
+        let mut replacement = session_import("/sessions/a.jsonl", 20);
+        if !reuse_session {
+            replacement.parsed.metadata.session_id = "replacement-session".into();
+        }
+        replacement.parsed.events[0].identity.adapter_key = "replacement-event".into();
+        replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
+        store.commit_import(&replacement).unwrap();
+        let before = store.usage_snapshot().unwrap();
+        assert_eq!(before.observations.len(), 2);
+
+        replacement.normalization_version = 2;
+        replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_003_000);
+        store.commit_import(&replacement).unwrap();
+        assert_eq!(store.usage_snapshot().unwrap(), before);
+    }
 }
 
 #[test]
@@ -521,7 +561,7 @@ fn a_missing_source_keeps_its_import_and_observations() {
     assert!(states[0].last_imported_revision.is_some());
     let observations: i64 = store
         .connection
-        .query_row("SELECT count(*) FROM source_observations", [], |row| {
+        .query_row("SELECT count(*) FROM usage_observations", [], |row| {
             row.get(0)
         })
         .unwrap();
@@ -546,7 +586,7 @@ fn commit_failures_roll_back_and_stop_the_report_workflow() {
     let database = TempDatabase::new();
     fs::write(
         database.directory.join("session.jsonl"),
-        include_str!("../../../tests/fixtures/pi/all-usage.jsonl"),
+        include_str!("../../tests/fixtures/pi/all-usage.jsonl"),
     )
     .unwrap();
     let mut store = SqliteUsageStore::open(&database.path).unwrap();
@@ -554,7 +594,7 @@ fn commit_failures_roll_back_and_stop_the_report_workflow() {
     store
         .connection
         .execute_batch(
-            "CREATE TRIGGER reject_observation BEFORE INSERT ON source_observations
+            "CREATE TRIGGER reject_observation BEFORE INSERT ON usage_observations
          BEGIN SELECT RAISE(ABORT, 'storage write failed'); END;",
         )
         .unwrap();

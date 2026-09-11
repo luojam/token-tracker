@@ -1,5 +1,6 @@
-use token_tracker::application::{ImportWarning, render_terminal_report};
-use token_tracker::core::{
+use token_tracker::application::ImportWarning;
+use token_tracker::cli::render_terminal_report;
+use token_tracker::domain::{
     EstimateBreakdown, EstimateSummary, EstimateTotal, EstimateTotals, EstimatedCost,
     ModelAttribution, RecordedCost, ServiceTier, SummaryBreakdown, SummaryGroup, TokenCounts,
     UsageSummary,
@@ -10,8 +11,10 @@ fn summary(cost: EstimateTotal, priced: u64) -> UsageSummary {
         estimates: std::collections::BTreeMap::from([(
             "codex".into(),
             EstimateSummary {
-                snapshot_id: "test-snapshot".into(),
-                rate_date: "2026-09-07".into(),
+                rate_snapshots: std::collections::BTreeMap::from([(
+                    "test-snapshot".into(),
+                    "2026-09-07".into(),
+                )]),
                 totals: EstimateTotals {
                     cost,
                     imported_event_count: 1,

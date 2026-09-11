@@ -8,15 +8,12 @@ use serde_json::{Value, json};
 use token_tracker::adapters::claude::{
     ClaudeParseError, ClaudeSessionDiscovery, ClaudeSessionParser,
 };
-use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{
-    ImportAdapter, ParseCompletion, ParseContext, ParseNoticeCode, ParsedSession, SessionAdapter,
-    SessionParser, UsageReadStore,
+    ImportAdapter, ParseCompletion, ParseContext, ParsedSession, SessionAdapter, SessionParser,
+    UsageReadStore,
 };
-use token_tracker::core::{
-    AnthropicIterationKind, AnthropicUsage, AnthropicUsageComponent, ParentSession, RawServedValue,
-    Timestamp, TokenCounts, UsageKind,
-};
+use token_tracker::domain::{ParentSession, ServiceTier, Timestamp, TokenCounts, UsageKind};
+use token_tracker::storage::SqliteUsageStore;
 
 const SOURCE_PATH: &str =
     "/invented/claude/projects/fixture/11111111-1111-4111-8111-111111111111.jsonl";
@@ -52,22 +49,32 @@ fn tokens(tokens: TokenCounts) -> Value {
     ])
 }
 
-fn served(value: &RawServedValue) -> Value {
-    match value {
-        RawServedValue::Missing => json!({"state": "missing"}),
-        RawServedValue::Null => json!({"state": "null"}),
-        RawServedValue::Value(value) => json!({"state": "value", "value": value}),
+fn expected_billing(event: &Value) -> Value {
+    let facts = &event["pricing_facts"];
+    let tier = |value: &Value, allow_fast: bool| match value["value"].as_str() {
+        None => ServiceTier::Unknown,
+        Some("standard") => ServiceTier::Standard,
+        Some("fast") if allow_fast => ServiceTier::Fast,
+        Some(value) => ServiceTier::Unsupported(value.into()),
+    };
+    let components = facts["components"].as_array().unwrap();
+    let mut durations = BTreeMap::<u32, u64>::new();
+    let mut complete = true;
+    for component in components {
+        if component["cache_creation"].is_null() {
+            complete &= component["tokens"][2] == 0;
+        } else {
+            for (seconds, field) in [(300, "five_minute_tokens"), (3600, "one_hour_tokens")] {
+                *durations.entry(seconds).or_default() +=
+                    component["cache_creation"][field].as_u64().unwrap();
+            }
+        }
     }
-}
-
-fn component(kind: &str, component: &AnthropicUsageComponent) -> Value {
     json!({
-        "kind": kind,
-        "tokens": tokens(component.tokens),
-        "cache_creation": component.cache_creation.map(|cache| json!({
-            "five_minute_tokens": cache.ephemeral_5m,
-            "one_hour_tokens": cache.ephemeral_1h,
-        })),
+        "speed": tier(&facts["speed"], true),
+        "service_tier": tier(&facts["service_tier"], false),
+        "requests": components.iter().map(|component| component["tokens"].clone()).collect::<Vec<_>>(),
+        "cache_writes": complete.then(|| durations.into_iter().map(|(seconds, tokens)| json!({"duration_seconds": seconds, "tokens": tokens})).collect::<Vec<_>>()),
     })
 }
 
@@ -81,23 +88,6 @@ fn check_usage(parsed: &ParsedSession, expected: &Value, name: &str) {
             assert_eq!(event.recorded_cost, None, "{name}");
             let pricing = event.pricing_context.as_ref().unwrap();
             assert!(pricing.usage_matches(event.tokens), "{name}");
-            assert_eq!(pricing.request_usage, None, "{name}");
-            let facts = pricing.anthropic.as_ref().unwrap();
-            let components: Vec<_> = match &facts.usage {
-                AnthropicUsage::Response(usage) => vec![component("top_level", usage)],
-                AnthropicUsage::Iterations(iterations) => iterations
-                    .iter()
-                    .map(|iteration| {
-                        component(
-                            match iteration.kind {
-                                AnthropicIterationKind::Message => "message",
-                                AnthropicIterationKind::Compaction => "compaction",
-                            },
-                            &iteration.usage,
-                        )
-                    })
-                    .collect(),
-            };
             (
                 event.identity.adapter_key.clone(),
                 json!({
@@ -111,9 +101,10 @@ fn check_usage(parsed: &ParsedSession, expected: &Value, name: &str) {
                     "tokens": tokens(event.tokens),
                     "recorded_cost": null,
                     "pricing_facts": {
-                        "speed": served(&facts.speed),
-                        "service_tier": served(&facts.service_tier),
-                        "components": components,
+                        "speed": pricing.speed,
+                        "service_tier": pricing.tier,
+                        "requests": pricing.request_usage.as_ref().unwrap().iter().copied().map(tokens).collect::<Vec<_>>(),
+                        "cache_writes": pricing.cache_writes,
                     },
                 }),
             )
@@ -123,7 +114,11 @@ fn check_usage(parsed: &ParsedSession, expected: &Value, name: &str) {
         .as_array()
         .unwrap()
         .iter()
-        .map(|event| (event["key"].as_str().unwrap().to_owned(), event.clone()))
+        .map(|event| {
+            let mut normalized = event.clone();
+            normalized["pricing_facts"] = expected_billing(event);
+            (event["key"].as_str().unwrap().to_owned(), normalized)
+        })
         .collect();
     assert_eq!(actual, events, "{name}");
     assert_eq!(parsed.events.len(), actual.len(), "{name}");
@@ -133,7 +128,7 @@ fn check_usage(parsed: &ParsedSession, expected: &Value, name: &str) {
         .map(|notice| {
             assert!(notice.line.is_some(), "{name}");
             (
-                serde_json::to_value(notice.code)
+                serde_json::to_value(&notice.code)
                     .unwrap()
                     .as_str()
                     .unwrap()
@@ -202,7 +197,7 @@ fn all_fixtures_match_metadata_accounting_and_error_oracles() {
             json!({
                 "agent": metadata.agent.as_str(),
                 "session_id": metadata.session_id,
-                "format_version": metadata.format_version,
+                "format_version": null,
                 "working_directory": metadata.working_directory,
                 "started_at": time(metadata.started_at),
                 "name": metadata.name,
@@ -272,10 +267,7 @@ fn iteration_models_use_the_model_from_earlier_snapshots() {
     let parsed = parse(source.as_bytes(), SOURCE_PATH).unwrap();
     assert!(parsed.events.is_empty());
     assert_eq!(parsed.notices.len(), 1);
-    assert_eq!(
-        parsed.notices[0].code,
-        ParseNoticeCode::UnsupportedResponseAccounting
-    );
+    assert_eq!(parsed.notices[0].code, "unsupported_response_accounting");
 }
 
 #[test]
@@ -314,10 +306,7 @@ fn final_usage_is_revalidated_when_a_placeholder_supplies_the_model() {
     let parsed = parse(source.as_bytes(), SOURCE_PATH).unwrap();
     assert!(parsed.events.is_empty());
     assert_eq!(parsed.notices.len(), 1);
-    assert_eq!(
-        parsed.notices[0].code,
-        ParseNoticeCode::UnsupportedResponseAccounting
-    );
+    assert_eq!(parsed.notices[0].code, "unsupported_response_accounting");
     assert_eq!(parsed.notices[0].line.unwrap().get(), 1);
 }
 
@@ -380,7 +369,6 @@ fn validates_source_identity_and_requires_record_metadata() {
         parsed.metadata.working_directory.unwrap(),
         Path::new("/earlier")
     );
-    assert_eq!(parsed.metadata.format_version, None);
 }
 
 #[test]
@@ -482,7 +470,7 @@ fn truncated_final_numbers_preserve_complete_records() {
         assert_eq!(parsed.events, expected.events, "{number}");
         assert_eq!(parsed.completion, ParseCompletion::IncompleteFinalLine);
         assert_eq!(parsed.notices.len(), 1);
-        assert_eq!(parsed.notices[0].code, ParseNoticeCode::TruncatedTail);
+        assert_eq!(parsed.notices[0].code, "truncated_tail");
         assert_eq!(parsed.notices[0].line.unwrap().get(), 2);
         assert!(parse(format!("{source}\n").as_bytes(), SOURCE_PATH).is_err());
     }

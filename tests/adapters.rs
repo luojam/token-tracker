@@ -1,20 +1,19 @@
-//! Exercise a second format entirely through public adapter/storage contracts.
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use token_tracker::adapters::pi::{PiSessionDiscovery, PiSessionParser};
-use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{
     DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, FileRevision, ParseCompletion,
     ParseContext, ParsedSession, SessionAdapter, SessionDiscovery, SessionParser, UsageReadStore,
-    UsageStore, run_all_time_report, summarize_usage, synchronize_sessions_at,
+    UsageStore, summarize_usage, synchronize_sessions_at,
 };
-use token_tracker::core::{
+use token_tracker::domain::{
     AgentId, ParentSession, SessionMetadata, Timestamp, TokenCounts, UsageEvent,
     UsageEventIdentity, UsageKind,
 };
+use token_tracker::storage::SqliteUsageStore;
 
 static NEXT_TREE: AtomicU64 = AtomicU64::new(0);
 struct TempTree(PathBuf);
@@ -101,9 +100,9 @@ impl SessionParser for TestParser {
             metadata: SessionMetadata {
                 agent: self.agent.into(),
                 session_id: session_id.into(),
-                format_version: None,
+
                 working_directory: None,
-                // Child starts earlier to prove that ancestry beats fallback order.
+                // Ancestry must outrank the earlier child timestamp.
                 started_at: Timestamp::from_unix_milliseconds(if parent.is_some() {
                     1000
                 } else {
@@ -115,7 +114,7 @@ impl SessionParser for TestParser {
             events: vec![UsageEvent {
                 identity: UsageEventIdentity {
                     agent: self.agent.into(),
-                    // Intentionally identical to the Pi event key below.
+                    // Matches the Pi key to test agent isolation.
                     adapter_key: "v1:assistant:1000:shared".into(),
                 },
                 timestamp: Timestamp::from_unix_milliseconds(1000),
@@ -173,9 +172,8 @@ fn a_second_adapter_preserves_identity_lineage_and_failure_isolation() {
     assert!(report.contains("Unique usage events: 2\n"));
     assert!(report.lines().any(|line| {
         line.split_whitespace().collect::<Vec<_>>().join(" ")
-            == "Unattributed other usage 10 0 0 0 10 1 -"
+            == "Unattributed other usage 10 0 0 0 10 1 unavailable"
     }));
-    // The overlapping discovery root must not mark Pi's file missing.
     assert!(store.source_states(&"pi".into()).unwrap()[0].present);
     assert_eq!(store.source_states(&"test-agent".into()).unwrap().len(), 2);
     assert_eq!(
@@ -261,7 +259,6 @@ fn identical_paths_have_independent_revisions_presence_and_scan_times() {
     assert_eq!(summary.totals.tokens.input, 210);
     assert_eq!(summary.totals.unique_usage_event_count, 2);
 
-    // A mispaired parser cannot commit usage into another agent's namespace.
     let rejected = synchronize_sessions_at(
         &discovery("third", vec![path]),
         &TestParser { agent: "second" },
@@ -280,4 +277,16 @@ fn identical_paths_have_independent_revisions_presence_and_scan_times() {
         summarize_usage(&store.usage_snapshot().unwrap()).unwrap(),
         summary
     );
+}
+
+fn run_all_time_report<S: UsageStore + UsageReadStore>(
+    adapters: &[&dyn token_tracker::application::ImportAdapter<S>],
+    store: &mut S,
+    warnings: Vec<token_tracker::application::ImportWarning>,
+) -> Result<String, token_tracker::application::AllTimeReportError> {
+    let report = token_tracker::application::run_all_time_report(adapters, store, warnings)?;
+    Ok(token_tracker::cli::render_terminal_report(
+        &report.summary,
+        &report.warnings,
+    ))
 }

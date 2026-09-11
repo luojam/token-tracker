@@ -1,14 +1,14 @@
 use std::path::PathBuf;
+use token_tracker::cli::render_terminal_report;
 
 use token_tracker::application::{
     ImportWarning, SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot,
-    render_terminal_report, summarize_usage,
+    summarize_usage,
 };
-use token_tracker::core::{
-    AgentId, CacheDetail, EstimateTotal, EstimateUnavailableReason, EstimatedCost,
-    ModelAttribution, ParentSession, PricingContext, RawServiceTier, RecordedCost,
-    RequestGranularity, ServiceTier, TierEvidence, Timestamp, TokenCounts, UsageEvent,
-    UsageEventIdentity, UsageKind,
+use token_tracker::domain::{
+    AgentId, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, ParentSession,
+    PricingContext, RecordedCost, RequestGranularity, ServiceTier, TierEvidence, Timestamp,
+    TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
 
 fn event(
@@ -145,7 +145,7 @@ fn snapshot(reverse: bool) -> UsageSnapshot {
     snapshot
 }
 
-fn summary_for_order(reverse: bool) -> token_tracker::core::UsageSummary {
+fn summary_for_order(reverse: bool) -> token_tracker::domain::UsageSummary {
     summarize_usage(&snapshot(reverse)).unwrap()
 }
 
@@ -174,17 +174,17 @@ fn summary_reconciles_and_renders_independently_of_observation_order() {
          Output tokens: 9\n\
          Cache-read tokens: 11\n\
          Cache-write tokens: 13\n\
-         Total cost: $0.750000\n\
+         Total cost: $0.750000 (partial)\n\
          Sessions: 2\n\
          Unique usage events: 3\n\
          \n\
          Usage by provider/model:\n\
          \n\
          Pi usage:\n\
-         \x20\x20Provider / model               Input  Output  Cache read  Cache write  Total  Events       Cost\n\
-         \x20\x20provider-a / model-a              10       2           3            4     19       1  $0.250000\n\
-         \x20\x20Unattributed tool results          1       1           1            1      4       1          -\n\
-         \x20\x20Unattributed branch summaries      5       6           7            8     26       1  $0.500000\n\
+         \x20\x20Provider / model               Input  Output  Cache read  Cache write  Total  Events         Cost\n\
+         \x20\x20provider-a / model-a              10       2           3            4     19       1    $0.250000\n\
+         \x20\x20Unattributed tool results          1       1           1            1      4       1  unavailable\n\
+         \x20\x20Unattributed branch summaries      5       6           7            8     26       1    $0.500000\n\
          \n\
          Warnings (2):\n\
          - discovery warning\n\
@@ -193,15 +193,17 @@ fn summary_reconciles_and_renders_independently_of_observation_order() {
 }
 
 #[test]
-fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
+fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     let context = PricingContext {
         tier: ServiceTier::Standard,
-        raw_tier: RawServiceTier::Value("default".into()),
+
         tier_evidence: TierEvidence::RequestedSetting,
         request_granularity: RequestGranularity::ExactSingleRequest,
         cache_detail: CacheDetail::Complete,
         request_usage: None,
-        anthropic: None,
+        provider: "openai".into(),
+        speed: ServiceTier::Standard,
+        cache_writes: None,
     };
     let model = ModelAttribution {
         provider: "openai".into(),
@@ -221,7 +223,7 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
         if observation.session.session_id == "child-session" {
             observation.event.pricing_context = Some(PricingContext {
                 tier: ServiceTier::Fast,
-                raw_tier: RawServiceTier::Value("priority".into()),
+
                 tier_evidence: TierEvidence::ServedResponse,
                 ..context.clone()
             });
@@ -229,7 +231,7 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
     }
     let unknown = data.observations[1].event.pricing_context.as_mut().unwrap();
     unknown.tier = ServiceTier::Unknown;
-    unknown.raw_tier = RawServiceTier::Missing;
+
     unknown.tier_evidence = TierEvidence::Unknown;
     unknown.cache_detail = CacheDetail::Incomplete;
     // The child offers richer context for shared, and conflicting facts for tool.
@@ -246,7 +248,7 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
     data.observations.reverse();
     assert_eq!(summarize_usage(&data).unwrap(), summary);
     let report = render_terminal_report(&summary, &[]);
-    assert!(report.contains("Total cost: $1.000395 (partial)\n"));
+    assert!(report.contains("Total cost: $1.000395 (partial)\n"), "{report}");
     let model_line = report
         .lines()
         .find(|line| line.starts_with("  openai / gpt-5.6 "))
@@ -278,7 +280,7 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
     let estimate = summary.estimates[&AgentId::from("codex")].clone();
     assert_eq!(summary.totals.tokens.input, 27);
     assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 1.0);
-    assert_eq!(estimate.totals.imported_event_count, 3);
+    assert_eq!(estimate.totals.imported_event_count, 2);
     assert_eq!(estimate.totals.priced_event_count, 2);
     assert_eq!(estimate.totals.requested_setting_event_count, 0);
     assert_eq!(estimate.totals.served_response_event_count, 1);
@@ -295,7 +297,7 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
     );
     assert_eq!(
         estimate.totals.unavailable_reasons,
-        std::collections::BTreeMap::from([(EstimateUnavailableReason::MissingPricingContext, 1)])
+        std::collections::BTreeMap::new()
     );
     assert_eq!(
         estimate
@@ -303,17 +305,12 @@ fn canonical_estimates_keep_whole_observations_and_codex_only_coverage() {
             .iter()
             .map(|row| (&row.tier, row.totals.priced_event_count))
             .collect::<Vec<_>>(),
-        vec![
-            (&ServiceTier::Standard, 1),
-            (&ServiceTier::Fast, 1),
-            (&ServiceTier::Unknown, 0)
-        ]
+        vec![(&ServiceTier::Standard, 1), (&ServiceTier::Fast, 1)]
     );
 
     data.observations.reverse();
     data.observations.truncate(1);
-    let unpriced = summarize_usage(&data).unwrap().estimates[&AgentId::from("codex")].clone();
-    assert_eq!(unpriced.totals.cost, EstimateTotal::Unavailable);
+    assert!(summarize_usage(&data).unwrap().estimates.is_empty());
     let event = &mut data.observations[0].event;
     event.attribution = Some(model);
     event.pricing_context = Some(context);
@@ -335,7 +332,6 @@ fn typed_lineage_and_ambiguous_provenance_use_deterministic_precedence() {
     data.sessions[1].parent_session = Some(ParentSession::SessionId(original.session_id.clone()));
     assert_eq!(summarize_usage(&data).unwrap(), summary_for_order(false));
 
-    // Cycles are treated as ambiguous, never as an import-order tie breaker.
     data.sessions[0].parent_session = Some(ParentSession::SessionId(child.session_id));
     let expected = summarize_usage(&data).unwrap();
     assert_eq!(expected.totals.tokens.input, 1005);

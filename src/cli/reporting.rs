@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
-use super::ImportWarning;
-use crate::core::{
+use crate::application::ImportWarning;
+use crate::domain::{
     EstimateTotal, EstimateTotals, EstimatedCost, ModelAttribution, RecordedCost, SummaryGroup,
     UsageKind, UsageSummary,
 };

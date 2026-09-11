@@ -3,7 +3,7 @@ use crate::application::{
     DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, DiscoveryWarning, FileRevision,
     SessionDiscovery,
 };
-use crate::core::AgentId;
+use crate::domain::AgentId;
 use std::path::{Component, Path, PathBuf};
 use std::{env, error::Error, ffi::OsStr, fmt, fs, io};
 
@@ -117,7 +117,7 @@ fn absolute_root(root: &Path) -> Result<PathBuf, CodexDiscoveryError> {
         .map_err(|source| CodexDiscoveryError::SessionRootResolution { source })
 }
 
-// False means the directory cannot establish absence for retained sources.
+// False prevents marking retained sources under this directory as missing.
 fn scan_directory(
     directory: &Path,
     pending: &mut Vec<PathBuf>,

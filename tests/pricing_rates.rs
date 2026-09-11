@@ -1,5 +1,5 @@
-use token_tracker::application::pricing::lookup_rates;
-use token_tracker::core::{EstimateUnavailableReason, ModelAttribution, ServiceTier};
+use token_tracker::domain::{EstimateUnavailableReason, ModelAttribution, ServiceTier};
+use token_tracker::pricing::openai::lookup_rates;
 
 #[test]
 fn verified_rates_use_the_whole_request_band_and_explicit_model_aliases() {

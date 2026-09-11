@@ -3,10 +3,9 @@ use std::fmt;
 
 use super::{
     ImportSynchronizationError, ImportWarning, SessionDiscovery, SessionParser,
-    SynchronizationReport, UsageReadStore, UsageStore, render_terminal_report, summarize_usage,
-    synchronize_sessions,
+    SynchronizationReport, UsageReadStore, UsageStore, summarize_usage, synchronize_sessions,
 };
-use crate::core::AgentId;
+use crate::domain::{AgentId, UsageSummary};
 
 pub struct SessionAdapter<D, P> {
     discovery: D,
@@ -19,7 +18,6 @@ impl<D: SessionDiscovery, P: SessionParser> SessionAdapter<D, P> {
     }
 }
 
-/// Allows differently typed adapters to share a workflow and storage instance.
 pub trait ImportAdapter<S: UsageStore> {
     fn agent_id(&self) -> AgentId;
     fn synchronize(
@@ -43,13 +41,11 @@ impl<D: SessionDiscovery, P: SessionParser, S: UsageStore> ImportAdapter<S>
     }
 }
 
-/// Imports all available adapters. Setup warnings come from the composition layer;
-/// discovery failures become warnings, while storage failures remain fatal.
 pub fn run_all_time_report<S>(
     adapters: &[&dyn ImportAdapter<S>],
     store: &mut S,
     mut warnings: Vec<ImportWarning>,
-) -> Result<String, AllTimeReportError>
+) -> Result<AllTimeReport, AllTimeReportError>
 where
     S: UsageStore + UsageReadStore,
 {
@@ -71,7 +67,12 @@ where
         .map_err(|source| AllTimeReportError::Summary(Box::new(source)))?;
     let summary = summarize_usage(&snapshot)
         .map_err(|source| AllTimeReportError::Summary(Box::new(source)))?;
-    Ok(render_terminal_report(&summary, &warnings))
+    Ok(AllTimeReport { summary, warnings })
+}
+
+pub struct AllTimeReport {
+    pub summary: UsageSummary,
+    pub warnings: Vec<ImportWarning>,
 }
 
 #[derive(Debug)]

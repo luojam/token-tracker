@@ -8,10 +8,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
     CommitImportOutcome, DiscoveredSessionFile, ImportStats, ParseCompletion, ParseContext,
-    ParseNotice, ParseNoticeCode, ParsedSession, SessionDiscovery, SessionImport, SessionParser,
-    SourceState, UsageStore,
+    ParseNotice, ParsedSession, SessionDiscovery, SessionImport, SessionParser, SourceState,
+    UsageStore,
 };
-use crate::core::Timestamp;
+use crate::domain::Timestamp;
 
 const STABLE_READ_ATTEMPTS: usize = 2;
 
@@ -104,8 +104,7 @@ where
                 source: Box::new(source),
             })?;
 
-    // Record presence and observed revisions even when individual files cannot be
-    // read or parsed. Successful import state remains separate in the store.
+    // Record discovery before parsing so failed imports still update source presence.
     store
         .record_discovery(&agent, &discovery_report, scanned_at)
         .map_err(|source| ImportSynchronizationError::Storage {
@@ -138,7 +137,7 @@ where
     for file in files {
         if known_sources
             .get(&file.path)
-            .is_some_and(|state| source_is_unchanged(state, &file))
+            .is_some_and(|state| source_is_unchanged(state, &file, parser.normalization_version()))
         {
             report.counts.files_unchanged += 1;
             continue;
@@ -172,6 +171,7 @@ where
 
         let incomplete = parsed.completion == ParseCompletion::IncompleteFinalLine;
         let import = SessionImport {
+            normalization_version: parser.normalization_version(),
             source: DiscoveredSessionFile {
                 path: file.path.clone(),
                 revision,
@@ -193,6 +193,14 @@ where
                 report.warnings.push(ImportWarning {
                     path: Some(file.path),
                     message: "session import was superseded by a newer scan".into(),
+                });
+            }
+            Ok(CommitImportOutcome::DeferredIncomplete) => {
+                report.counts.files_failed += 1;
+                report.warnings.push(ImportWarning {
+                    path: Some(file.path),
+                    message: "normalization change deferred until the session parses completely"
+                        .into(),
                 });
             }
             Err(error) => {
@@ -229,27 +237,20 @@ where
 }
 
 fn notice_message(notice: &ParseNotice) -> String {
-    let count = notice.count.get();
-    let plural = if count == 1 { "" } else { "s" };
-    let mut message = match notice.code {
-        ParseNoticeCode::IncompleteResponseUsage => {
-            format!("omitted {count} response{plural} with incomplete usage")
-        }
-        ParseNoticeCode::UnsupportedResponseAccounting => {
-            format!("omitted {count} response{plural} with unsupported accounting")
-        }
-        ParseNoticeCode::TruncatedTail => {
-            format!("omitted {count} truncated JSON tail{plural}; usage may be missing")
-        }
-    };
+    let mut message = notice.message.clone();
     if let Some(line) = notice.line {
         message.push_str(&format!(" (first affected line: {line})"));
     }
     message
 }
 
-fn source_is_unchanged(state: &SourceState, discovered: &DiscoveredSessionFile) -> bool {
-    state.last_imported_revision.as_ref() == Some(&discovered.revision)
+fn source_is_unchanged(
+    state: &SourceState,
+    discovered: &DiscoveredSessionFile,
+    version: u32,
+) -> bool {
+    state.normalization_version == Some(version)
+        && state.last_imported_revision.as_ref() == Some(&discovered.revision)
         && state.last_parse_completion == Some(ParseCompletion::Complete)
 }
 

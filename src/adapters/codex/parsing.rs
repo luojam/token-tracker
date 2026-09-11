@@ -1,6 +1,6 @@
 use super::CODEX_AGENT_ID;
 use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
-use crate::core::{
+use crate::domain::{
     AgentId, CacheDetail, ParentSession, RequestGranularity, SessionMetadata, Timestamp,
     TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
@@ -34,6 +34,10 @@ impl CodexSessionParser {
 
 impl SessionParser for CodexSessionParser {
     type Error = CodexParseError;
+
+    fn normalization_version(&self) -> u32 {
+        super::NORMALIZATION_VERSION
+    }
 
     fn parse(
         &self,
@@ -128,7 +132,7 @@ fn complete_line(bytes: &[u8], line: usize) -> Result<Option<&str>, CodexParseEr
             Ok(None)
         }
         Err(_) if !terminated && text.ends_with(['.', 'e', 'E', '+', '-']) => {
-            // A digit completes a truncated number only if the preceding syntax is valid.
+            // Appending a digit distinguishes a truncated number from invalid syntax.
             match serde_json::from_str::<IgnoredAny>(&format!("{text}0")) {
                 Ok(_) => Ok(None),
                 Err(error) if error.is_eof() && valid_unicode_escape_prefixes(bytes) => Ok(None),
@@ -140,7 +144,7 @@ fn complete_line(bytes: &[u8], line: usize) -> Result<Option<&str>, CodexParseEr
 }
 
 fn valid_unicode_escape_prefixes(bytes: &[u8]) -> bool {
-    // Serde reports EOF before validating escapes with fewer than four remaining bytes.
+    // serde_json reports EOF before validating partial Unicode escapes.
     let mut bytes = bytes.iter();
     let mut in_string = false;
     while let Some(&byte) = bytes.next() {
@@ -405,7 +409,7 @@ impl SessionState {
             if let Some(mirrors) = &self.mirrors {
                 mirrors.accept_repeat(&response, line)?;
             }
-            // Corrections replace counters, preserving the original request's identity and time.
+            // Corrections retain the original request identity and timestamp.
             original.event.tokens = tokens;
             if let Some(context) = &mut original.event.pricing_context {
                 context.cache_detail = response.usage.0.cache_detail();
@@ -434,7 +438,7 @@ impl SessionState {
                     MirrorState::new(self.legacy.baseline(), response.thread_id.clone())
                 })
                 .accept_response(&response, line)?;
-            let (attribution, pricing_context) = self.context.observation(
+            let (attribution, pricing_context, _) = self.context.observation(
                 &response.turn_id,
                 Some(&response.thread_id),
                 RequestGranularity::ExactSingleRequest,
@@ -496,7 +500,6 @@ impl SessionState {
             return Ok(());
         }
 
-        // Only a fork's contiguous inherited headers can introduce an ancestor.
         if !self.inherited_prefix || self.expected_ancestor.as_ref() != Some(id) {
             return Err(CodexParseError::InvalidField {
                 line,
@@ -515,7 +518,7 @@ impl SessionState {
             });
         }
         self.expected_ancestor = header.identity.forked_from_id.clone();
-        // Copied legacy turns lack thread IDs and an evidenced end-of-inheritance marker.
+        // Copied legacy turns cannot establish thread ownership.
         self.context.accept_header(id, header.provider, false);
         self.headers.insert(id.clone(), header.identity);
         Ok(())
@@ -583,7 +586,7 @@ impl HeaderWire {
             metadata: SessionMetadata {
                 agent: AgentId::from(CODEX_AGENT_ID),
                 session_id: self.id,
-                format_version: None,
+
                 working_directory: self.cwd.map(PathBuf::from),
                 started_at,
                 name: None,

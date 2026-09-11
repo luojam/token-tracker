@@ -2,17 +2,20 @@ use std::io::Cursor;
 use std::path::Path;
 
 use token_tracker::adapters::claude::ClaudeSessionParser;
-use token_tracker::application::pricing::anthropic::calculate_estimate;
 use token_tracker::application::{ParseContext, SessionParser};
-use token_tracker::core::{
-    AnthropicIteration, AnthropicIterationKind, AnthropicPricingContext, AnthropicUsage,
-    AnthropicUsageComponent, CacheCreationTokens, EstimateUnavailableReason as Reason,
-    EstimatedCost, ModelAttribution, PricingContext, RawServedValue, ServiceTier, TierEvidence,
-    Timestamp, TokenCounts, UsageEstimate, UsageEvent, UsageEventIdentity, UsageKind,
+use token_tracker::domain::{
+    CacheDetail, CacheWriteTokens, EstimateUnavailableReason as Reason, EstimatedCost,
+    ModelAttribution, PricingContext, RequestGranularity, ServiceTier, TierEvidence, Timestamp,
+    TokenCounts, UsageEstimate, UsageEvent, UsageEventIdentity, UsageKind,
 };
+use token_tracker::pricing::anthropic::calculate_estimate;
 
-fn served(value: &str) -> RawServedValue {
-    RawServedValue::Value(value.into())
+fn served(value: &str) -> ServiceTier {
+    match value {
+        "standard" => ServiceTier::Standard,
+        "fast" => ServiceTier::Fast,
+        _ => ServiceTier::Unsupported(value.into()),
+    }
 }
 
 fn event() -> UsageEvent {
@@ -35,28 +38,30 @@ fn event() -> UsageEvent {
         }),
         tokens,
         recorded_cost: None,
-        pricing_context: Some(PricingContext::for_anthropic(AnthropicPricingContext {
-            service_tier: served("standard"),
-            speed: served("standard"),
-            usage: AnthropicUsage::Response(AnthropicUsageComponent {
-                tokens,
-                cache_creation: Some(CacheCreationTokens {
-                    ephemeral_5m: 30,
-                    ephemeral_1h: 10,
-                }),
-            }),
-        })),
+        pricing_context: Some(PricingContext {
+            provider: "anthropic".into(),
+            tier: ServiceTier::Standard,
+            speed: ServiceTier::Standard,
+            tier_evidence: TierEvidence::ServedResponse,
+            request_granularity: RequestGranularity::ExactSingleRequest,
+            cache_detail: CacheDetail::Complete,
+            request_usage: Some(vec![tokens]),
+            cache_writes: Some(vec![
+                CacheWriteTokens {
+                    duration_seconds: 300,
+                    tokens: 30,
+                },
+                CacheWriteTokens {
+                    duration_seconds: 3600,
+                    tokens: 10,
+                },
+            ]),
+        }),
     }
 }
 
-fn facts(event: &mut UsageEvent) -> &mut AnthropicPricingContext {
-    event
-        .pricing_context
-        .as_mut()
-        .unwrap()
-        .anthropic
-        .as_mut()
-        .unwrap()
+fn facts(event: &mut UsageEvent) -> &mut PricingContext {
+    event.pricing_context.as_mut().unwrap()
 }
 
 fn expected(cost: u128) -> Result<UsageEstimate, Reason> {
@@ -175,10 +180,8 @@ fn bundled_models_use_exact_flat_rates() {
                 input,
                 ..TokenCounts::default()
             };
-            facts(&mut event).usage = AnthropicUsage::Response(AnthropicUsageComponent {
-                tokens: event.tokens,
-                cache_creation: None,
-            });
+            facts(&mut event).request_usage = Some(vec![event.tokens]);
+            facts(&mut event).cache_writes = None;
             assert_eq!(
                 calculate_estimate(&event),
                 expected(cost),
@@ -193,13 +196,11 @@ fn bundled_models_use_exact_flat_rates() {
         cache_read: u64::MAX,
         cache_write: u64::MAX,
     };
-    facts(&mut event).usage = AnthropicUsage::Response(AnthropicUsageComponent {
-        tokens: event.tokens,
-        cache_creation: Some(CacheCreationTokens {
-            ephemeral_5m: 0,
-            ephemeral_1h: u64::MAX,
-        }),
-    });
+    facts(&mut event).request_usage = Some(vec![event.tokens]);
+    facts(&mut event).cache_writes = Some(vec![CacheWriteTokens {
+        duration_seconds: 3600,
+        tokens: u64::MAX,
+    }]);
     assert_eq!(
         calculate_estimate(&event),
         expected(u128::from(u64::MAX) * 40_500_000)
@@ -207,10 +208,19 @@ fn bundled_models_use_exact_flat_rates() {
 }
 
 #[test]
+fn only_served_tier_evidence_allows_pricing() {
+    for evidence in [TierEvidence::Unknown, TierEvidence::RequestedSetting] {
+        let mut event = event();
+        facts(&mut event).tier_evidence = evidence;
+        assert_eq!(calculate_estimate(&event), Err(Reason::UnknownTier));
+    }
+}
+
+#[test]
 fn served_evidence_is_required_and_failures_have_stable_precedence() {
     for (tier, speed, reason) in [
         (
-            RawServedValue::Missing,
+            ServiceTier::Unknown,
             served("standard"),
             Reason::UnknownTier,
         ),
@@ -221,18 +231,18 @@ fn served_evidence_is_required_and_failures_have_stable_precedence() {
         ),
         (
             served("standard"),
-            RawServedValue::Missing,
+            ServiceTier::Unknown,
             Reason::UnknownSpeed,
         ),
         (
             served("standard"),
-            RawServedValue::Null,
+            ServiceTier::Unknown,
             Reason::UnknownSpeed,
         ),
         (served("standard"), served("FAST"), Reason::UnsupportedSpeed),
         (
             served("future"),
-            RawServedValue::Missing,
+            ServiceTier::Unknown,
             Reason::UnsupportedTier,
         ),
     ] {
@@ -240,7 +250,7 @@ fn served_evidence_is_required_and_failures_have_stable_precedence() {
         let context = event.pricing_context.as_mut().unwrap();
         context.tier = ServiceTier::Standard;
         context.tier_evidence = TierEvidence::ServedResponse;
-        facts(&mut event).service_tier = tier;
+        facts(&mut event).tier = tier;
         facts(&mut event).speed = speed;
         assert_eq!(calculate_estimate(&event), Err(reason));
     }
@@ -258,15 +268,10 @@ fn served_evidence_is_required_and_failures_have_stable_precedence() {
     for model in ["claude-opus-5[1m]", "claude-haiku-4-5"] {
         let mut event = event();
         event.attribution.as_mut().unwrap().model = model.into();
-        facts(&mut event).speed = RawServedValue::Missing;
+        facts(&mut event).speed = ServiceTier::Unknown;
         assert_eq!(calculate_estimate(&event), Err(Reason::UnsupportedModel));
     }
     let mut event = event();
-    event.pricing_context.as_mut().unwrap().anthropic = None;
-    assert_eq!(
-        calculate_estimate(&event),
-        Err(Reason::MissingPricingContext)
-    );
     event.pricing_context = None;
     assert_eq!(
         calculate_estimate(&event),
@@ -277,18 +282,10 @@ fn served_evidence_is_required_and_failures_have_stable_precedence() {
 #[test]
 fn invalid_usage_and_missing_iteration_durations_never_produce_partial_costs() {
     let mut event = event();
-    let AnthropicUsage::Response(component) = facts(&mut event).usage.clone() else {
-        unreachable!()
-    };
-    let iteration = AnthropicIteration {
-        kind: AnthropicIterationKind::Message,
-        usage: component,
-    };
-    event.tokens = event.tokens.checked_add(event.tokens).unwrap();
-    let mut compaction = iteration.clone();
-    compaction.kind = AnthropicIterationKind::Compaction;
-    compaction.usage.cache_creation = None;
-    facts(&mut event).usage = AnthropicUsage::Iterations(vec![iteration, compaction]);
+    let original = event.tokens;
+    event.tokens = original.checked_add(original).unwrap();
+    facts(&mut event).request_usage = Some(vec![original, original]);
+    facts(&mut event).cache_writes = None;
     assert_eq!(
         calculate_estimate(&event),
         Err(Reason::IncompleteCacheDetail)

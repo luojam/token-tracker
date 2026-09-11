@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use token_tracker::adapters::codex::{CodexSessionDiscovery, CodexSessionParser};
-use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{
     SynchronizationReport, UsageReadStore, UsageSnapshot, UsageStore, synchronize_sessions_at,
 };
-use token_tracker::core::{AgentId, Timestamp};
+use token_tracker::domain::{AgentId, Timestamp};
+use token_tracker::storage::SqliteUsageStore;
 
 static NEXT_TREE: AtomicU64 = AtomicU64::new(0);
 

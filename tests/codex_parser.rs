@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use token_tracker::adapters::codex::{CodexParseError, CodexSessionParser};
 use token_tracker::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
-use token_tracker::core::{AgentId, ParentSession, SessionMetadata, Timestamp};
+use token_tracker::domain::{AgentId, ParentSession, SessionMetadata, Timestamp};
 
 const RESPONSE: &str = include_str!("fixtures/codex/response-mirrors.jsonl");
 const FORK: &str = include_str!("fixtures/codex/legacy-fork.jsonl");
@@ -36,7 +36,7 @@ fn preserves_original_metadata_across_resume_and_client_upgrades() {
         SessionMetadata {
             agent: AgentId::from("codex"),
             session_id: "thread-main".into(),
-            format_version: None,
+
             working_directory: Some(PathBuf::from("/work/fixture")),
             started_at: Timestamp::from_unix_milliseconds(1_767_225_600_000),
             name: None,
@@ -68,7 +68,6 @@ fn preserves_original_metadata_across_resume_and_client_upgrades() {
     );
     let parsed = parse(&minimal.to_string()).unwrap();
     assert_eq!(parsed.metadata.working_directory, None);
-    assert_eq!(parsed.metadata.format_version, None);
 }
 
 #[test]
@@ -387,7 +386,6 @@ fn ignores_unknown_fields_and_content_without_client_version_switches() {
     for client in ["0.128.0", "0.153.4", "future-client"] {
         let parsed = parse(&prefix.replace("0.153.4", client)).unwrap();
         assert_eq!(parsed.completion, ParseCompletion::Complete);
-        assert_eq!(parsed.metadata.format_version, None);
     }
 }
 

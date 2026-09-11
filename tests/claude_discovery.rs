@@ -4,9 +4,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use token_tracker::adapters::claude::ClaudeSessionDiscovery;
-use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{SessionDiscovery, UsageStore};
-use token_tracker::core::Timestamp;
+use token_tracker::domain::Timestamp;
+use token_tracker::storage::SqliteUsageStore;
 
 const SESSION: &str = "11111111-1111-4111-8111-111111111111";
 const CHILD_ONLY_SESSION: &str = "22222222-2222-4222-8222-222222222222";

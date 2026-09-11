@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 use token_tracker::adapters::codex::{CodexParseError, CodexSessionDiscovery, CodexSessionParser};
-use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{
     ParseCompletion, ParseContext, ParsedSession, SessionParser, UsageReadStore, UsageStore,
     synchronize_sessions_at,
 };
-use token_tracker::core::{AgentId, Timestamp, TokenCounts, UsageKind};
+use token_tracker::domain::{AgentId, Timestamp, TokenCounts, UsageKind};
+use token_tracker::storage::SqliteUsageStore;
 
 const FRESH: &str = include_str!("fixtures/codex/legacy-fresh.jsonl");
 const RESUMED: &str = include_str!("fixtures/codex/legacy-resume-compaction.jsonl");

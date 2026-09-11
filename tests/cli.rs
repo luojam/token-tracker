@@ -89,8 +89,7 @@ fn append(path: &Path, content: &str) {
 
 fn assert_no_content_persisted(database_directory: &Path) {
     assert!(database_directory.join("usage.db").is_file());
-    // Check raw database pages (including freed pages) and any SQLite sidecars,
-    // not just the currently queryable rows. Fixture conversation content uses SECRET_.
+    // Raw bytes catch content left in freed pages and SQLite sidecars.
     for entry in fs::read_dir(database_directory).unwrap() {
         let path = entry.unwrap().path();
         let bytes = fs::read(&path).unwrap();
@@ -127,11 +126,10 @@ fn command_preserves_history_and_privacy_through_the_session_lifecycle() {
     )
     .unwrap();
 
-    // No overrides: exercise both default session discovery and HOME storage.
     let run = || successful_report(command(&home).output().unwrap());
     let report = run();
     assert_totals(&report, [25, 38, 51, 64], 1, 4);
-    assert!(report.contains("Total cost: $1.020000\n"));
+    assert!(report.contains("Total cost: $1.020000 (partial)\n"));
     for group in [
         "provider-a / model-resolved",
         "Unattributed tool results",
@@ -162,8 +160,7 @@ fn command_preserves_history_and_privacy_through_the_session_lifecycle() {
     assert_totals(&completed, [40, 42, 57, 72], 1, 6);
     assert_eq!(run(), completed);
 
-    // Update one observation while removing all the other usage from the file.
-    // Their incurred usage must remain in the database and the report.
+    // Rewriting one event must retain usage omitted from the source.
     let rewritten = ALL_USAGE
         .lines()
         .take(3)
@@ -177,9 +174,8 @@ fn command_preserves_history_and_privacy_through_the_session_lifecycle() {
     fs::write(&path, format!("{rewritten}\n")).unwrap();
     let retained = run();
     assert_totals(&retained, [130, 42, 57, 72], 1, 6);
-    assert!(retained.contains("Total cost: $1.020000\n"));
+    assert!(retained.contains("Total cost: $1.020000 (partial)\n"));
 
-    // Even valid new usage before a malformed complete line must not be committed.
     append(&path, &event("must-not-commit", 99));
     append(&path, "{SECRET_MALFORMED_REWRITE}\n");
     let malformed = run();
@@ -208,7 +204,7 @@ fn command_reconciles_conflicting_forks_in_either_import_order() {
         let mut child_header: serde_json::Value = serde_json::from_str(parent_header).unwrap();
         child_header["id"] = "child-session".into();
         child_header["parentSession"] = parent_path.to_str().unwrap().into();
-        // Ancestry must win even if the child's recorded start time is earlier.
+        // Ancestry must outrank the earlier child timestamp.
         child_header["timestamp"] = "2025-01-01T00:00:00.000Z".into();
         let child = format!("{child_header}\n{entries}")
             .replacen(
@@ -227,11 +223,10 @@ fn command_reconciles_conflicting_forks_in_either_import_order() {
 
         let report = run();
         assert_totals(&report, [25, 38, 51, 64], 2, 4);
-        assert!(report.contains("Total cost: $1.020000\n"));
+        assert!(report.contains("Total cost: $1.020000 (partial)\n"));
         assert!(!report.contains("Warnings"));
         assert_eq!(run(), report);
 
-        // A newer descendant import cannot replace the ancestor's observation.
         fs::write(
             &child_path,
             child.replacen("\"input\":999", "\"input\":9999", 1),
@@ -249,7 +244,7 @@ fn command_reconciles_conflicting_forks_in_either_import_order() {
         .unwrap();
         let updated = run();
         assert_totals(&updated, [115, 38, 51, 64], 2, 4);
-        assert!(updated.contains("Total cost: $1.020000\n"));
+        assert!(updated.contains("Total cost: $1.020000 (partial)\n"));
         fs::remove_file(&parent_path).unwrap();
         assert_eq!(run(), updated);
         assert_no_content_persisted(&data_home.join("token-tracker"));
@@ -312,8 +307,8 @@ fn command_reports_pi_and_codex_with_missing_or_failing_roots() {
             4 * pi + 2 * codex,
         );
         let cost = match (pi_present, codex_present) {
-            (true, true) => Some("$1.024460"),
-            (true, false) => Some("$1.020000"),
+            (true, true) => Some("$1.024460 (partial)"),
+            (true, false) => Some("$1.020000 (partial)"),
             (false, true) => Some("$0.004460"),
             (false, false) => None,
         };
@@ -333,7 +328,7 @@ fn command_reports_pi_and_codex_with_missing_or_failing_roots() {
                 }),
                 "{report}"
             );
-            assert!(!report.contains(" (partial)"));
+            assert_eq!(report.contains(" (partial)"), pi_present);
         }
         if let Some(agent) = failing_agent {
             assert!(report.contains("Warnings (1):\n"), "{report}");
@@ -387,7 +382,7 @@ fn command_imports_all_adapters_and_retains_claude_partial_imports_privately() {
     };
     let report = run();
     assert_totals(&report, [163, 113, 341, 144], 3, 8);
-    assert!(report.contains("Total cost: $1.026345\n"), "{report}");
+    assert!(report.contains("Total cost: $1.026345 (partial)\n"), "{report}");
     assert!(report.contains("Claude Code usage:"), "{report}");
     assert!(report.contains("anthropic / claude-opus-5"), "{report}");
     assert!(!report.contains("Warnings"), "{report}");
@@ -441,7 +436,6 @@ fn command_preserves_mixed_usage_and_estimates_through_codex_lifecycle() {
         let cut = response.find(lines[9]).unwrap() + lines[9].len() / 2;
         fs::write(&response_path, &response[..cut]).unwrap();
 
-        // Every invocation reopens the same on-disk ledger.
         let run = || {
             successful_report(
                 command(&home)
@@ -452,7 +446,7 @@ fn command_preserves_mixed_usage_and_estimates_through_codex_lifecycle() {
         };
         let partial = run();
         assert_totals(&partial, [85, 48, 91, 64], 2, 5);
-        assert!(partial.contains("Total cost: $1.021140\n"));
+        assert!(partial.contains("Total cost: $1.021140 (partial)\n"));
         assert_eq!(run(), partial);
 
         let sources = [
@@ -480,7 +474,7 @@ fn command_preserves_mixed_usage_and_estimates_through_codex_lifecycle() {
         append(&response_path, &response[cut..]);
         let completed = run();
         assert_totals(&completed, [385, 118, 331, 64], 5, 9);
-        assert!(completed.contains("Total cost: $1.029540\n"), "{completed}");
+        assert!(completed.contains("Total cost: $1.029540 (partial)\n"), "{completed}");
         assert!(
             completed.lines().any(|line| {
                 line.starts_with("  openai / gpt-6-astra ") && line.ends_with("$0.009540")

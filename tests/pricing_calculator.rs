@@ -1,9 +1,9 @@
-use token_tracker::application::pricing::{self, MissingCacheWritePolicy};
-use token_tracker::core::{
+use token_tracker::domain::{
     CacheDetail, EstimateUnavailableReason, EstimatedCost, ModelAttribution, PricingContext,
-    RawServiceTier, RequestGranularity, ServiceTier, TierEvidence, Timestamp, TokenCounts,
-    UsageEvent, UsageEventIdentity, UsageKind,
+    RequestGranularity, ServiceTier, TierEvidence, Timestamp, TokenCounts, UsageEvent,
+    UsageEventIdentity, UsageKind,
 };
+use token_tracker::pricing::openai::{self as pricing, MissingCacheWritePolicy};
 
 fn calculate_estimate(event: &UsageEvent) -> Result<EstimatedCost, EstimateUnavailableReason> {
     pricing::calculate_estimate(event, MissingCacheWritePolicy::Reject)
@@ -26,13 +26,47 @@ fn event() -> UsageEvent {
         recorded_cost: None,
         pricing_context: Some(PricingContext {
             tier: ServiceTier::Standard,
-            raw_tier: RawServiceTier::Value("default".into()),
+
             tier_evidence: TierEvidence::RequestedSetting,
             request_granularity: RequestGranularity::ExactSingleRequest,
             cache_detail: CacheDetail::Complete,
             request_usage: None,
-            anthropic: None,
+            provider: "openai".into(),
+            speed: ServiceTier::Standard,
+            cache_writes: None,
         }),
+    }
+}
+
+#[test]
+fn missing_pricing_facts_remain_in_estimate_coverage() {
+    let priced = event();
+    let mut missing = priced.clone();
+    missing.identity.adapter_key = "missing".into();
+    missing.pricing_context = None;
+    for attribution in [
+        None,
+        Some(ModelAttribution {
+            provider: "unsupported".into(),
+            model: "unknown".into(),
+        }),
+    ] {
+        missing.attribution = attribution;
+        let summary = token_tracker::domain::UsageSummary {
+            estimates: token_tracker::pricing::summarize_estimates([&priced, &missing]),
+            ..Default::default()
+        };
+        let totals = &summary.estimates[&priced.identity.agent].totals;
+        assert_eq!(totals.imported_event_count, 2);
+        assert_eq!(totals.priced_event_count, 1);
+        let reason = if missing.attribution.is_some() {
+            EstimateUnavailableReason::UnsupportedProvider
+        } else {
+            EstimateUnavailableReason::MissingPricingContext
+        };
+        assert_eq!(totals.unavailable_reasons[&reason], 1);
+        let report = token_tracker::cli::render_terminal_report(&summary, &[]);
+        assert!(report.contains("Total cost: $0.000000 (partial)\n"));
     }
 }
 
@@ -53,8 +87,6 @@ fn exact_costs_use_disjoint_tokens_and_the_whole_request_band() {
     ] {
         let mut event = event();
         let context = event.pricing_context.as_mut().unwrap();
-        context.raw_tier =
-            RawServiceTier::Value(if tier == Fast { "priority" } else { "default" }.into());
         context.tier = tier;
         event.tokens = TokenCounts {
             input: counts[0],
@@ -83,18 +115,9 @@ fn unknown_tiers_use_standard_rates_without_changing_usage_facts() {
                 output: 25,
             };
             let standard = calculate_estimate(&event).unwrap();
-            for (raw_tier, tier_evidence) in [
-                (RawServiceTier::Missing, TierEvidence::Unknown),
-                (RawServiceTier::Missing, TierEvidence::RequestedSetting),
-                (RawServiceTier::Null, TierEvidence::RequestedSetting),
-                (
-                    RawServiceTier::Value("auto".into()),
-                    TierEvidence::RequestedSetting,
-                ),
-            ] {
+            for tier_evidence in [TierEvidence::Unknown, TierEvidence::RequestedSetting] {
                 let context = event.pricing_context.as_mut().unwrap();
                 context.tier = ServiceTier::Unknown;
-                context.raw_tier = raw_tier;
                 context.tier_evidence = tier_evidence;
                 let original = event.clone();
                 assert_eq!(calculate_estimate(&event), Ok(standard));

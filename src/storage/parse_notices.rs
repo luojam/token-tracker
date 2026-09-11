@@ -26,5 +26,5 @@ pub(super) fn decode(value: &str) -> Result<Vec<ParseNotice>, SqliteStoreError> 
 
 fn unique_codes(notices: &[ParseNotice]) -> bool {
     let mut codes = HashSet::new();
-    notices.iter().all(|notice| codes.insert(notice.code))
+    notices.iter().all(|notice| codes.insert(&notice.code))
 }

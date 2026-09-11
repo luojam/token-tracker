@@ -4,7 +4,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 use token_tracker::adapters::codex::CodexSessionParser;
 use token_tracker::application::{ParseContext, ParsedSession, SessionParser};
-use token_tracker::core::{CacheDetail, RequestGranularity};
+use token_tracker::domain::{CacheDetail, RequestGranularity};
 
 const RESPONSE: &str = include_str!("fixtures/codex/response-mirrors.jsonl");
 const LEGACY: &str = include_str!("fixtures/codex/legacy-resume-compaction.jsonl");

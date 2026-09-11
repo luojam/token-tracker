@@ -3,7 +3,7 @@ use crate::application::{
     DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, DiscoveryWarning, FileRevision,
     SessionDiscovery,
 };
-use crate::core::AgentId;
+use crate::domain::AgentId;
 use std::path::{Path, PathBuf};
 use std::{env, error::Error, ffi::OsStr, fmt, fs, io};
 
@@ -14,7 +14,6 @@ const PI_AGENT_DIRECTORY: &str = "agent";
 const PI_SESSIONS_DIRECTORY: &str = "sessions";
 const SESSION_EXTENSION: &str = "jsonl";
 
-/// Resolves Pi's session root, including its session and agent directory overrides.
 pub fn default_session_root() -> Result<PathBuf, PiDiscoveryError> {
     default_session_root_from(
         env::var_os(PI_SESSION_DIRECTORY_ENV).as_deref(),
@@ -56,7 +55,6 @@ fn default_session_root_from(
     Ok(agent_directory.join(PI_SESSIONS_DIRECTORY))
 }
 
-/// Recursively discovers Pi session JSONL files without reading their contents.
 #[derive(Clone, Debug)]
 pub struct PiSessionDiscovery {
     root: PathBuf,

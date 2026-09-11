@@ -1,22 +1,17 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
+use std::ffi::OsString;
 use std::fmt;
-use std::path::Path;
+use std::path::PathBuf;
 
-use super::pricing::{
-    MissingCacheWritePolicy, RATE_DATE, SNAPSHOT_ID, anthropic, calculate_estimate, estimate_tier,
-};
 use super::{SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot};
-use crate::core::{
-    AgentId, EstimateBreakdown, EstimateSummary, EstimateTotal, EstimateTotals,
-    EstimateUnavailableReason, ParentSession, RawServedValue, RecordedCost, ServiceTier,
-    SummaryBreakdown, SummaryGroup, SummaryTotals, TierEvidence, Timestamp, TokenCounts,
-    UsageEstimate, UsageEventIdentity, UsageSummary,
+use crate::domain::{
+    AgentId, ParentSession, RecordedCost, SummaryBreakdown, SummaryGroup, SummaryTotals, Timestamp,
+    TokenCounts, UsageEventIdentity, UsageSummary,
 };
 
-/// Count each logical event once. Prefer its earliest known ancestor observation,
-/// then session start time, session ID, and source path. Missing files retain
-/// their precedence; scan times and import order never affect this projection.
+/// Counts each event once, preferring ancestors, then session start, ID, and normalized path.
+/// Missing files retain precedence; scan and import order do not affect selection.
 pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, SummaryError> {
     let mut sessions = HashMap::new();
     for session in &snapshot.sessions {
@@ -48,11 +43,12 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
         ..SummaryTotals::default()
     };
     let mut breakdown = BTreeMap::<(AgentId, SummaryGroup), SummaryBreakdown>::new();
-    let mut estimates = BTreeMap::<AgentId, EstimateSummary>::new();
-    let mut estimate_rows = BTreeMap::<(AgentId, SummaryGroup, ServiceTier), EstimateTotals>::new();
+    let canonical = by_event
+        .values()
+        .map(|observations| select_canonical_observation(observations, &sessions, &parents))
+        .collect::<Vec<_>>();
     // Stable event order also makes floating-point cost accumulation deterministic.
-    for observations in by_event.values() {
-        let canonical = select_canonical_observation(observations, &sessions, &parents);
+    for canonical in &canonical {
         let event = &canonical.event;
         totals.tokens = add_tokens(totals.tokens, event.tokens)?;
         add_cost(&mut totals.recorded_cost, event.recorded_cost)?;
@@ -75,106 +71,14 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
             .unique_usage_event_count
             .checked_add(1)
             .ok_or(SummaryError::Overflow("event count"))?;
-
-        let (estimate, tier, evidence, snapshot_id, rate_date) = match event.identity.agent.as_str()
-        {
-            "codex" => {
-                let (tier, evidence) = event
-                    .pricing_context
-                    .as_ref()
-                    .map(estimate_tier)
-                    .unwrap_or((ServiceTier::Unknown, TierEvidence::Unknown));
-                (
-                    calculate_estimate(event, MissingCacheWritePolicy::TreatAsInput),
-                    tier,
-                    evidence,
-                    SNAPSHOT_ID,
-                    RATE_DATE,
-                )
-            }
-            "claude" => {
-                let tier = match event
-                    .pricing_context
-                    .as_ref()
-                    .and_then(|context| context.anthropic.as_ref())
-                    .map(|facts| &facts.service_tier)
-                {
-                    Some(RawServedValue::Value(value)) if value == "standard" => {
-                        ServiceTier::Standard
-                    }
-                    Some(RawServedValue::Value(value)) => ServiceTier::Unsupported(value.clone()),
-                    _ => ServiceTier::Unknown,
-                };
-                (
-                    anthropic::calculate_estimate(event),
-                    tier,
-                    TierEvidence::ServedResponse,
-                    anthropic::SNAPSHOT_ID,
-                    anthropic::RATE_DATE,
-                )
-            }
-            _ => continue,
-        };
-        let summary = estimates
-            .entry(event.identity.agent.clone())
-            .or_insert_with(|| EstimateSummary {
-                snapshot_id: snapshot_id.into(),
-                rate_date: rate_date.into(),
-                totals: EstimateTotals::default(),
-                breakdown: Vec::new(),
-            });
-        let row = estimate_rows
-            .entry((event.identity.agent.clone(), group, tier))
-            .or_default();
-        add_estimate(&mut summary.totals, estimate, evidence);
-        add_estimate(row, estimate, evidence);
     }
-    for ((agent, group, tier), totals) in estimate_rows {
-        estimates
-            .get_mut(&agent)
-            .expect("estimate rows have summaries")
-            .breakdown
-            .push(EstimateBreakdown {
-                group,
-                tier,
-                totals,
-            });
-    }
+    let estimates =
+        crate::pricing::summarize_estimates(canonical.iter().map(|observation| &observation.event));
     Ok(UsageSummary {
         totals,
         breakdown: breakdown.into_values().collect(),
         estimates,
     })
-}
-
-fn add_estimate(
-    totals: &mut EstimateTotals,
-    estimate: Result<UsageEstimate, EstimateUnavailableReason>,
-    evidence: TierEvidence,
-) {
-    // Counts are bounded by the already-validated canonical event count.
-    totals.imported_event_count += 1;
-    match estimate {
-        Ok(estimate) => {
-            totals.priced_event_count += 1;
-            totals.assumed_cache_write_event_count +=
-                u64::from(estimate.assumed_cache_writes_as_input);
-            match evidence {
-                TierEvidence::RequestedSetting => totals.requested_setting_event_count += 1,
-                TierEvidence::ServedResponse => totals.served_response_event_count += 1,
-                TierEvidence::Unknown => totals.assumed_standard_event_count += 1,
-            }
-            totals.cost = match totals.cost {
-                EstimateTotal::Unavailable => EstimateTotal::Available(estimate.cost),
-                EstimateTotal::Available(current) => current
-                    .checked_add(estimate.cost)
-                    .map(EstimateTotal::Available)
-                    .unwrap_or(EstimateTotal::Overflow),
-                EstimateTotal::Overflow => EstimateTotal::Overflow,
-            };
-        }
-        Err(reason) => *totals.unavailable_reasons.entry(reason).or_default() += 1,
-    }
 }
 
 fn resolve_session_parents(
@@ -252,11 +156,16 @@ fn observation_is_ancestor(
     found
 }
 
-fn fallback_key(session: &SessionProvenance) -> (Timestamp, &str, &Path) {
+fn fallback_key(session: &SessionProvenance) -> (Timestamp, &str, OsString) {
     (
         session.started_at,
         &session.key.session_id,
-        &session.key.source_path,
+        session
+            .key
+            .source_path
+            .components()
+            .collect::<PathBuf>()
+            .into_os_string(),
     )
 }
 
@@ -301,38 +210,3 @@ impl fmt::Display for SummaryError {
 }
 
 impl Error for SummaryError {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::EstimatedCost;
-
-    #[test]
-    fn estimate_total_overflow_is_sticky_without_losing_coverage() {
-        // Bundled rates cannot reach this boundary with valid summary token totals.
-        let mut totals = EstimateTotals::default();
-        for cost in [u128::MAX, 1, 0] {
-            add_estimate(
-                &mut totals,
-                Ok(UsageEstimate {
-                    cost: EstimatedCost::from_picodollars(cost),
-                    ..UsageEstimate::default()
-                }),
-                TierEvidence::RequestedSetting,
-            );
-        }
-        add_estimate(
-            &mut totals,
-            Err(EstimateUnavailableReason::ArithmeticOverflow),
-            TierEvidence::RequestedSetting,
-        );
-        assert_eq!(totals.cost, EstimateTotal::Overflow);
-        assert_eq!(totals.imported_event_count, 4);
-        assert_eq!(totals.priced_event_count, 3);
-        assert_eq!(totals.requested_setting_event_count, 3);
-        assert_eq!(
-            totals.unavailable_reasons[&EstimateUnavailableReason::ArithmeticOverflow],
-            1
-        );
-    }
-}

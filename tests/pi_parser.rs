@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use token_tracker::adapters::pi::{PiParseError, PiSessionParser};
 use token_tracker::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
-use token_tracker::core::{
+use token_tracker::domain::{
     AgentId, ModelAttribution, ParentSession, RecordedCost, SessionMetadata, Timestamp,
     TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
@@ -38,7 +38,7 @@ fn parses_every_usage_location_without_exposing_session_content() {
         SessionMetadata {
             agent: AgentId::from("pi"),
             session_id: "01940000-0000-7000-8000-000000000001".into(),
-            format_version: Some("3".into()),
+
             working_directory: Some(PathBuf::from("/work/project")),
             started_at: Timestamp::from_unix_milliseconds(1_735_787_045_006),
             name: Some("Fixture session".into()),
@@ -138,7 +138,6 @@ fn parses_every_usage_location_without_exposing_session_content() {
         assert!(!output.contains(private_content));
     }
 
-    // Session IDs and mutable usage values do not participate in copied-entry keys.
     let copied = ALL_USAGE
         .replacen(
             "01940000-0000-7000-8000-000000000001",

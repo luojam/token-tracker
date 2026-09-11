@@ -123,7 +123,7 @@ fn pending_response_allows_identical_repeats_but_not_corrections_or_unproven_bou
     for field in ["usage", "turn_token_usage", "thread_token_usage"] {
         let mut changed = original[..4].to_vec();
         let mut correction = original[3].clone();
-        // A smaller usage remains within cumulative bounds but is not a proven correction order.
+        // Even reduced usage is invalid before mirror confirmation.
         multiply(
             &mut correction["payload"][field],
             if field == "usage" { 0 } else { 2 },

@@ -1,4 +1,6 @@
-//! Public API token list prices, verified 2026-09-09:
+//! API token estimates exclude regional uplifts, discounts, tool fees, and subscriptions.
+//!
+//! Rate snapshot sources:
 //! - https://developers.openai.com/api/docs/pricing.md (Standard and Fast tables)
 //! - https://developers.openai.com/api/docs/models/gpt-6-astra (request threshold)
 //! - https://developers.openai.com/api/docs/models/gpt-5.6-sol (threshold and alias)
@@ -7,12 +9,11 @@
 //! - https://developers.openai.com/api/docs/models/gpt-5.5 (threshold and snapshot)
 //! - https://developers.openai.com/api/docs/models/gpt-5.4-mini (flat rate and snapshot)
 //! - https://developers.openai.com/api/docs/guides/prompt-caching (cache-write charges)
-//!
-//! GPT-5.6 Sol prices are promotional, available at least through November 21, 2026.
-//! Earlier models charge cache writes as ordinary input, with no extra fee.
-//! No published API rate or model mapping was found for codex-auto-review.
 
-use crate::core::{EstimateUnavailableReason, ModelAttribution, ServiceTier};
+use crate::domain::{
+    CacheDetail, EstimateUnavailableReason, EstimatedCost, ModelAttribution, PricingContext,
+    RequestGranularity, ServiceTier, TierEvidence, TokenCounts, UsageEstimate, UsageEvent,
+};
 
 pub const SNAPSHOT_ID: &str = "openai-api-2026-09-09";
 pub const RATE_DATE: &str = "2026-09-09";
@@ -27,7 +28,7 @@ pub struct TokenRates {
 }
 
 impl TokenRates {
-    pub(super) const fn new(input: u64, cache_read: u64, cache_write: u64, output: u64) -> Self {
+    const fn new(input: u64, cache_read: u64, cache_write: u64, output: u64) -> Self {
         Self {
             input,
             cache_read,
@@ -37,7 +38,7 @@ impl TokenRates {
     }
 }
 
-pub(super) enum ContextRates {
+enum ContextRates {
     Flat(TokenRates),
     Banded {
         short_input_limit: u128,
@@ -47,7 +48,7 @@ pub(super) enum ContextRates {
 }
 
 impl ContextRates {
-    pub(super) fn for_input(&self, input: u128) -> Result<TokenRates, EstimateUnavailableReason> {
+    fn for_input(&self, input: u128) -> Result<TokenRates, EstimateUnavailableReason> {
         match self {
             Self::Flat(rates) => Ok(*rates),
             Self::Banded {
@@ -64,7 +65,7 @@ impl ContextRates {
         }
     }
 
-    pub(super) fn supports_aggregate(&self, input: u128) -> bool {
+    fn supports_aggregate(&self, input: u128) -> bool {
         match self {
             Self::Flat(_) => true,
             Self::Banded {
@@ -151,7 +152,6 @@ const GPT_5_5: ModelRates = ModelRates {
     fast: ContextRates::Banded {
         short_input_limit: 272_000,
         short: TokenRates::new(12_500_000, 1_250_000, 12_500_000, 75_000_000),
-        // No published GPT-5.5 Fast rate above 272K input tokens.
         long: None,
     },
 };
@@ -161,7 +161,7 @@ const GPT_5_4_MINI: ModelRates = ModelRates {
     fast: ContextRates::Flat(TokenRates::new(1_500_000, 150_000, 1_500_000, 9_000_000)),
 };
 
-pub(super) fn schedule(
+fn schedule(
     attribution: &ModelAttribution,
     tier: &ServiceTier,
 ) -> Result<&'static ContextRates, EstimateUnavailableReason> {
@@ -185,12 +185,148 @@ pub(super) fn schedule(
     }
 }
 
-/// Looks up one request's rates, including all input and cache tokens in its band.
-/// The caller establishes granularity, cache completeness, and tier evidence.
+/// `request_input` must include ordinary input, cache reads, and cache writes.
 pub fn lookup_rates(
     attribution: &ModelAttribution,
     tier: &ServiceTier,
     request_input: u128,
 ) -> Result<TokenRates, EstimateUnavailableReason> {
     schedule(attribution, tier)?.for_input(request_input)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MissingCacheWritePolicy {
+    Reject,
+    TreatAsInput,
+}
+
+pub(super) fn estimate_tier(context: &PricingContext) -> (ServiceTier, TierEvidence) {
+    match context.tier {
+        ServiceTier::Unknown => (ServiceTier::Standard, TierEvidence::Unknown),
+        _ => (context.tier.clone(), context.tier_evidence),
+    }
+}
+
+/// Unknown tiers use standard rates. The caller must select canonical observations.
+pub fn calculate_estimate(
+    event: &UsageEvent,
+    missing_cache_writes: MissingCacheWritePolicy,
+) -> Result<UsageEstimate, EstimateUnavailableReason> {
+    use EstimateUnavailableReason as Reason;
+
+    let context = event
+        .pricing_context
+        .as_ref()
+        .ok_or(Reason::MissingPricingContext)?;
+    if context.provider != "openai" {
+        return Err(Reason::UnsupportedProvider);
+    }
+    let attribution = event
+        .attribution
+        .as_ref()
+        .ok_or(Reason::UnknownAttribution)?;
+    let (tier, evidence) = estimate_tier(context);
+    let schedule = schedule(attribution, &tier)?;
+    if context.tier != ServiceTier::Unknown && evidence == TierEvidence::Unknown {
+        return Err(Reason::UnknownTier);
+    }
+    if !context.request_usage_matches(event.tokens) {
+        return Err(Reason::UnknownRequestGranularity);
+    }
+    if let Some(requests) = &context.request_usage {
+        return requests
+            .iter()
+            .try_fold(UsageEstimate::default(), |total, tokens| {
+                let estimate =
+                    price_tokens(*tokens, context, schedule, true, missing_cache_writes)?;
+                Ok(UsageEstimate {
+                    cost: total
+                        .cost
+                        .checked_add(estimate.cost)
+                        .ok_or(Reason::ArithmeticOverflow)?,
+                    assumed_cache_writes_as_input: total.assumed_cache_writes_as_input
+                        || estimate.assumed_cache_writes_as_input,
+                })
+            });
+    }
+    price_tokens(
+        event.tokens,
+        context,
+        schedule,
+        context.request_granularity == RequestGranularity::ExactSingleRequest,
+        missing_cache_writes,
+    )
+}
+
+fn price_tokens(
+    tokens: TokenCounts,
+    context: &PricingContext,
+    schedule: &ContextRates,
+    exact_request: bool,
+    missing_cache_writes: MissingCacheWritePolicy,
+) -> Result<UsageEstimate, EstimateUnavailableReason> {
+    use EstimateUnavailableReason as Reason;
+
+    let request_input =
+        u128::from(tokens.input) + u128::from(tokens.cache_read) + u128::from(tokens.cache_write);
+    // If the aggregate fits the short band, every request does too.
+    if !exact_request && !schedule.supports_aggregate(request_input) {
+        return Err(Reason::UnknownRequestGranularity);
+    }
+    let rates = schedule.for_input(request_input)?;
+    if context.cache_detail != CacheDetail::Complete
+        && rates.cache_write != rates.input
+        && missing_cache_writes == MissingCacheWritePolicy::Reject
+    {
+        return Err(Reason::IncompleteCacheDetail);
+    }
+    Ok(UsageEstimate {
+        cost: calculate_cost(tokens, rates)?,
+        assumed_cache_writes_as_input: context.cache_detail == CacheDetail::Incomplete
+            && rates.cache_write != rates.input
+            && tokens.input > 0,
+    })
+}
+
+fn calculate_cost(
+    tokens: TokenCounts,
+    rates: TokenRates,
+) -> Result<EstimatedCost, EstimateUnavailableReason> {
+    [
+        (tokens.input, rates.input),
+        (tokens.cache_read, rates.cache_read),
+        (tokens.cache_write, rates.cache_write),
+        (tokens.output, rates.output),
+    ]
+    .into_iter()
+    .try_fold(0u128, |total, (count, rate)| {
+        u128::from(count)
+            .checked_mul(u128::from(rate))
+            .and_then(|cost| total.checked_add(cost))
+    })
+    .map(EstimatedCost::from_picodollars)
+    .ok_or(EstimateUnavailableReason::ArithmeticOverflow)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cost_overflow_returns_no_partial_value() {
+        let rates = TokenRates::new(u64::MAX, u64::MAX, 0, 0);
+        let mut tokens = TokenCounts {
+            input: u64::MAX,
+            ..TokenCounts::default()
+        };
+        assert_eq!(
+            calculate_cost(tokens, rates).unwrap().as_picodollars(),
+            u128::from(u64::MAX) * u128::from(u64::MAX),
+        );
+        tokens.cache_read = u64::MAX;
+        assert_eq!(
+            calculate_cost(tokens, rates),
+            Err(EstimateUnavailableReason::ArithmeticOverflow),
+        );
+    }
 }

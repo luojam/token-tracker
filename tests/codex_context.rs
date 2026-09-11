@@ -4,9 +4,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 use token_tracker::adapters::codex::{CodexParseError, CodexSessionParser};
 use token_tracker::application::{ParseContext, ParsedSession, SessionParser};
-use token_tracker::core::{
-    ModelAttribution, RawServiceTier, ServiceTier, TierEvidence, UsageEvent,
-};
+use token_tracker::domain::{ModelAttribution, ServiceTier, TierEvidence, UsageEvent};
 
 const RESPONSE: &str = include_str!("fixtures/codex/response-mirrors.jsonl");
 
@@ -75,10 +73,10 @@ fn mirror(total: u64) -> Value {
     )
 }
 
-fn assert_tier(event: &UsageEvent, tier: ServiceTier, raw: RawServiceTier, evidence: TierEvidence) {
+fn assert_tier(event: &UsageEvent, tier: ServiceTier, evidence: TierEvidence) {
     let context = event.pricing_context.as_ref().unwrap();
     assert_eq!(context.tier, tier);
-    assert_eq!(context.raw_tier, raw);
+
     assert_eq!(context.tier_evidence, evidence);
 }
 
@@ -92,13 +90,11 @@ fn new_turn_uses_its_model_and_clears_omitted_tier() {
     assert_tier(
         &parsed.events[0],
         ServiceTier::Fast,
-        RawServiceTier::Value("priority".into()),
         TierEvidence::RequestedSetting,
     );
     assert_tier(
         &parsed.events[1],
         ServiceTier::Unknown,
-        RawServiceTier::Missing,
         TierEvidence::RequestedSetting,
     );
     assert_eq!(
@@ -117,7 +113,6 @@ fn late_and_in_flight_settings_do_not_reprice_completed_responses() {
     assert_tier(
         &parse(&lines).unwrap().events[0],
         ServiceTier::Unknown,
-        RawServiceTier::Missing,
         TierEvidence::Unknown,
     );
 
@@ -144,13 +139,11 @@ fn late_and_in_flight_settings_do_not_reprice_completed_responses() {
     assert_tier(
         &parsed.events[1],
         ServiceTier::Unknown,
-        RawServiceTier::Value("default".into()),
         TierEvidence::Unknown,
     );
     assert_tier(
         &parsed.events[2],
         ServiceTier::Fast,
-        RawServiceTier::Value("priority".into()),
         TierEvidence::RequestedSetting,
     );
 }
@@ -178,17 +171,11 @@ fn legacy_aggregates_merge_only_context_of_contributing_deltas() {
     );
     lines.insert(6, settings(None, Some(json!("priority"))));
     lines.insert(7, context("turn-legacy-a", json!("changed-model")));
-    // Settings, context, and the unchanged counter repeat are not new usage.
     assert_eq!(parse(&lines[..9]).unwrap().events[0], original);
     let aggregate = parse(&lines).unwrap().events.remove(0);
     assert_eq!(aggregate.tokens.total(), 250);
     assert_eq!(aggregate.attribution, None);
-    assert_tier(
-        &aggregate,
-        ServiceTier::Unknown,
-        RawServiceTier::Value("default".into()),
-        TierEvidence::Unknown,
-    );
+    assert_tier(&aggregate, ServiceTier::Unknown, TierEvidence::Unknown);
 }
 
 #[test]
@@ -200,7 +187,6 @@ fn child_overrides_and_foreign_settings_never_share_parent_defaults() {
     assert_tier(
         &parsed.events[0],
         ServiceTier::Unknown,
-        RawServiceTier::Missing,
         TierEvidence::Unknown,
     );
     assert_eq!(
@@ -208,13 +194,11 @@ fn child_overrides_and_foreign_settings_never_share_parent_defaults() {
         "child-provider"
     );
     lines.insert(2, settings(Some("thread-child"), Some(json!("default"))));
-    // A foreign mid-turn event must not invalidate the child's own bound tier.
     lines.insert(5, settings(Some("thread-main"), Some(json!("priority"))));
     let parsed = parse(&lines).unwrap();
     assert_tier(
         &parsed.events[0],
         ServiceTier::Standard,
-        RawServiceTier::Value("default".into()),
         TierEvidence::RequestedSetting,
     );
 }
@@ -253,12 +237,7 @@ fn explicit_fork_response_owner_resolves_model_but_not_tier() {
                     model: "gpt-6-astra".into(),
                 })
         );
-        assert_tier(
-            event,
-            ServiceTier::Unknown,
-            RawServiceTier::Missing,
-            TierEvidence::Unknown,
-        );
+        assert_tier(event, ServiceTier::Unknown, TierEvidence::Unknown);
     }
 }
 
@@ -284,12 +263,7 @@ fn fork_turns_without_an_owner_boundary_remain_unknown() {
         let parsed = parse(&lines).unwrap();
         assert_eq!(parsed.events.len(), 2);
         for event in &parsed.events {
-            assert_tier(
-                event,
-                ServiceTier::Unknown,
-                RawServiceTier::Missing,
-                TierEvidence::Unknown,
-            );
+            assert_tier(event, ServiceTier::Unknown, TierEvidence::Unknown);
             let known = child_owner_known && event.identity.adapter_key.ends_with("turn-fork");
             assert_eq!(
                 event

@@ -1,13 +1,12 @@
 use super::CLAUDE_AGENT_ID;
 use super::discovery::{is_agent_id, is_session_id};
 use crate::application::{
-    ParseCompletion, ParseContext, ParseNotice, ParseNoticeCode, ParsedSession, SessionParser,
+    ParseCompletion, ParseContext, ParseNotice, ParsedSession, SessionParser,
 };
-use crate::core::{
-    AgentId, AnthropicIteration, AnthropicIterationKind, AnthropicPricingContext, AnthropicUsage,
-    AnthropicUsageComponent, CacheCreationTokens, ModelAttribution, ParentSession, PricingContext,
-    RawServedValue, SessionMetadata, Timestamp, TokenCounts, UsageEvent, UsageEventIdentity,
-    UsageKind,
+use crate::domain::{
+    AgentId, CacheDetail, CacheWriteTokens, ModelAttribution, ParentSession, PricingContext,
+    RequestGranularity, ServiceTier, SessionMetadata, TierEvidence, Timestamp, TokenCounts,
+    UsageEvent, UsageEventIdentity, UsageKind,
 };
 use chrono::DateTime;
 use serde::{Deserialize, de::IgnoredAny};
@@ -29,6 +28,10 @@ impl ClaudeSessionParser {
 
 impl SessionParser for ClaudeSessionParser {
     type Error = ClaudeParseError;
+
+    fn normalization_version(&self) -> u32 {
+        super::NORMALIZATION_VERSION
+    }
 
     fn parse(
         &self,
@@ -133,7 +136,7 @@ fn complete_line(bytes: &[u8], line: usize) -> Result<Option<&str>, ClaudeParseE
             Ok(None)
         }
         Err(_) if !terminated && text.ends_with(['.', 'e', 'E', '+', '-']) => {
-            // A digit completes a truncated number only if the preceding syntax is valid.
+            // Appending a digit distinguishes a truncated number from invalid syntax.
             match serde_json::from_str::<IgnoredAny>(&format!("{text}0")) {
                 Ok(_) => Ok(None),
                 Err(error) if error.is_eof() && valid_unicode_escape_prefixes(bytes) => Ok(None),
@@ -145,7 +148,7 @@ fn complete_line(bytes: &[u8], line: usize) -> Result<Option<&str>, ClaudeParseE
 }
 
 fn valid_unicode_escape_prefixes(bytes: &[u8]) -> bool {
-    // Serde reports EOF before validating escapes with fewer than four remaining bytes.
+    // serde_json reports EOF before validating partial Unicode escapes.
     let mut bytes = bytes.iter();
     let mut in_string = false;
     while let Some(&byte) = bytes.next() {
@@ -300,7 +303,7 @@ impl Metadata {
         Ok(SessionMetadata {
             agent: AgentId::from(CLAUDE_AGENT_ID),
             session_id,
-            format_version: None,
+
             working_directory: self.cwd.map(|(_, cwd)| cwd),
             started_at,
             name: None,
@@ -406,7 +409,7 @@ fn parse_usage(
 ) -> Result<Option<(TokenCounts, PricingContext)>, ClaudeParseError> {
     let top = component(usage, line)?;
     let (tokens, components) = match usage.get("iterations").filter(|value| !value.is_null()) {
-        None => (top.tokens, AnthropicUsage::Response(top)),
+        None => (top.tokens, vec![top]),
         Some(value) => {
             let Some(iterations) = value.as_array().filter(|items| !items.is_empty()) else {
                 return Ok(None);
@@ -416,9 +419,9 @@ fn parse_usage(
             let mut total = TokenCounts::default();
             let mut non_compaction = TokenCounts::default();
             for iteration in iterations {
-                let kind = match iteration.get("type").and_then(Value::as_str) {
-                    Some("message") => AnthropicIterationKind::Message,
-                    Some("compaction") => AnthropicIterationKind::Compaction,
+                let is_message = match iteration.get("type").and_then(Value::as_str) {
+                    Some("message") => true,
+                    Some("compaction") => false,
                     _ => {
                         supported = false;
                         continue;
@@ -434,15 +437,12 @@ fn parse_usage(
                 total = total
                     .checked_add(component.tokens)
                     .ok_or_else(|| invalid(line, "counter overflow"))?;
-                if kind == AnthropicIterationKind::Message {
+                if is_message {
                     non_compaction = non_compaction
                         .checked_add(component.tokens)
                         .ok_or_else(|| invalid(line, "counter overflow"))?;
                 }
-                components.push(AnthropicIteration {
-                    kind,
-                    usage: component,
-                });
+                components.push(component);
             }
             if !supported {
                 return Ok(None);
@@ -450,18 +450,52 @@ fn parse_usage(
             if non_compaction != top.tokens {
                 return Err(invalid(line, "non-compaction total mismatch"));
             }
-            (total, AnthropicUsage::Iterations(components))
+            (total, components)
         }
     };
-    let pricing = PricingContext::for_anthropic(AnthropicPricingContext {
-        speed: served_value(usage.get("speed"), line)?,
-        service_tier: served_value(usage.get("service_tier"), line)?,
-        usage: components,
-    });
+    let mut writes = BTreeMap::<u32, u64>::new();
+    let mut complete_durations = true;
+    for component in &components {
+        match &component.cache_creation {
+            Some(durations) => {
+                for duration in durations {
+                    let total = writes.entry(duration.duration_seconds).or_default();
+                    *total = total
+                        .checked_add(duration.tokens)
+                        .ok_or_else(|| invalid(line, "cache duration overflow"))?;
+                }
+            }
+            None if component.tokens.cache_write > 0 => complete_durations = false,
+            None => {}
+        }
+    }
+    let pricing = PricingContext {
+        provider: "anthropic".into(),
+        tier: served_value(usage.get("service_tier"), line, false)?,
+        speed: served_value(usage.get("speed"), line, true)?,
+        tier_evidence: TierEvidence::ServedResponse,
+        request_granularity: RequestGranularity::ExactSingleRequest,
+        cache_detail: CacheDetail::Complete,
+        request_usage: Some(
+            components
+                .iter()
+                .map(|component| component.tokens)
+                .collect(),
+        ),
+        cache_writes: complete_durations.then(|| {
+            writes
+                .into_iter()
+                .map(|(duration_seconds, tokens)| CacheWriteTokens {
+                    duration_seconds,
+                    tokens,
+                })
+                .collect()
+        }),
+    };
     Ok(Some((tokens, pricing)))
 }
 
-fn component(usage: &Value, line: usize) -> Result<AnthropicUsageComponent, ClaudeParseError> {
+fn component(usage: &Value, line: usize) -> Result<UsageComponent, ClaudeParseError> {
     let tokens = TokenCounts {
         input: counter(usage, "input_tokens", line)?,
         output: counter(usage, "output_tokens", line)?,
@@ -477,13 +511,19 @@ fn component(usage: &Value, line: usize) -> Result<AnthropicUsageComponent, Clau
             if ephemeral_5m.checked_add(ephemeral_1h) != Some(tokens.cache_write) {
                 return Err(invalid(line, "cache duration sum mismatch"));
             }
-            Ok(CacheCreationTokens {
-                ephemeral_5m,
-                ephemeral_1h,
-            })
+            Ok(vec![
+                CacheWriteTokens {
+                    duration_seconds: 300,
+                    tokens: ephemeral_5m,
+                },
+                CacheWriteTokens {
+                    duration_seconds: 3600,
+                    tokens: ephemeral_1h,
+                },
+            ])
         })
         .transpose()?;
-    Ok(AnthropicUsageComponent {
+    Ok(UsageComponent {
         tokens,
         cache_creation,
     })
@@ -496,12 +536,56 @@ fn counter(usage: &Value, field: &str, line: usize) -> Result<u64, ClaudeParseEr
         .ok_or_else(|| invalid(line, "required counter"))
 }
 
-fn served_value(value: Option<&Value>, line: usize) -> Result<RawServedValue, ClaudeParseError> {
+struct UsageComponent {
+    tokens: TokenCounts,
+    cache_creation: Option<Vec<CacheWriteTokens>>,
+}
+
+fn served_value(
+    value: Option<&Value>,
+    line: usize,
+    allow_fast: bool,
+) -> Result<ServiceTier, ClaudeParseError> {
     match value {
-        None => Ok(RawServedValue::Missing),
-        Some(Value::Null) => Ok(RawServedValue::Null),
-        Some(Value::String(value)) => Ok(RawServedValue::Value(value.clone())),
+        None | Some(Value::Null) => Ok(ServiceTier::Unknown),
+        Some(Value::String(value)) => Ok(match value.as_str() {
+            "standard" => ServiceTier::Standard,
+            "fast" if allow_fast => ServiceTier::Fast,
+            _ => ServiceTier::Unsupported(value.clone()),
+        }),
         _ => Err(invalid(line, "served pricing evidence")),
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ParseNoticeCode {
+    IncompleteResponseUsage,
+    UnsupportedResponseAccounting,
+    TruncatedTail,
+}
+
+impl ParseNoticeCode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::IncompleteResponseUsage => "incomplete_response_usage",
+            Self::UnsupportedResponseAccounting => "unsupported_response_accounting",
+            Self::TruncatedTail => "truncated_tail",
+        }
+    }
+
+    fn message(self, count: u64) -> String {
+        let plural = if count == 1 { "" } else { "s" };
+        match self {
+            Self::IncompleteResponseUsage => {
+                format!("omitted {count} response{plural} with incomplete usage")
+            }
+            Self::UnsupportedResponseAccounting => {
+                format!("omitted {count} response{plural} with unsupported accounting")
+            }
+            Self::TruncatedTail => {
+                format!("omitted {count} truncated JSON tail{plural}; usage may be missing")
+            }
+        }
     }
 }
 
@@ -514,15 +598,20 @@ fn add_notice(
         .ok()
         .and_then(NonZeroU64::new)
         .ok_or_else(|| invalid(line, "line overflow"))?;
-    if let Some(notice) = notices.iter_mut().find(|notice| notice.code == code) {
+    if let Some(notice) = notices
+        .iter_mut()
+        .find(|notice| notice.code == code.as_str())
+    {
         notice.count = notice
             .count
             .checked_add(1)
             .ok_or_else(|| invalid(line, "notice overflow"))?;
         notice.line = Some(notice.line.map_or(line_number, |old| old.min(line_number)));
+        notice.message = code.message(notice.count.get());
     } else {
         notices.push(ParseNotice {
-            code,
+            code: code.as_str().into(),
+            message: code.message(1),
             count: NonZeroU64::MIN,
             line: Some(line_number),
         });

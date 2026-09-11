@@ -1,6 +1,6 @@
 use super::PI_AGENT_ID;
 use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
-use crate::core::{
+use crate::domain::{
     AgentId, InvalidRecordedCost, ModelAttribution, ParentSession, RecordedCost, SessionMetadata,
     Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
@@ -23,6 +23,10 @@ impl PiSessionParser {
 
 impl SessionParser for PiSessionParser {
     type Error = PiParseError;
+
+    fn normalization_version(&self) -> u32 {
+        super::NORMALIZATION_VERSION
+    }
 
     fn parse(
         &self,
@@ -76,7 +80,7 @@ impl SessionParser for PiSessionParser {
         let mut metadata = SessionMetadata {
             agent: AgentId::from(PI_AGENT_ID),
             session_id: header.id,
-            format_version: Some(version.to_string()),
+
             working_directory: Some(PathBuf::from(header.cwd)),
             started_at,
             name: None,
@@ -333,8 +337,7 @@ fn normalize_event(
     })
 }
 
-/// Versioned key made only from immutable Pi entry fields. Copied fork/clone
-/// entries therefore retain the same key even when their source or usage changes.
+// Copied entries keep their identity when the source path or usage changes.
 fn adapter_key(entry_id: &str, timestamp: Timestamp, kind: UsageKind) -> String {
     let kind = match kind {
         UsageKind::Assistant => "assistant",

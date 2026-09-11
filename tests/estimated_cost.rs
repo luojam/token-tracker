@@ -1,4 +1,4 @@
-use token_tracker::core::{EstimateTotal, EstimatedCost};
+use token_tracker::domain::{EstimateTotal, EstimatedCost};
 
 #[test]
 fn displays_six_decimal_usd_without_losing_zero_or_rounding_overflow() {

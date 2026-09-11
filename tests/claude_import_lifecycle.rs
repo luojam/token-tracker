@@ -3,18 +3,18 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
+use token_tracker::cli::render_terminal_report;
 
 use serde_json::Value;
 use token_tracker::adapters::claude::{ClaudeSessionDiscovery, ClaudeSessionParser};
-use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{
-    SourceState, SynchronizationReport, UsageReadStore, UsageSnapshot, UsageStore,
-    render_terminal_report, summarize_usage, synchronize_sessions_at,
+    SourceState, SynchronizationReport, UsageReadStore, UsageSnapshot, UsageStore, summarize_usage,
+    synchronize_sessions_at,
 };
-use token_tracker::core::{
-    AgentId, AnthropicUsage, CacheCreationTokens, ParentSession, RawServedValue, Timestamp,
-    UsageEvent,
+use token_tracker::domain::{
+    AgentId, CacheWriteTokens, ParentSession, ServiceTier, Timestamp, UsageEvent,
 };
+use token_tracker::storage::SqliteUsageStore;
 
 const MAIN: &str = "11111111-1111-4111-8111-111111111111";
 const COPY: &str = "22222222-2222-4222-8222-222222222222";
@@ -166,22 +166,19 @@ fn reopened_imports_append_finals_and_correct_tokens_and_pricing_without_duplica
     expected.tokens.input = 8;
     expected.tokens.cache_read = 90;
     expected.tokens.output = 25;
-    let facts = expected
-        .pricing_context
-        .as_mut()
-        .unwrap()
-        .anthropic
-        .as_mut()
-        .unwrap();
-    facts.speed = RawServedValue::Value("fast".into());
-    let AnthropicUsage::Response(component) = &mut facts.usage else {
-        panic!("expected response usage")
-    };
-    component.tokens = expected.tokens;
-    component.cache_creation = Some(CacheCreationTokens {
-        ephemeral_5m: 20,
-        ephemeral_1h: 20,
-    });
+    let facts = expected.pricing_context.as_mut().unwrap();
+    facts.speed = ServiceTier::Fast;
+    facts.request_usage = Some(vec![expected.tokens]);
+    facts.cache_writes = Some(vec![
+        CacheWriteTokens {
+            duration_seconds: 300,
+            tokens: 20,
+        },
+        CacheWriteTokens {
+            duration_seconds: 3600,
+            tokens: 20,
+        },
+    ]);
     assert_eq!(
         event(&ledger.snapshot(), "response-v1:msg_shared"),
         expected

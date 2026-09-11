@@ -4,12 +4,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use token_tracker::adapters::pi::{PiParseError, PiSessionDiscovery, PiSessionParser};
-use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{
-    ParseContext, ParseNotice, ParseNoticeCode, ParsedSession, SessionParser, UsageReadStore,
+    ParseCompletion, ParseContext, ParseNotice, ParsedSession, SessionParser, UsageReadStore,
     UsageStore, synchronize_sessions_at,
 };
-use token_tracker::core::{AgentId, Timestamp};
+use token_tracker::domain::{AgentId, Timestamp};
+use token_tracker::storage::SqliteUsageStore;
 
 static NEXT_TEMP_TREE: AtomicU64 = AtomicU64::new(0);
 
@@ -187,12 +187,14 @@ fn notices_survive_scans_reopen_and_failures_until_a_successful_replacement() {
     let mut store = SqliteUsageStore::open(&database).unwrap();
     let notices = vec![
         ParseNotice {
-            code: ParseNoticeCode::IncompleteResponseUsage,
+            code: "incomplete_response_usage".into(),
+            message: "omitted 2 responses with incomplete usage".into(),
             count: 2.try_into().unwrap(),
             line: None,
         },
         ParseNotice {
-            code: ParseNoticeCode::UnsupportedResponseAccounting,
+            code: "unsupported_response_accounting".into(),
+            message: "omitted 3 responses with unsupported accounting".into(),
             count: 3.try_into().unwrap(),
             line: Some(4.try_into().unwrap()),
         },
@@ -295,7 +297,8 @@ fn truncated_tail_notice_counts_tails_and_still_retries_incomplete_files() {
     )
     .unwrap();
     let parser = NoticeParser(vec![ParseNotice {
-        code: ParseNoticeCode::TruncatedTail,
+        code: "truncated_tail".into(),
+        message: "omitted 1 truncated JSON tail; usage may be missing".into(),
         count: 1.try_into().unwrap(),
         line: Some(3.try_into().unwrap()),
     }]);
@@ -508,4 +511,131 @@ fn a_file_that_keeps_changing_is_deferred() {
             .last_imported_revision
             .is_none()
     );
+}
+
+#[test]
+fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
+    struct VersionedParser {
+        version: u32,
+        fail: bool,
+        incomplete: bool,
+    }
+    impl SessionParser for VersionedParser {
+        type Error = std::io::Error;
+
+        fn normalization_version(&self) -> u32 {
+            self.version
+        }
+
+        fn parse(
+            &self,
+            input: &mut dyn BufRead,
+            context: ParseContext<'_>,
+        ) -> Result<ParsedSession, Self::Error> {
+            if self.fail {
+                return Err(std::io::Error::other("normalization failed"));
+            }
+            let mut parsed = PiSessionParser::new()
+                .parse(input, context)
+                .map_err(std::io::Error::other)?;
+            parsed.events[0].tokens.input *= u64::from(self.version);
+            if self.version == 4 {
+                parsed.events.clear();
+            }
+            if self.incomplete {
+                parsed.completion = ParseCompletion::IncompleteFinalLine;
+            }
+            Ok(parsed)
+        }
+    }
+    let tree = TempTree::new();
+    fs::write(
+        tree.root.join("session.jsonl"),
+        session("versioned", None, &[("event", 10)]),
+    )
+    .unwrap();
+    let database = tree.root.join("usage.db");
+    let discovery = PiSessionDiscovery::new(&tree.root);
+    let mut store = SqliteUsageStore::open(&database).unwrap();
+    let sync = |store: &mut SqliteUsageStore, version, fail, time| {
+        synchronize_sessions_at(
+            &discovery,
+            &VersionedParser {
+                version,
+                fail,
+                incomplete: false,
+            },
+            store,
+            scan_time(time),
+        )
+        .unwrap()
+    };
+    assert_eq!(sync(&mut store, 1, false, 1).counts.files_imported, 1);
+    assert_eq!(sync(&mut store, 1, false, 2).counts.files_unchanged, 1);
+    assert_eq!(sync(&mut store, 2, true, 3).counts.files_failed, 1);
+    assert_eq!(
+        store.source_states(&"pi".into()).unwrap()[0].normalization_version,
+        Some(1)
+    );
+    assert_eq!(
+        store.usage_snapshot().unwrap().observations[0]
+            .event
+            .tokens
+            .input,
+        10
+    );
+    assert_eq!(sync(&mut store, 2, false, 4).counts.observations_updated, 1);
+    drop(store);
+    let mut store = SqliteUsageStore::open(&database).unwrap();
+    assert_eq!(
+        store.source_states(&"pi".into()).unwrap()[0].normalization_version,
+        Some(2)
+    );
+    assert_eq!(
+        store.usage_snapshot().unwrap().observations[0]
+            .event
+            .tokens
+            .input,
+        20
+    );
+    assert_eq!(sync(&mut store, 2, false, 5).counts.files_unchanged, 1);
+
+    let before = store.usage_snapshot().unwrap();
+    let incomplete = synchronize_sessions_at(
+        &discovery,
+        &VersionedParser {
+            version: 3,
+            fail: false,
+            incomplete: true,
+        },
+        &mut store,
+        scan_time(6),
+    )
+    .unwrap();
+    assert_eq!(incomplete.counts.files_failed, 1);
+    assert_eq!(store.usage_snapshot().unwrap(), before);
+    assert_eq!(
+        store.source_states(&"pi".into()).unwrap()[0].normalization_version,
+        Some(2)
+    );
+
+    assert_eq!(sync(&mut store, 3, false, 7).counts.files_imported, 1);
+    let normalized = store.usage_snapshot().unwrap();
+    assert_eq!(normalized.observations.len(), 1);
+    assert_eq!(
+        normalized.observations[0].event.identity,
+        before.observations[0].event.identity
+    );
+    assert_eq!(normalized.observations[0].event.tokens.input, 30);
+    assert_eq!(normalized.sessions, before.sessions);
+
+    assert_eq!(sync(&mut store, 4, false, 8).counts.files_imported, 1);
+    drop(store);
+    let mut store = SqliteUsageStore::open(&database).unwrap();
+    assert_eq!(store.usage_snapshot().unwrap(), normalized);
+    assert_eq!(
+        store.source_states(&"pi".into()).unwrap()[0].normalization_version,
+        Some(4)
+    );
+    assert_eq!(sync(&mut store, 4, false, 9).counts.files_unchanged, 1);
 }

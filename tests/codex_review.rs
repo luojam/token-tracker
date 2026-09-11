@@ -4,7 +4,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 use token_tracker::adapters::codex::{CodexParseError, CodexSessionParser};
 use token_tracker::application::{ParseContext, ParsedSession, SessionParser};
-use token_tracker::core::ServiceTier;
+use token_tracker::domain::ServiceTier;
 
 fn records() -> Vec<Value> {
     include_str!("fixtures/codex/response-mirrors.jsonl")

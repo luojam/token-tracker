@@ -4,16 +4,18 @@ use std::fmt;
 use adapters::claude::{ClaudeSessionDiscovery, ClaudeSessionParser};
 use adapters::codex::{CodexSessionDiscovery, CodexSessionParser};
 use adapters::pi::{PiSessionDiscovery, PiSessionParser};
-use adapters::sqlite::{SqliteStoreError, SqliteUsageStore};
 use application::{
     AllTimeReportError, ImportAdapter, ImportWarning, SessionAdapter, run_all_time_report,
 };
+use storage::{SqliteStoreError, SqliteUsageStore};
 
 pub mod adapters;
 pub mod application;
-pub mod core;
+pub mod cli;
+pub mod domain;
+pub mod pricing;
+pub mod storage;
 
-/// Runs the configured agent adapters against the default database.
 pub fn run() -> Result<String, TokenTrackerError> {
     let mut store = SqliteUsageStore::open_default().map_err(TokenTrackerError::StorageSetup)?;
     let mut warnings = Vec::new();
@@ -40,7 +42,12 @@ pub fn run() -> Result<String, TokenTrackerError> {
             .map(|discovery| SessionAdapter::new(discovery, ClaudeSessionParser::new())),
     );
     let adapters = adapters.iter().map(Box::as_ref).collect::<Vec<_>>();
-    run_all_time_report(&adapters, &mut store, warnings).map_err(TokenTrackerError::Workflow)
+    let report = run_all_time_report(&adapters, &mut store, warnings)
+        .map_err(TokenTrackerError::Workflow)?;
+    Ok(cli::render_terminal_report(
+        &report.summary,
+        &report.warnings,
+    ))
 }
 
 fn register_adapter<A, E>(

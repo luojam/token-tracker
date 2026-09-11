@@ -5,3 +5,5 @@ pub use discovery::{CodexDiscoveryError, CodexSessionDiscovery, default_session_
 pub use parsing::{CodexParseError, CodexSessionParser};
 
 const CODEX_AGENT_ID: &str = "codex";
+
+const NORMALIZATION_VERSION: u32 = 1;

@@ -5,7 +5,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 use token_tracker::adapters::codex::{CodexParseError, CodexSessionParser};
 use token_tracker::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
-use token_tracker::core::{AgentId, TokenCounts, UsageKind};
+use token_tracker::domain::{AgentId, TokenCounts, UsageKind};
 
 const RESPONSE: &str = include_str!("fixtures/codex/response-mirrors.jsonl");
 const CORRECTION: &str = include_str!("fixtures/codex/response-repeat-correction.jsonl");

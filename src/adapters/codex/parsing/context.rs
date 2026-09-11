@@ -1,10 +1,16 @@
 use super::ObjectWire;
-use crate::core::{
-    CacheDetail, ModelAttribution, PricingContext, RawServiceTier, RequestGranularity, ServiceTier,
-    TierEvidence,
+use crate::domain::{
+    CacheDetail, ModelAttribution, PricingContext, RequestGranularity, ServiceTier, TierEvidence,
 };
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum RawServiceTier {
+    Missing,
+    Null,
+    Value(String),
+}
 
 #[derive(Default)]
 pub(super) struct ContextState {
@@ -136,7 +142,7 @@ impl ContextState {
         thread_id: Option<&str>,
         granularity: RequestGranularity,
         cache_detail: CacheDetail,
-    ) -> (Option<ModelAttribution>, PricingContext) {
+    ) -> (Option<ModelAttribution>, PricingContext, RawServiceTier) {
         let turn = self.active.as_ref().filter(|turn| {
             turn.id == turn_id
                 && thread_id.is_none_or(|id| turn.owner.as_deref().is_none_or(|owner| owner == id))
@@ -165,13 +171,15 @@ impl ContextState {
             attribution,
             PricingContext {
                 tier: tier.tier,
-                raw_tier: tier.raw,
+                provider: "openai".into(),
+                speed: ServiceTier::Standard,
                 tier_evidence: tier.evidence,
                 request_granularity: granularity,
                 cache_detail,
                 request_usage: None,
-                anthropic: None,
+                cache_writes: None,
             },
+            tier.raw,
         )
     }
 }

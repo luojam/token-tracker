@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use token_tracker::adapters::codex::CodexSessionDiscovery;
-use token_tracker::adapters::sqlite::SqliteUsageStore;
 use token_tracker::application::{SessionDiscovery, UsageStore};
-use token_tracker::core::Timestamp;
+use token_tracker::domain::Timestamp;
+use token_tracker::storage::SqliteUsageStore;
 
 static NEXT_TREE: AtomicU64 = AtomicU64::new(0);
 
@@ -178,8 +178,7 @@ fn failed_inspection_preserves_presence_while_missing_roots_clear_it() {
 
     fs::remove_file(&candidate).unwrap();
     symlink(tree.0.join("missing-target"), &candidate).unwrap();
-    // A file where a directory used to be reliably causes read_dir to fail,
-    // even when tests run with elevated filesystem privileges.
+    // A file forces read_dir to fail even for privileged runners.
     fs::remove_dir_all(&blocked).unwrap();
     fs::write(&blocked, b"not a directory").unwrap();
     let blocked_report = CodexSessionDiscovery::new([&blocked]).discover().unwrap();
@@ -257,7 +256,7 @@ fn unreadable_subtree_is_reported_and_excluded_from_coverage() {
     fs::set_permissions(&blocked, fs::Permissions::from_mode(0o000)).unwrap();
     let report = discovery.discover().unwrap();
     fs::set_permissions(&blocked, fs::Permissions::from_mode(0o700)).unwrap();
-    // Privileged test runners can inspect mode-000 directories.
+    // Privileged runners can still read mode-000 directories.
     if report.files.iter().any(|file| file.path == candidate) {
         return;
     }
