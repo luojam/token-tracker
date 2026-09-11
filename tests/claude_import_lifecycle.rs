@@ -8,8 +8,8 @@ use token_tracker::cli::render_terminal_report;
 use serde_json::Value;
 use token_tracker::adapters::claude::{ClaudeSessionDiscovery, ClaudeSessionParser};
 use token_tracker::application::{
-    SourceState, SynchronizationReport, UsageReadStore, UsageSnapshot, UsageStore, summarize_usage,
-    synchronize_sessions_at,
+    SourceState, SynchronizationReport, UsageReadStore, UsageSnapshot, UsageStore,
+    build_usage_report, summarize_usage, synchronize_sessions_at,
 };
 use token_tracker::domain::{
     AgentId, CacheWriteTokens, KnownRequests, ParentSession, PricingContext, RequestBreakdown,
@@ -297,7 +297,7 @@ fn failed_inaccessible_deleted_and_rewritten_sources_retain_usage_and_notices() 
     let estimate = &summary.estimates[&AgentId::from("claude")];
     assert_eq!(estimate.totals.imported_event_count, 1);
     assert_eq!(estimate.totals.priced_event_count, 1);
-    let report = render_terminal_report(&summary, &unchanged.warnings);
+    let report = render_terminal_report(&build_usage_report(&summary), &unchanged.warnings);
     assert!(report.contains("Claude Code usage:"));
     assert!(report.contains("Total cost: $0.000085\n"));
     assert!(!report.contains("(partial)"));

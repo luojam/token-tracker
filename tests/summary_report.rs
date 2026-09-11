@@ -3,7 +3,7 @@ use token_tracker::cli::render_terminal_report;
 
 use token_tracker::application::{
     ImportWarning, SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot,
-    summarize_usage,
+    build_usage_report, summarize_usage,
 };
 use token_tracker::domain::{
     AgentId, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, OpenAiBilling,
@@ -155,7 +155,7 @@ fn summary_reconciles_and_renders_independently_of_observation_order() {
     assert_eq!(summary, summary_for_order(true));
     assert_eq!(
         render_terminal_report(
-            &summary,
+            &build_usage_report(&summary),
             &[
                 ImportWarning {
                     path: Some(PathBuf::from("/sessions/z-bad.jsonl")),
@@ -246,7 +246,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     data.sessions.reverse();
     data.observations.reverse();
     assert_eq!(summarize_usage(&data).unwrap(), summary);
-    let report = render_terminal_report(&summary, &[]);
+    let report = render_terminal_report(&build_usage_report(&summary), &[]);
     assert!(
         report.contains("Total cost: $1.000395 (partial)\n"),
         "{report}"

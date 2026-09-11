@@ -4,7 +4,7 @@ use token_tracker::cli::render_terminal_report;
 use token_tracker::adapters::claude::ClaudeSessionParser;
 use token_tracker::application::{
     ParseContext, SessionParser, SessionProvenance, SourceSessionKey, UsageObservation,
-    UsageSnapshot, summarize_usage,
+    UsageSnapshot, build_usage_report, summarize_usage,
 };
 use token_tracker::domain::{
     AgentId, AnthropicBilling, CacheDetail, EstimateTotal, EstimatedCost, KnownRequests,
@@ -126,7 +126,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
             EstimateTotal::Available(EstimatedCost::from_picodollars(cost))
         );
     }
-    let report = render_terminal_report(&summary, &[]);
+    let report = render_terminal_report(&build_usage_report(&summary), &[]);
     assert!(
         report.contains("Total cost: $1.001000 (partial)\n"),
         "{report}"
@@ -163,7 +163,7 @@ fn claude_only_zero_and_unpriced_rows_remain_distinct() {
         let mut snapshot = UsageSnapshot::default();
         add_session(&mut snapshot, "claude", "main", vec![event]);
         let summary = summarize_usage(&snapshot).unwrap();
-        let report = render_terminal_report(&summary, &[]);
+        let report = render_terminal_report(&build_usage_report(&summary), &[]);
         assert!(
             report.contains(&format!("Total cost: {expected}\n")),
             "{report}"

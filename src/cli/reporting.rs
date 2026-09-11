@@ -1,14 +1,11 @@
 use std::fmt::Write;
 
-use crate::application::ImportWarning;
-use crate::domain::{
-    EstimateTotal, EstimateTotals, EstimatedCost, ModelAttribution, RecordedCost, SummaryGroup,
-    UsageKind, UsageSummary,
-};
+use crate::application::{CostAmount, CostTotal, ImportWarning, UsageReport};
+use crate::domain::{ModelAttribution, SummaryGroup, UsageKind};
 
-pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]) -> String {
+pub fn render_terminal_report(report: &UsageReport, warnings: &[ImportWarning]) -> String {
     let mut output = String::new();
-    let totals = &summary.totals;
+    let totals = &report.totals;
 
     writeln!(output, "Token Tracker — All Time").unwrap();
     writeln!(output).unwrap();
@@ -42,10 +39,7 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
         format_integer(totals.tokens.cache_write)
     )
     .unwrap();
-    if let Some(cost) = cost_label(
-        totals.recorded_cost,
-        summary.estimates.values().map(|estimate| &estimate.totals),
-    ) {
+    if let Some(cost) = cost_label(totals.cost) {
         writeln!(output, "Total cost: {cost}").unwrap();
     }
     writeln!(output, "Sessions: {}", format_integer(totals.session_count)).unwrap();
@@ -58,7 +52,7 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
 
     writeln!(output).unwrap();
     writeln!(output, "Usage by provider/model:").unwrap();
-    if summary.breakdown.is_empty() {
+    if report.rows.is_empty() {
         writeln!(output, "- none").unwrap();
     } else {
         let headers = [
@@ -72,17 +66,10 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
             "Cost",
         ]
         .map(str::to_owned);
-        let rows = summary
-            .breakdown
+        let rows = report
+            .rows
             .iter()
             .map(|row| {
-                let estimates = summary
-                    .estimates
-                    .get(&row.agent)
-                    .into_iter()
-                    .flat_map(|estimate| &estimate.breakdown)
-                    .filter(|estimate| estimate.group == row.group)
-                    .map(|estimate| &estimate.totals);
                 (
                     &row.agent,
                     [
@@ -93,7 +80,7 @@ pub fn render_terminal_report(summary: &UsageSummary, warnings: &[ImportWarning]
                         format_integer(row.tokens.cache_write),
                         format_integer(row.tokens.total()),
                         format_integer(row.unique_usage_event_count),
-                        cost_label(row.recorded_cost, estimates).unwrap_or_else(|| "-".into()),
+                        cost_label(row.cost).unwrap_or_else(|| "-".into()),
                     ],
                 )
             })
@@ -160,44 +147,17 @@ fn render_table_row(output: &mut String, cells: &[String; 8], widths: &[usize; 8
     writeln!(output).unwrap();
 }
 
-fn cost_label<'a>(
-    recorded: Option<RecordedCost>,
-    estimates: impl Iterator<Item = &'a EstimateTotals>,
-) -> Option<String> {
-    let mut estimated = None;
-    let mut has_estimates = false;
-    let mut partial = false;
-    for totals in estimates {
-        has_estimates = true;
-        partial |= totals.priced_event_count < totals.imported_event_count;
-        match totals.cost {
-            EstimateTotal::Available(cost) => {
-                let current = estimated.unwrap_or(EstimatedCost::default());
-                let Some(combined) = current.checked_add(cost) else {
-                    return Some("unavailable (arithmetic overflow)".into());
-                };
-                estimated = Some(combined);
-            }
-            EstimateTotal::Unavailable => {}
-            EstimateTotal::Overflow => return Some("unavailable (arithmetic overflow)".into()),
-        }
-    }
-    let mut label = match (recorded, estimated) {
-        (Some(recorded), estimated) => {
-            let cost = recorded.as_usd()
-                + estimated.map_or(0.0, |cost| cost.as_picodollars() as f64 / 1e12);
-            if !cost.is_finite() {
-                return Some("unavailable (arithmetic overflow)".into());
-            }
-            if cost > 0.0 && cost < 0.000001 {
-                "<$0.000001".into()
-            } else {
-                format!("${cost:.6}")
-            }
-        }
-        (None, Some(estimated)) => estimated.to_string(),
-        (None, None) if has_estimates => return Some("unavailable".into()),
-        (None, None) => return None,
+fn cost_label(cost: CostTotal) -> Option<String> {
+    let (amount, partial) = match cost {
+        CostTotal::Absent => return None,
+        CostTotal::Unavailable => return Some("unavailable".into()),
+        CostTotal::Overflow => return Some("unavailable (arithmetic overflow)".into()),
+        CostTotal::Available { amount, partial } => (amount, partial),
+    };
+    let mut label = match amount {
+        CostAmount::Estimated(estimated) => estimated.to_string(),
+        CostAmount::Usd(cost) if cost > 0.0 && cost < 0.000001 => "<$0.000001".into(),
+        CostAmount::Usd(cost) => format!("${cost:.6}"),
     };
     if partial {
         label.push_str(" (partial)");

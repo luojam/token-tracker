@@ -5,7 +5,8 @@ use adapters::claude::{ClaudeSessionDiscovery, ClaudeSessionParser};
 use adapters::codex::{CodexSessionDiscovery, CodexSessionParser};
 use adapters::pi::{PiSessionDiscovery, PiSessionParser};
 use application::{
-    AllTimeReportError, ImportAdapter, ImportWarning, SessionAdapter, run_all_time_report,
+    AllTimeReportError, ImportAdapter, ImportWarning, SessionAdapter, build_usage_report,
+    run_all_time_report,
 };
 use storage::{SqliteStoreError, SqliteUsageStore};
 
@@ -45,7 +46,7 @@ pub fn run() -> Result<String, TokenTrackerError> {
     let report = run_all_time_report(&adapters, &mut store, warnings)
         .map_err(TokenTrackerError::Workflow)?;
     Ok(cli::render_terminal_report(
-        &report.summary,
+        &build_usage_report(&report.summary),
         &report.warnings,
     ))
 }

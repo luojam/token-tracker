@@ -1,4 +1,4 @@
-use token_tracker::application::ImportWarning;
+use token_tracker::application::{CostAmount, CostTotal, ImportWarning, build_usage_report};
 use token_tracker::cli::render_terminal_report;
 use token_tracker::domain::{
     EstimateBreakdown, EstimateSummary, EstimateTotal, EstimateTotals, EstimatedCost,
@@ -50,7 +50,7 @@ fn cost_states_stay_distinct_without_hiding_import_warnings() {
         ),
     ] {
         let report = render_terminal_report(
-            &summary(cost, priced),
+            &build_usage_report(&summary(cost, priced)),
             &[ImportWarning {
                 path: None,
                 message: "could not parse".into(),
@@ -83,14 +83,14 @@ fn estimate_labels_escape_source_control_characters() {
         recorded_cost: None,
         unique_usage_event_count: 1,
     });
-    let report = render_terminal_report(&summary, &[]);
+    let report = render_terminal_report(&build_usage_report(&summary), &[]);
     assert!(report.contains("  custom\\nprovider / model\\t "));
     assert!(report.contains("  unavailable\n"));
     assert!(!report.chars().any(|c| c.is_control() && c != '\n'));
 }
 
 #[test]
-fn model_costs_combine_tiers_and_recorded_costs_without_mixing_providers() {
+fn model_costs_combine_tiers_and_recorded_costs_without_mixing_providers_or_agents() {
     let mut summary = summary(
         EstimateTotal::Available(EstimatedCost::from_picodollars(9_000_000_000_000)),
         3,
@@ -141,24 +141,38 @@ fn model_costs_combine_tiers_and_recorded_costs_without_mixing_providers() {
                 },
             });
     }
-    let report = render_terminal_report(&summary, &[]);
-    assert!(
-        report.contains("Total cost: $10.000000 (partial)\n"),
-        "{report}"
+    let mut other_agent = summary.breakdown[0].clone();
+    other_agent.agent = "pi".into();
+    other_agent.recorded_cost = None;
+    summary.breakdown.push(other_agent);
+
+    let report = build_usage_report(&summary);
+    assert_eq!(
+        report.totals.cost,
+        CostTotal::Available {
+            amount: CostAmount::Usd(10.0),
+            partial: true
+        }
     );
-    for (provider, cost) in [("openai", "$6.000000"), ("other", "$4.000000 (partial)")] {
-        let line = report
-            .lines()
-            .find(|line| line.starts_with(&format!("  {provider} / model ")))
-            .unwrap();
-        assert!(line.ends_with(cost), "{line}");
-    }
-    assert!(!report.contains("API-equivalent estimate"));
-    assert!(!report.contains("Estimates by provider/model/tier"));
+    assert_eq!(
+        report.rows[0].cost,
+        CostTotal::Available {
+            amount: CostAmount::Usd(6.0),
+            partial: false
+        }
+    );
+    assert_eq!(
+        report.rows[1].cost,
+        CostTotal::Available {
+            amount: CostAmount::Estimated(EstimatedCost::from_picodollars(4_000_000_000_000)),
+            partial: true
+        }
+    );
+    assert_eq!(report.rows[2].cost, CostTotal::Absent);
 }
 
 #[test]
-fn combined_adapter_cost_overflow_never_displays_a_partial_amount() {
+fn combined_adapter_cost_overflow_invalidates_the_total() {
     for claude_cost in [
         EstimateTotal::Overflow,
         EstimateTotal::Available(EstimatedCost::from_picodollars(u128::MAX)),
@@ -175,8 +189,20 @@ fn combined_adapter_cost_overflow_never_displays_a_partial_amount() {
                 .remove(&"codex".into())
                 .unwrap(),
         );
-        let report = render_terminal_report(&combined, &[]);
-        assert!(report.contains("Total cost: unavailable (arithmetic overflow)\n"));
-        assert!(!report.contains("(partial)"));
+        let report = build_usage_report(&combined);
+        assert_eq!(report.totals.cost, CostTotal::Overflow);
     }
+}
+
+#[test]
+fn estimate_only_totals_retain_integer_precision() {
+    let cost = EstimatedCost::from_picodollars(u128::MAX);
+    let report = build_usage_report(&summary(EstimateTotal::Available(cost), 1));
+    assert_eq!(
+        report.totals.cost,
+        CostTotal::Available {
+            amount: CostAmount::Estimated(cost),
+            partial: false
+        }
+    );
 }

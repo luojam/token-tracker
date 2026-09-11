@@ -7,7 +7,7 @@ use token_tracker::adapters::pi::{PiSessionDiscovery, PiSessionParser};
 use token_tracker::application::{
     DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, FileRevision, ParseCompletion,
     ParseContext, ParsedSession, SessionAdapter, SessionDiscovery, SessionParser, UsageReadStore,
-    UsageStore, summarize_usage, synchronize_sessions_at,
+    UsageStore, build_usage_report, summarize_usage, synchronize_sessions_at,
 };
 use token_tracker::domain::{
     AgentId, ParentSession, SessionMetadata, Timestamp, TokenCounts, UsageEvent,
@@ -286,7 +286,7 @@ fn run_all_time_report<S: UsageStore + UsageReadStore>(
 ) -> Result<String, token_tracker::application::AllTimeReportError> {
     let report = token_tracker::application::run_all_time_report(adapters, store, warnings)?;
     Ok(token_tracker::cli::render_terminal_report(
-        &report.summary,
+        &build_usage_report(&report.summary),
         &report.warnings,
     ))
 }

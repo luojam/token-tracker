@@ -1,3 +1,4 @@
+use token_tracker::application::{CostAmount, CostTotal, build_usage_report};
 use token_tracker::domain::{
     CacheDetail, EstimateUnavailableReason, EstimatedCost, KnownRequests, ModelAttribution,
     OpenAiBilling, PricingContext, RequestBreakdown, ServiceTier, TierEvidence, Timestamp,
@@ -61,8 +62,13 @@ fn missing_pricing_facts_remain_in_estimate_coverage() {
             EstimateUnavailableReason::MissingPricingContext
         };
         assert_eq!(totals.unavailable_reasons[&reason], 1);
-        let report = token_tracker::cli::render_terminal_report(&summary, &[]);
-        assert!(report.contains("Total cost: $0.000000 (partial)\n"));
+        assert_eq!(
+            build_usage_report(&summary).totals.cost,
+            CostTotal::Available {
+                amount: CostAmount::Estimated(EstimatedCost::default()),
+                partial: true,
+            }
+        );
     }
 }
 
