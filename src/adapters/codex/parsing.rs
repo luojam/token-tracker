@@ -2,8 +2,8 @@ use super::CODEX_AGENT_ID;
 use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
 use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
 use crate::domain::{
-    AgentId, CacheDetail, ParentSession, RequestGranularity, SessionMetadata, Timestamp,
-    TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
+    AgentId, CacheDetail, ParentSession, PricingContext, RequestBreakdown, SessionMetadata,
+    Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
 use chrono::DateTime;
 use serde::de::{DeserializeOwned, MapAccess, Visitor, value::MapAccessDeserializer};
@@ -353,7 +353,7 @@ impl SessionState {
             }
             // Corrections retain the original request identity and timestamp.
             original.event.tokens = tokens;
-            if let Some(context) = &mut original.event.pricing_context {
+            if let Some(PricingContext::OpenAi(context)) = &mut original.event.pricing_context {
                 context.cache_detail = response.usage.0.cache_detail();
             }
         } else {
@@ -383,7 +383,7 @@ impl SessionState {
             let (attribution, pricing_context, _) = self.context.observation(
                 &response.turn_id,
                 Some(&response.thread_id),
-                RequestGranularity::ExactSingleRequest,
+                RequestBreakdown::SingleRequest,
                 response.usage.0.cache_detail(),
             );
             let event = UsageEvent {
@@ -396,7 +396,7 @@ impl SessionState {
                 attribution,
                 tokens,
                 recorded_cost: None,
-                pricing_context: Some(pricing_context),
+                pricing_context: Some(PricingContext::OpenAi(pricing_context)),
             };
             self.responses.insert(
                 response.response_id,

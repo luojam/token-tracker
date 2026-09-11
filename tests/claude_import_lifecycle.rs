@@ -12,7 +12,8 @@ use token_tracker::application::{
     synchronize_sessions_at,
 };
 use token_tracker::domain::{
-    AgentId, CacheWriteTokens, ParentSession, ServiceTier, Timestamp, UsageEvent,
+    AgentId, CacheWriteTokens, KnownRequests, ParentSession, PricingContext, RequestBreakdown,
+    ServiceSpeed, Timestamp, UsageEvent,
 };
 use token_tracker::storage::SqliteUsageStore;
 
@@ -166,9 +167,11 @@ fn reopened_imports_append_finals_and_correct_tokens_and_pricing_without_duplica
     expected.tokens.input = 8;
     expected.tokens.cache_read = 90;
     expected.tokens.output = 25;
-    let facts = expected.pricing_context.as_mut().unwrap();
-    facts.speed = ServiceTier::Fast;
-    facts.request_usage = Some(vec![expected.tokens]);
+    let Some(PricingContext::Anthropic(facts)) = expected.pricing_context.as_mut() else {
+        panic!("expected Anthropic billing");
+    };
+    facts.speed = ServiceSpeed::Fast;
+    facts.requests = RequestBreakdown::KnownRequests(KnownRequests::new(expected.tokens));
     facts.cache_writes = Some(vec![
         CacheWriteTokens {
             duration_seconds: 300,

@@ -4,7 +4,9 @@ use std::path::Path;
 use serde_json::{Value, json};
 use token_tracker::adapters::codex::{CodexParseError, CodexSessionParser};
 use token_tracker::application::{ParseContext, ParsedSession, SessionParser};
-use token_tracker::domain::{ModelAttribution, ServiceTier, TierEvidence, UsageEvent};
+use token_tracker::domain::{
+    ModelAttribution, PricingContext, ServiceTier, TierEvidence, UsageEvent,
+};
 
 const RESPONSE: &str = include_str!("fixtures/codex/response-mirrors.jsonl");
 
@@ -74,9 +76,10 @@ fn mirror(total: u64) -> Value {
 }
 
 fn assert_tier(event: &UsageEvent, tier: ServiceTier, evidence: TierEvidence) {
-    let context = event.pricing_context.as_ref().unwrap();
+    let Some(PricingContext::OpenAi(context)) = &event.pricing_context else {
+        panic!("expected OpenAI billing");
+    };
     assert_eq!(context.tier, tier);
-
     assert_eq!(context.tier_evidence, evidence);
 }
 
@@ -165,9 +168,10 @@ fn legacy_aggregates_merge_only_context_of_contributing_deltas() {
     let mut lines = fixture(include_str!("fixtures/codex/legacy-fresh.jsonl"));
     lines.insert(1, settings(None, Some(json!("default"))));
     let original = parse(&lines[..6]).unwrap().events.remove(0);
-    assert_eq!(
-        original.pricing_context.as_ref().unwrap().tier,
-        ServiceTier::Standard
+    assert_tier(
+        &original,
+        ServiceTier::Standard,
+        TierEvidence::RequestedSetting,
     );
     lines.insert(6, settings(None, Some(json!("priority"))));
     lines.insert(7, context("turn-legacy-a", json!("changed-model")));

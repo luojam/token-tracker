@@ -1,7 +1,7 @@
 use token_tracker::domain::{
-    CacheDetail, EstimateUnavailableReason, EstimatedCost, ModelAttribution, PricingContext,
-    RequestGranularity, ServiceTier, TierEvidence, Timestamp, TokenCounts, UsageEvent,
-    UsageEventIdentity, UsageKind,
+    CacheDetail, EstimateUnavailableReason, EstimatedCost, KnownRequests, ModelAttribution,
+    OpenAiBilling, PricingContext, RequestBreakdown, ServiceTier, TierEvidence, Timestamp,
+    TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
 use token_tracker::pricing::openai::{self as pricing, MissingCacheWritePolicy};
 
@@ -24,17 +24,13 @@ fn event() -> UsageEvent {
         }),
         tokens: TokenCounts::default(),
         recorded_cost: None,
-        pricing_context: Some(PricingContext {
+        pricing_context: Some(PricingContext::OpenAi(OpenAiBilling {
             tier: ServiceTier::Standard,
 
             tier_evidence: TierEvidence::RequestedSetting,
-            request_granularity: RequestGranularity::ExactSingleRequest,
+            requests: RequestBreakdown::SingleRequest,
             cache_detail: CacheDetail::Complete,
-            request_usage: None,
-            provider: "openai".into(),
-            speed: ServiceTier::Standard,
-            cache_writes: None,
-        }),
+        })),
     }
 }
 
@@ -86,7 +82,7 @@ fn exact_costs_use_disjoint_tokens_and_the_whole_request_band() {
         (Fast, [u64::MAX; 4], u128::from(u64::MAX) * 244_000_000),
     ] {
         let mut event = event();
-        let context = event.pricing_context.as_mut().unwrap();
+        let context = facts(&mut event);
         context.tier = tier;
         event.tokens = TokenCounts {
             input: counts[0],
@@ -116,7 +112,7 @@ fn unknown_tiers_use_standard_rates_without_changing_usage_facts() {
             };
             let standard = calculate_estimate(&event).unwrap();
             for tier_evidence in [TierEvidence::Unknown, TierEvidence::RequestedSetting] {
-                let context = event.pricing_context.as_mut().unwrap();
+                let context = facts(&mut event);
                 context.tier = ServiceTier::Unknown;
                 context.tier_evidence = tier_evidence;
                 let original = event.clone();
@@ -136,23 +132,22 @@ fn insufficient_facts_are_unavailable_even_for_zero_tokens() {
         (|e| e.pricing_context = None, Reason::MissingPricingContext),
         (|e| e.attribution = None, Reason::UnknownAttribution),
         (
-            |e| e.pricing_context.as_mut().unwrap().tier = ServiceTier::Unsupported("flex".into()),
+            |e| facts(e).tier = ServiceTier::Unsupported("flex".into()),
             Reason::UnsupportedTier,
         ),
         (
-            |e| e.pricing_context.as_mut().unwrap().tier_evidence = TierEvidence::Unknown,
+            |e| facts(e).tier_evidence = TierEvidence::Unknown,
             Reason::UnknownTier,
         ),
         (
             |e| {
-                e.pricing_context.as_mut().unwrap().request_granularity =
-                    RequestGranularity::AggregateOrUnknown;
-                e.pricing_context.as_mut().unwrap().cache_detail = CacheDetail::Incomplete;
+                facts(e).requests = RequestBreakdown::AggregateOrUnknown;
+                facts(e).cache_detail = CacheDetail::Incomplete;
             },
             Reason::IncompleteCacheDetail,
         ),
         (
-            |e| e.pricing_context.as_mut().unwrap().cache_detail = CacheDetail::Incomplete,
+            |e| facts(e).cache_detail = CacheDetail::Incomplete,
             Reason::IncompleteCacheDetail,
         ),
     ];
@@ -169,7 +164,7 @@ fn aggregates_are_priced_only_when_request_partition_cannot_change_the_cost() {
         for tier in [ServiceTier::Standard, ServiceTier::Fast] {
             let mut event = event();
             event.attribution.as_mut().unwrap().model = model.into();
-            event.pricing_context.as_mut().unwrap().tier = tier;
+            facts(&mut event).tier = tier;
             event.tokens = TokenCounts {
                 input: 100_000,
                 cache_read: 171_999,
@@ -177,8 +172,7 @@ fn aggregates_are_priced_only_when_request_partition_cannot_change_the_cost() {
                 output: 400_000,
             };
             let expected = calculate_estimate(&event).unwrap();
-            event.pricing_context.as_mut().unwrap().request_granularity =
-                RequestGranularity::AggregateOrUnknown;
+            facts(&mut event).requests = RequestBreakdown::AggregateOrUnknown;
             assert_eq!(calculate_estimate(&event), Ok(expected));
 
             let mut part = event.clone();
@@ -197,8 +191,7 @@ fn aggregates_are_priced_only_when_request_partition_cannot_change_the_cost() {
             event.tokens.input = 100_001;
             if model == "gpt-5.4-mini" {
                 let aggregate = calculate_estimate(&event).unwrap();
-                event.pricing_context.as_mut().unwrap().request_granularity =
-                    RequestGranularity::ExactSingleRequest;
+                facts(&mut event).requests = RequestBreakdown::SingleRequest;
                 assert_eq!(calculate_estimate(&event), Ok(aggregate));
             } else {
                 assert_eq!(
@@ -221,7 +214,7 @@ fn missing_cache_write_detail_is_usable_only_without_a_write_premium() {
             output: 10,
             ..TokenCounts::default()
         };
-        event.pricing_context.as_mut().unwrap().cache_detail = CacheDetail::Incomplete;
+        facts(&mut event).cache_detail = CacheDetail::Incomplete;
         let result = calculate_estimate(&event);
         if ["gpt-5.6-sol", "gpt-6-astra"].contains(&model) {
             assert_eq!(
@@ -231,11 +224,11 @@ fn missing_cache_write_detail_is_usable_only_without_a_write_premium() {
         } else {
             event.tokens.input = 0;
             event.tokens.cache_write = 100;
-            event.pricing_context.as_mut().unwrap().cache_detail = CacheDetail::Complete;
+            facts(&mut event).cache_detail = CacheDetail::Complete;
             assert_eq!(result, calculate_estimate(&event));
             assert!(result.is_ok());
         }
-        event.pricing_context.as_mut().unwrap().tier = ServiceTier::Unknown;
+        facts(&mut event).tier = ServiceTier::Unknown;
         assert_eq!(calculate_estimate(&event), result);
     }
 }
@@ -262,25 +255,20 @@ fn request_breakdowns_apply_context_bands_per_request_and_require_complete_total
             },
         ];
         event.tokens = requests[0].checked_add(requests[1]).unwrap();
-        let context = event.pricing_context.as_mut().unwrap();
-        context.request_granularity = RequestGranularity::AggregateOrUnknown;
+        let context = facts(&mut event);
+        context.requests = RequestBreakdown::AggregateOrUnknown;
         context.cache_detail = CacheDetail::Incomplete;
         assert_eq!(
             calculate_estimate(&event),
             Err(EstimateUnavailableReason::UnknownRequestGranularity)
         );
-        event.pricing_context.as_mut().unwrap().request_usage = Some(requests);
+        facts(&mut event).requests =
+            RequestBreakdown::KnownRequests(KnownRequests::from_vec(requests).unwrap());
         assert_eq!(
             calculate_estimate(&event),
             Ok(EstimatedCost::from_picodollars(expected))
         );
         event.tokens.input += 1;
-        assert_eq!(
-            calculate_estimate(&event),
-            Err(EstimateUnavailableReason::UnknownRequestGranularity)
-        );
-        event.tokens = TokenCounts::default();
-        event.pricing_context.as_mut().unwrap().request_usage = Some(vec![]);
         assert_eq!(
             calculate_estimate(&event),
             Err(EstimateUnavailableReason::UnknownRequestGranularity)
@@ -307,10 +295,9 @@ fn explicit_cache_policy_prices_unresolved_input_without_reclassifying_known_wri
         },
     ];
     event.tokens = requests[0].checked_add(requests[1]).unwrap();
-    let context = event.pricing_context.as_mut().unwrap();
+    let context = facts(&mut event);
     context.cache_detail = CacheDetail::Incomplete;
-    context.request_granularity = RequestGranularity::AggregateOrUnknown;
-    context.request_usage = Some(requests);
+    context.requests = RequestBreakdown::KnownRequests(KnownRequests::from_vec(requests).unwrap());
     let original = event.clone();
     assert_eq!(
         calculate_estimate(&event),
@@ -322,13 +309,13 @@ fn explicit_cache_policy_prices_unresolved_input_without_reclassifying_known_wri
     assert!(estimate.assumed_cache_writes_as_input);
     assert_eq!(event, original);
 
-    event.pricing_context.as_mut().unwrap().cache_detail = CacheDetail::Complete;
+    facts(&mut event).cache_detail = CacheDetail::Complete;
     let known = pricing::calculate_estimate(&event, MissingCacheWritePolicy::TreatAsInput).unwrap();
     assert_eq!(known.cost, estimate.cost);
     assert!(!known.assumed_cache_writes_as_input);
     assert_eq!(calculate_estimate(&event), Ok(known.cost));
 
-    event.pricing_context.as_mut().unwrap().cache_detail = CacheDetail::Incomplete;
+    facts(&mut event).cache_detail = CacheDetail::Incomplete;
     event.attribution.as_mut().unwrap().model = "gpt-5.5".into();
     assert!(
         !pricing::calculate_estimate(&event, MissingCacheWritePolicy::TreatAsInput)
@@ -336,9 +323,16 @@ fn explicit_cache_policy_prices_unresolved_input_without_reclassifying_known_wri
             .assumed_cache_writes_as_input
     );
 
-    event.pricing_context.as_mut().unwrap().request_usage = None;
+    facts(&mut event).requests = RequestBreakdown::AggregateOrUnknown;
     assert_eq!(
         pricing::calculate_estimate(&event, MissingCacheWritePolicy::TreatAsInput),
         Err(EstimateUnavailableReason::UnknownRequestGranularity),
     );
+}
+
+fn facts(event: &mut UsageEvent) -> &mut OpenAiBilling {
+    let Some(PricingContext::OpenAi(context)) = event.pricing_context.as_mut() else {
+        panic!("expected OpenAI billing");
+    };
+    context
 }

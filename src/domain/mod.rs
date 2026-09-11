@@ -1,6 +1,9 @@
 mod billing;
 mod summary;
-pub use billing::{CacheWriteTokens, PricingContext};
+pub use billing::{
+    AnthropicBilling, CacheWriteTokens, KnownRequests, OpenAiBilling, PricingContext,
+    RequestBreakdown, ServiceSpeed,
+};
 pub use summary::*;
 
 use std::error::Error;
@@ -175,13 +178,6 @@ pub enum TierEvidence {
     Unknown,
     RequestedSetting,
     ServedResponse,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum RequestGranularity {
-    ExactSingleRequest,
-    AggregateOrUnknown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

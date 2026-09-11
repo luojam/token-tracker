@@ -12,7 +12,9 @@ use token_tracker::application::{
     ImportAdapter, ParseCompletion, ParseContext, ParsedSession, SessionAdapter, SessionParser,
     UsageReadStore,
 };
-use token_tracker::domain::{ParentSession, ServiceTier, Timestamp, TokenCounts, UsageKind};
+use token_tracker::domain::{
+    ParentSession, PricingContext, RequestBreakdown, ServiceTier, Timestamp, TokenCounts, UsageKind,
+};
 use token_tracker::storage::SqliteUsageStore;
 
 const SOURCE_PATH: &str =
@@ -88,6 +90,12 @@ fn check_usage(parsed: &ParsedSession, expected: &Value, name: &str) {
             assert_eq!(event.recorded_cost, None, "{name}");
             let pricing = event.pricing_context.as_ref().unwrap();
             assert!(pricing.usage_matches(event.tokens), "{name}");
+            let PricingContext::Anthropic(pricing) = pricing else {
+                panic!("expected Anthropic billing");
+            };
+            let RequestBreakdown::KnownRequests(requests) = &pricing.requests else {
+                panic!("expected known requests");
+            };
             (
                 event.identity.adapter_key.clone(),
                 json!({
@@ -103,7 +111,7 @@ fn check_usage(parsed: &ParsedSession, expected: &Value, name: &str) {
                     "pricing_facts": {
                         "speed": pricing.speed,
                         "service_tier": pricing.tier,
-                        "requests": pricing.request_usage.as_ref().unwrap().iter().copied().map(tokens).collect::<Vec<_>>(),
+                        "requests": requests.as_slice().iter().copied().map(tokens).collect::<Vec<_>>(),
                         "cache_writes": pricing.cache_writes,
                     },
                 }),

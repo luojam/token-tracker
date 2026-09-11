@@ -6,9 +6,9 @@ use token_tracker::application::{
     summarize_usage,
 };
 use token_tracker::domain::{
-    AgentId, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, ParentSession,
-    PricingContext, RecordedCost, RequestGranularity, ServiceTier, TierEvidence, Timestamp,
-    TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
+    AgentId, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, OpenAiBilling,
+    ParentSession, PricingContext, RecordedCost, RequestBreakdown, ServiceTier, TierEvidence,
+    Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
 
 fn event(
@@ -194,16 +194,12 @@ fn summary_reconciles_and_renders_independently_of_observation_order() {
 
 #[test]
 fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
-    let context = PricingContext {
+    let context = OpenAiBilling {
         tier: ServiceTier::Standard,
 
         tier_evidence: TierEvidence::RequestedSetting,
-        request_granularity: RequestGranularity::ExactSingleRequest,
+        requests: RequestBreakdown::SingleRequest,
         cache_detail: CacheDetail::Complete,
-        request_usage: None,
-        provider: "openai".into(),
-        speed: ServiceTier::Standard,
-        cache_writes: None,
     };
     let model = ModelAttribution {
         provider: "openai".into(),
@@ -218,18 +214,21 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
         observation.event.identity.agent = "codex".into();
         if observation.event.identity.adapter_key != "shared" {
             observation.event.attribution = Some(model.clone());
-            observation.event.pricing_context = Some(context.clone());
+            observation.event.pricing_context = Some(PricingContext::OpenAi(context.clone()));
         }
         if observation.session.session_id == "child-session" {
-            observation.event.pricing_context = Some(PricingContext {
+            observation.event.pricing_context = Some(PricingContext::OpenAi(OpenAiBilling {
                 tier: ServiceTier::Fast,
 
                 tier_evidence: TierEvidence::ServedResponse,
                 ..context.clone()
-            });
+            }));
         }
     }
-    let unknown = data.observations[1].event.pricing_context.as_mut().unwrap();
+    let Some(PricingContext::OpenAi(unknown)) = data.observations[1].event.pricing_context.as_mut()
+    else {
+        panic!("expected OpenAI billing");
+    };
     unknown.tier = ServiceTier::Unknown;
 
     unknown.tier_evidence = TierEvidence::Unknown;
@@ -248,7 +247,10 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     data.observations.reverse();
     assert_eq!(summarize_usage(&data).unwrap(), summary);
     let report = render_terminal_report(&summary, &[]);
-    assert!(report.contains("Total cost: $1.000395 (partial)\n"), "{report}");
+    assert!(
+        report.contains("Total cost: $1.000395 (partial)\n"),
+        "{report}"
+    );
     let model_line = report
         .lines()
         .find(|line| line.starts_with("  openai / gpt-5.6 "))
@@ -313,7 +315,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     assert!(summarize_usage(&data).unwrap().estimates.is_empty());
     let event = &mut data.observations[0].event;
     event.attribution = Some(model);
-    event.pricing_context = Some(context);
+    event.pricing_context = Some(PricingContext::OpenAi(context));
     event.tokens = TokenCounts::default();
     let zero = summarize_usage(&data).unwrap().estimates[&AgentId::from("codex")].clone();
     assert_eq!(

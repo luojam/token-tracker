@@ -382,7 +382,10 @@ fn command_imports_all_adapters_and_retains_claude_partial_imports_privately() {
     };
     let report = run();
     assert_totals(&report, [163, 113, 341, 144], 3, 8);
-    assert!(report.contains("Total cost: $1.026345 (partial)\n"), "{report}");
+    assert!(
+        report.contains("Total cost: $1.026345 (partial)\n"),
+        "{report}"
+    );
     assert!(report.contains("Claude Code usage:"), "{report}");
     assert!(report.contains("anthropic / claude-opus-5"), "{report}");
     assert!(!report.contains("Warnings"), "{report}");
@@ -474,7 +477,10 @@ fn command_preserves_mixed_usage_and_estimates_through_codex_lifecycle() {
         append(&response_path, &response[cut..]);
         let completed = run();
         assert_totals(&completed, [385, 118, 331, 64], 5, 9);
-        assert!(completed.contains("Total cost: $1.029540 (partial)\n"), "{completed}");
+        assert!(
+            completed.contains("Total cost: $1.029540 (partial)\n"),
+            "{completed}"
+        );
         assert!(
             completed.lines().any(|line| {
                 line.starts_with("  openai / gpt-6-astra ") && line.ends_with("$0.009540")

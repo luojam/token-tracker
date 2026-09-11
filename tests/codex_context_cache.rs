@@ -4,7 +4,9 @@ use std::path::Path;
 use serde_json::{Value, json};
 use token_tracker::adapters::codex::CodexSessionParser;
 use token_tracker::application::{ParseContext, ParsedSession, SessionParser};
-use token_tracker::domain::{CacheDetail, RequestGranularity};
+use token_tracker::domain::{
+    CacheDetail, OpenAiBilling, PricingContext, RequestBreakdown, UsageEvent,
+};
 
 const RESPONSE: &str = include_str!("fixtures/codex/response-mirrors.jsonl");
 const LEGACY: &str = include_str!("fixtures/codex/legacy-resume-compaction.jsonl");
@@ -56,11 +58,8 @@ fn response_cache_detail_comes_only_from_usage_not_totals_or_mirrors() {
     let fixture = records(RESPONSE);
     let baseline = parse(&fixture[..4]);
     assert_eq!(baseline.events.len(), 1);
-    let pricing = baseline.events[0].pricing_context.as_ref().unwrap();
-    assert_eq!(
-        pricing.request_granularity,
-        RequestGranularity::ExactSingleRequest
-    );
+    let pricing = facts(&baseline.events[0]);
+    assert_eq!(pricing.requests, RequestBreakdown::SingleRequest);
     for usage_complete in [false, true] {
         let mut history = fixture[..5].to_vec();
         cache_field(&mut history[3]["payload"]["usage"], usage_complete);
@@ -71,7 +70,7 @@ fn response_cache_detail_comes_only_from_usage_not_totals_or_mirrors() {
             cache_field(&mut history[4]["payload"]["info"][vector], !usage_complete);
         }
         let mut expected = baseline.events[0].clone();
-        expected.pricing_context.as_mut().unwrap().cache_detail = detail(usage_complete);
+        facts_mut(&mut expected).cache_detail = detail(usage_complete);
         assert_eq!(parse(&history[..4]).events, vec![expected.clone()]);
         assert_eq!(parse(&history).events, vec![expected]);
     }
@@ -99,7 +98,7 @@ fn detail_only_response_corrections_replace_completeness_but_keep_request_contex
         history.push(correction);
 
         let mut expected = original.events[0].clone();
-        expected.pricing_context.as_mut().unwrap().cache_detail = detail(!initially_complete);
+        facts_mut(&mut expected).cache_detail = detail(!initially_complete);
         assert_eq!(parse(&history).events, vec![expected]);
     }
 }
@@ -139,12 +138,12 @@ fn legacy_cache_detail_requires_both_delta_endpoints_and_recovers_on_later_turns
             first_complete && second_complete,
             second_complete,
         ]) {
-            let pricing = event.pricing_context.as_ref().unwrap();
+            let pricing = facts(event);
             assert_eq!(pricing.cache_detail, detail(complete));
-            assert_eq!(
-                pricing.request_granularity,
-                RequestGranularity::AggregateOrUnknown
-            );
+            assert!(matches!(
+                pricing.requests,
+                RequestBreakdown::KnownRequests(_)
+            ));
         }
     }
 }
@@ -175,12 +174,22 @@ fn legacy_uncertainty_is_sticky_within_an_aggregate_and_noops_preserve_context()
         let parsed = parse(&history);
         assert_eq!(parsed.events.len(), 1);
         assert_eq!(
-            parsed.events[0]
-                .pricing_context
-                .as_ref()
-                .unwrap()
-                .cache_detail,
+            facts(&parsed.events[0]).cache_detail,
             detail(initially_complete)
         );
     }
+}
+
+fn facts(event: &UsageEvent) -> &OpenAiBilling {
+    let Some(PricingContext::OpenAi(context)) = event.pricing_context.as_ref() else {
+        panic!("expected OpenAI billing");
+    };
+    context
+}
+
+fn facts_mut(event: &mut UsageEvent) -> &mut OpenAiBilling {
+    let Some(PricingContext::OpenAi(context)) = event.pricing_context.as_mut() else {
+        panic!("expected OpenAI billing");
+    };
+    context
 }

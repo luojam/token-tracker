@@ -3,7 +3,8 @@ pub mod openai;
 
 use crate::domain::{
     AgentId, EstimateBreakdown, EstimateSummary, EstimateTotal, EstimateTotals,
-    EstimateUnavailableReason, ServiceTier, SummaryGroup, TierEvidence, UsageEstimate, UsageEvent,
+    EstimateUnavailableReason, PricingContext, ServiceTier, SummaryGroup, TierEvidence,
+    UsageEstimate, UsageEvent,
 };
 use std::collections::BTreeMap;
 
@@ -18,19 +19,9 @@ pub fn summarize_estimates<'a>(
         if context.is_none() && event.recorded_cost.is_some() {
             continue;
         }
-        let provider = context
-            .map(|context| context.provider.as_str())
-            .or_else(|| {
-                event
-                    .attribution
-                    .as_ref()
-                    .map(|attribution| attribution.provider.as_str())
-            });
-        let (estimate, tier, evidence, snapshot) = match provider {
-            Some("openai") => {
-                let (tier, evidence) = context
-                    .map(openai::estimate_tier)
-                    .unwrap_or((ServiceTier::Unknown, TierEvidence::Unknown));
+        let (estimate, tier, evidence, snapshot) = match context {
+            Some(PricingContext::OpenAi(context)) => {
+                let (tier, evidence) = openai::estimate_tier(context);
                 (
                     openai::calculate_estimate(
                         event,
@@ -41,32 +32,35 @@ pub fn summarize_estimates<'a>(
                     Some((openai::SNAPSHOT_ID, openai::RATE_DATE)),
                 )
             }
-            Some("anthropic") => (
+            Some(PricingContext::Anthropic(context)) => (
                 anthropic::calculate_estimate(event),
-                context
-                    .map(|context| context.tier.clone())
-                    .unwrap_or(ServiceTier::Unknown),
-                context
-                    .map(|context| context.tier_evidence)
-                    .unwrap_or(TierEvidence::Unknown),
+                context.tier.clone(),
+                context.tier_evidence,
                 Some((anthropic::SNAPSHOT_ID, anthropic::RATE_DATE)),
             ),
-            Some(_) => (
-                Err(EstimateUnavailableReason::UnsupportedProvider),
-                context
-                    .map(|context| context.tier.clone())
-                    .unwrap_or(ServiceTier::Unknown),
-                context
-                    .map(|context| context.tier_evidence)
-                    .unwrap_or(TierEvidence::Unknown),
-                None,
-            ),
-            None => (
-                Err(EstimateUnavailableReason::MissingPricingContext),
-                ServiceTier::Unknown,
-                TierEvidence::Unknown,
-                None,
-            ),
+            None => {
+                let provider = event
+                    .attribution
+                    .as_ref()
+                    .map(|model| model.provider.as_str());
+                let snapshot = match provider {
+                    Some("openai") => Some((openai::SNAPSHOT_ID, openai::RATE_DATE)),
+                    Some("anthropic") => Some((anthropic::SNAPSHOT_ID, anthropic::RATE_DATE)),
+                    _ => None,
+                };
+                let reason = match provider {
+                    Some("openai" | "anthropic") | None => {
+                        EstimateUnavailableReason::MissingPricingContext
+                    }
+                    Some(_) => EstimateUnavailableReason::UnsupportedProvider,
+                };
+                (
+                    Err(reason),
+                    ServiceTier::Unknown,
+                    TierEvidence::Unknown,
+                    snapshot,
+                )
+            }
         };
         let summary = estimates
             .entry(event.identity.agent.clone())

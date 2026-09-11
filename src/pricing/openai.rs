@@ -11,8 +11,9 @@
 //! - https://developers.openai.com/api/docs/guides/prompt-caching (cache-write charges)
 
 use crate::domain::{
-    CacheDetail, EstimateUnavailableReason, EstimatedCost, ModelAttribution, PricingContext,
-    RequestGranularity, ServiceTier, TierEvidence, TokenCounts, UsageEstimate, UsageEvent,
+    CacheDetail, EstimateUnavailableReason, EstimatedCost, ModelAttribution, OpenAiBilling,
+    PricingContext, RequestBreakdown, ServiceTier, TierEvidence, TokenCounts, UsageEstimate,
+    UsageEvent,
 };
 
 pub const SNAPSHOT_ID: &str = "openai-api-2026-09-09";
@@ -200,7 +201,7 @@ pub enum MissingCacheWritePolicy {
     TreatAsInput,
 }
 
-pub(super) fn estimate_tier(context: &PricingContext) -> (ServiceTier, TierEvidence) {
+pub(super) fn estimate_tier(context: &OpenAiBilling) -> (ServiceTier, TierEvidence) {
     match context.tier {
         ServiceTier::Unknown => (ServiceTier::Standard, TierEvidence::Unknown),
         _ => (context.tier.clone(), context.tier_evidence),
@@ -218,9 +219,9 @@ pub fn calculate_estimate(
         .pricing_context
         .as_ref()
         .ok_or(Reason::MissingPricingContext)?;
-    if context.provider != "openai" {
+    let PricingContext::OpenAi(context) = context else {
         return Err(Reason::UnsupportedProvider);
-    }
+    };
     let attribution = event
         .attribution
         .as_ref()
@@ -230,11 +231,12 @@ pub fn calculate_estimate(
     if context.tier != ServiceTier::Unknown && evidence == TierEvidence::Unknown {
         return Err(Reason::UnknownTier);
     }
-    if !context.request_usage_matches(event.tokens) {
+    if !context.requests.usage_matches(event.tokens) {
         return Err(Reason::UnknownRequestGranularity);
     }
-    if let Some(requests) = &context.request_usage {
+    if let RequestBreakdown::KnownRequests(requests) = &context.requests {
         return requests
+            .as_slice()
             .iter()
             .try_fold(UsageEstimate::default(), |total, tokens| {
                 let estimate =
@@ -253,14 +255,14 @@ pub fn calculate_estimate(
         event.tokens,
         context,
         schedule,
-        context.request_granularity == RequestGranularity::ExactSingleRequest,
+        context.requests == RequestBreakdown::SingleRequest,
         missing_cache_writes,
     )
 }
 
 fn price_tokens(
     tokens: TokenCounts,
-    context: &PricingContext,
+    context: &OpenAiBilling,
     schedule: &ContextRates,
     exact_request: bool,
     missing_cache_writes: MissingCacheWritePolicy,

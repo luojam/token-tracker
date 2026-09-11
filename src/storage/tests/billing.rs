@@ -1,22 +1,20 @@
 use super::*;
 use crate::domain::{
-    CacheDetail, CacheWriteTokens, PricingContext, RequestGranularity, ServiceTier, TierEvidence,
+    AnthropicBilling, CacheWriteTokens, KnownRequests, PricingContext, RequestBreakdown,
+    ServiceSpeed, ServiceTier, TierEvidence,
 };
 
 fn context(tokens: TokenCounts) -> PricingContext {
-    PricingContext {
-        provider: "any-provider".into(),
+    PricingContext::Anthropic(AnthropicBilling {
         tier: ServiceTier::Standard,
         tier_evidence: TierEvidence::ServedResponse,
-        speed: ServiceTier::Fast,
-        request_granularity: RequestGranularity::ExactSingleRequest,
-        cache_detail: CacheDetail::Complete,
-        request_usage: Some(vec![tokens]),
+        speed: ServiceSpeed::Fast,
+        requests: RequestBreakdown::KnownRequests(KnownRequests::new(tokens)),
         cache_writes: Some(vec![CacheWriteTokens {
             duration_seconds: 300,
             tokens: tokens.cache_write,
         }]),
-    }
+    })
 }
 
 #[test]
@@ -121,6 +119,41 @@ fn corrupt_billing_and_out_of_range_counts_are_rejected() {
     ));
     assert!(store.usage_snapshot().unwrap().observations.is_empty());
     assert!(store.source_states(&"pi".into()).unwrap().is_empty());
+}
+
+#[test]
+fn stored_billing_rejects_invalid_breakdowns() {
+    use crate::storage::billing::decode;
+    use serde_json::json;
+
+    let tokens = TokenCounts::default();
+    let request = |input| TokenCounts { input, ..tokens };
+    for (field, value) in [
+        ("requests", json!({"known_requests": []})),
+        ("requests", json!({"known_requests": [request(1)]})),
+        (
+            "requests",
+            json!({"known_requests": [request(u64::MAX), request(1)]}),
+        ),
+        (
+            "cache_writes",
+            json!([{"duration_seconds": 300, "tokens": 1}]),
+        ),
+        (
+            "cache_writes",
+            json!([
+                {"duration_seconds": 300, "tokens": u64::MAX},
+                {"duration_seconds": 3600, "tokens": 1}
+            ]),
+        ),
+    ] {
+        let mut stored = serde_json::to_value(context(tokens)).unwrap();
+        stored["anthropic"][field] = value;
+        assert!(matches!(
+            decode(Some(stored.to_string()), tokens),
+            Err(SqliteStoreError::CorruptData(_))
+        ));
+    }
 }
 
 #[test]

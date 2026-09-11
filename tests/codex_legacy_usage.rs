@@ -69,9 +69,19 @@ fn legacy_fixtures_match_turn_aggregate_oracles() {
             assert_eq!(tokens(actual.tokens), expected["tokens"], "{name}");
             assert_eq!(actual.kind, UsageKind::Other, "{name}");
             assert_eq!(actual.recorded_cost, None, "{name}");
-            let context = actual.pricing_context.as_ref().unwrap();
-            assert!(context.request_usage.is_some(), "{name}");
-            assert!(context.request_usage_matches(actual.tokens), "{name}");
+            let Some(token_tracker::domain::PricingContext::OpenAi(context)) =
+                &actual.pricing_context
+            else {
+                panic!("{name}: expected OpenAI billing");
+            };
+            assert!(
+                matches!(
+                    context.requests,
+                    token_tracker::domain::RequestBreakdown::KnownRequests(_)
+                ),
+                "{name}"
+            );
+            assert!(context.requests.usage_matches(actual.tokens), "{name}");
             let owner_known = name != "legacy-partial-fork.jsonl"
                 && (name != "legacy-fork.jsonl"
                     || actual.identity.adapter_key.ends_with("turn-fork"));

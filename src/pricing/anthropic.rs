@@ -3,8 +3,8 @@
 //! - https://platform.claude.com/docs/en/models/overview
 
 use crate::domain::{
-    CacheWriteTokens, EstimateUnavailableReason, EstimatedCost, ModelAttribution, ServiceTier,
-    TierEvidence, TokenCounts, UsageEstimate, UsageEvent,
+    CacheWriteTokens, EstimateUnavailableReason, EstimatedCost, ModelAttribution, PricingContext,
+    ServiceSpeed, ServiceTier, TierEvidence, TokenCounts, UsageEstimate, UsageEvent,
 };
 
 pub const SNAPSHOT_ID: &str = "anthropic-api-2026-09-11";
@@ -64,7 +64,7 @@ fn lookup_rates(
     attribution: &ModelAttribution,
     tier: &ServiceTier,
     tier_evidence: TierEvidence,
-    speed: &ServiceTier,
+    speed: &ServiceSpeed,
 ) -> Result<TokenRates, EstimateUnavailableReason> {
     use EstimateUnavailableReason as Reason;
 
@@ -88,9 +88,9 @@ fn lookup_rates(
         _ => return Err(Reason::UnsupportedTier),
     }
     match speed {
-        ServiceTier::Unknown => Err(Reason::UnknownSpeed),
-        ServiceTier::Standard => Ok(standard),
-        ServiceTier::Fast if attribution.model == "claude-opus-5" => Ok(OPUS_5_FAST),
+        ServiceSpeed::Unknown => Err(Reason::UnknownSpeed),
+        ServiceSpeed::Standard => Ok(standard),
+        ServiceSpeed::Fast if attribution.model == "claude-opus-5" => Ok(OPUS_5_FAST),
         _ => Err(Reason::UnsupportedSpeed),
     }
 }
@@ -103,23 +103,18 @@ pub fn calculate_estimate(event: &UsageEvent) -> Result<UsageEstimate, EstimateU
         .pricing_context
         .as_ref()
         .ok_or(Reason::MissingPricingContext)?;
-    if context.provider != "anthropic" {
+    let PricingContext::Anthropic(facts) = context else {
         return Err(Reason::MissingPricingContext);
-    }
+    };
     let attribution = event
         .attribution
         .as_ref()
         .ok_or(Reason::UnknownAttribution)?;
-    let rates = lookup_rates(
-        attribution,
-        &context.tier,
-        context.tier_evidence,
-        &context.speed,
-    )?;
+    let rates = lookup_rates(attribution, &facts.tier, facts.tier_evidence, &facts.speed)?;
     if !context.usage_matches(event.tokens) {
         return Err(Reason::InvalidUsageBreakdown);
     }
-    let cost = price_tokens(event.tokens, context.cache_writes.as_deref(), rates)?;
+    let cost = price_tokens(event.tokens, facts.cache_writes.as_deref(), rates)?;
     Ok(UsageEstimate {
         cost,
         assumed_cache_writes_as_input: false,

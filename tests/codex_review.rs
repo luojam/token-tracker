@@ -4,7 +4,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 use token_tracker::adapters::codex::{CodexParseError, CodexSessionParser};
 use token_tracker::application::{ParseContext, ParsedSession, SessionParser};
-use token_tracker::domain::ServiceTier;
+use token_tracker::domain::{PricingContext, ServiceTier};
 
 fn records() -> Vec<Value> {
     include_str!("fixtures/codex/response-mirrors.jsonl")
@@ -159,9 +159,9 @@ fn review_settings_require_parent_ownership_and_preserve_prior_pricing() {
         assert_eq!(parsed.events.len(), 2);
         assert_eq!(parsed.events[0], prior);
         assert_eq!(parsed.events[1].attribution, prior.attribution);
-        assert_eq!(
-            parsed.events[1].pricing_context.as_ref().unwrap().tier,
-            expected
-        );
+        let Some(PricingContext::OpenAi(context)) = &parsed.events[1].pricing_context else {
+            panic!("expected OpenAI billing");
+        };
+        assert_eq!(context.tier, expected);
     }
 }

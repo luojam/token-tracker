@@ -7,9 +7,9 @@ use token_tracker::application::{
     UsageSnapshot, summarize_usage,
 };
 use token_tracker::domain::{
-    AgentId, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, PricingContext,
-    RecordedCost, RequestGranularity, ServiceTier, TierEvidence, Timestamp, TokenCounts,
-    UsageEvent,
+    AgentId, AnthropicBilling, CacheDetail, EstimateTotal, EstimatedCost, KnownRequests,
+    ModelAttribution, OpenAiBilling, PricingContext, RecordedCost, RequestBreakdown, ServiceSpeed,
+    ServiceTier, TierEvidence, Timestamp, TokenCounts, UsageEvent,
 };
 
 fn oracle_event() -> UsageEvent {
@@ -31,8 +31,11 @@ fn oracle_event() -> UsageEvent {
         .remove(0)
 }
 
-fn facts(event: &mut UsageEvent) -> &mut PricingContext {
-    event.pricing_context.as_mut().unwrap()
+fn facts(event: &mut UsageEvent) -> &mut AnthropicBilling {
+    let Some(PricingContext::Anthropic(context)) = event.pricing_context.as_mut() else {
+        panic!("expected Anthropic billing");
+    };
+    context
 }
 
 fn add_session(snapshot: &mut UsageSnapshot, agent: &str, id: &str, events: Vec<UsageEvent>) {
@@ -75,7 +78,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     let oracle = oracle_event();
     let mut missing_speed = oracle.clone();
     missing_speed.identity.adapter_key = "missing-speed".into();
-    facts(&mut missing_speed).speed = ServiceTier::Unknown;
+    facts(&mut missing_speed).speed = ServiceSpeed::Unknown;
     let mut snapshot = UsageSnapshot::default();
     add_session(
         &mut snapshot,
@@ -84,7 +87,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
         vec![oracle.clone(), missing_speed],
     );
     let mut conflicting = oracle.clone();
-    facts(&mut conflicting).speed = ServiceTier::Fast;
+    facts(&mut conflicting).speed = ServiceSpeed::Fast;
     add_session(&mut snapshot, "claude", "copy", vec![conflicting]);
 
     let mut pi = oracle.clone();
@@ -92,17 +95,13 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     pi.recorded_cost = Some(RecordedCost::from_usd(1.0).unwrap());
     add_session(&mut snapshot, "pi", "main", vec![pi]);
     let mut codex = oracle.clone();
-    codex.pricing_context = Some(PricingContext {
+    codex.pricing_context = Some(PricingContext::OpenAi(OpenAiBilling {
         tier: ServiceTier::Standard,
 
         tier_evidence: TierEvidence::ServedResponse,
-        request_granularity: RequestGranularity::ExactSingleRequest,
+        requests: RequestBreakdown::SingleRequest,
         cache_detail: CacheDetail::Complete,
-        request_usage: None,
-        provider: "openai".into(),
-        speed: ServiceTier::Standard,
-        cache_writes: None,
-    });
+    }));
     let unsupported = codex.clone();
     codex.identity.adapter_key = "openai-response".into();
     codex.attribution = Some(ModelAttribution {
@@ -158,7 +157,8 @@ fn claude_only_zero_and_unpriced_rows_remain_distinct() {
             provider: "anthropic".into(),
             model: model.into(),
         });
-        facts(&mut event).request_usage = Some(vec![TokenCounts::default()]);
+        facts(&mut event).requests =
+            RequestBreakdown::KnownRequests(KnownRequests::new(TokenCounts::default()));
         facts(&mut event).cache_writes = None;
         let mut snapshot = UsageSnapshot::default();
         add_session(&mut snapshot, "claude", "main", vec![event]);
@@ -185,10 +185,17 @@ fn pricing_follows_billing_provider_for_any_agent_and_retains_all_rate_versions(
         provider: "openai".into(),
         model: "gpt-6-astra".into(),
     });
-    openai.pricing_context.as_mut().unwrap().provider = "openai".into();
+    let original = facts(&mut openai).clone();
+    openai.pricing_context = Some(PricingContext::OpenAi(OpenAiBilling {
+        tier: original.tier,
+        tier_evidence: original.tier_evidence,
+        requests: original.requests,
+        cache_detail: CacheDetail::Complete,
+    }));
     let mut unknown = anthropic.clone();
     unknown.identity.adapter_key = "unknown".into();
-    unknown.pricing_context.as_mut().unwrap().provider = "unknown-provider".into();
+    unknown.pricing_context = None;
+    unknown.attribution.as_mut().unwrap().provider = "unknown-provider".into();
     let mut snapshot = UsageSnapshot::default();
     add_session(
         &mut snapshot,

@@ -4,17 +4,17 @@ use std::path::Path;
 use token_tracker::adapters::claude::ClaudeSessionParser;
 use token_tracker::application::{ParseContext, SessionParser};
 use token_tracker::domain::{
-    CacheDetail, CacheWriteTokens, EstimateUnavailableReason as Reason, EstimatedCost,
-    ModelAttribution, PricingContext, RequestGranularity, ServiceTier, TierEvidence, Timestamp,
-    TokenCounts, UsageEstimate, UsageEvent, UsageEventIdentity, UsageKind,
+    AnthropicBilling, CacheWriteTokens, EstimateUnavailableReason as Reason, EstimatedCost,
+    KnownRequests, ModelAttribution, PricingContext, RequestBreakdown, ServiceSpeed, ServiceTier,
+    TierEvidence, Timestamp, TokenCounts, UsageEstimate, UsageEvent, UsageEventIdentity, UsageKind,
 };
 use token_tracker::pricing::anthropic::calculate_estimate;
 
-fn served(value: &str) -> ServiceTier {
+fn served(value: &str) -> ServiceSpeed {
     match value {
-        "standard" => ServiceTier::Standard,
-        "fast" => ServiceTier::Fast,
-        _ => ServiceTier::Unsupported(value.into()),
+        "standard" => ServiceSpeed::Standard,
+        "fast" => ServiceSpeed::Fast,
+        _ => ServiceSpeed::Unsupported(value.into()),
     }
 }
 
@@ -38,14 +38,11 @@ fn event() -> UsageEvent {
         }),
         tokens,
         recorded_cost: None,
-        pricing_context: Some(PricingContext {
-            provider: "anthropic".into(),
+        pricing_context: Some(PricingContext::Anthropic(AnthropicBilling {
             tier: ServiceTier::Standard,
-            speed: ServiceTier::Standard,
+            speed: ServiceSpeed::Standard,
             tier_evidence: TierEvidence::ServedResponse,
-            request_granularity: RequestGranularity::ExactSingleRequest,
-            cache_detail: CacheDetail::Complete,
-            request_usage: Some(vec![tokens]),
+            requests: RequestBreakdown::KnownRequests(KnownRequests::new(tokens)),
             cache_writes: Some(vec![
                 CacheWriteTokens {
                     duration_seconds: 300,
@@ -56,12 +53,15 @@ fn event() -> UsageEvent {
                     tokens: 10,
                 },
             ]),
-        }),
+        })),
     }
 }
 
-fn facts(event: &mut UsageEvent) -> &mut PricingContext {
-    event.pricing_context.as_mut().unwrap()
+fn facts(event: &mut UsageEvent) -> &mut AnthropicBilling {
+    let Some(PricingContext::Anthropic(context)) = event.pricing_context.as_mut() else {
+        panic!("expected Anthropic billing");
+    };
+    context
 }
 
 fn expected(cost: u128) -> Result<UsageEstimate, Reason> {
@@ -180,7 +180,8 @@ fn bundled_models_use_exact_flat_rates() {
                 input,
                 ..TokenCounts::default()
             };
-            facts(&mut event).request_usage = Some(vec![event.tokens]);
+            facts(&mut event).requests =
+                RequestBreakdown::KnownRequests(KnownRequests::new(event.tokens));
             facts(&mut event).cache_writes = None;
             assert_eq!(
                 calculate_estimate(&event),
@@ -196,7 +197,7 @@ fn bundled_models_use_exact_flat_rates() {
         cache_read: u64::MAX,
         cache_write: u64::MAX,
     };
-    facts(&mut event).request_usage = Some(vec![event.tokens]);
+    facts(&mut event).requests = RequestBreakdown::KnownRequests(KnownRequests::new(event.tokens));
     facts(&mut event).cache_writes = Some(vec![CacheWriteTokens {
         duration_seconds: 3600,
         tokens: u64::MAX,
@@ -225,33 +226,30 @@ fn served_evidence_is_required_and_failures_have_stable_precedence() {
             Reason::UnknownTier,
         ),
         (
-            served("standard_only"),
+            ServiceTier::Unsupported("standard_only".into()),
             served("standard"),
             Reason::UnsupportedTier,
         ),
         (
-            served("standard"),
-            ServiceTier::Unknown,
+            ServiceTier::Standard,
+            ServiceSpeed::Unknown,
             Reason::UnknownSpeed,
         ),
         (
-            served("standard"),
-            ServiceTier::Unknown,
-            Reason::UnknownSpeed,
+            ServiceTier::Standard,
+            served("FAST"),
+            Reason::UnsupportedSpeed,
         ),
-        (served("standard"), served("FAST"), Reason::UnsupportedSpeed),
         (
-            served("future"),
-            ServiceTier::Unknown,
+            ServiceTier::Unsupported("future".into()),
+            ServiceSpeed::Unknown,
             Reason::UnsupportedTier,
         ),
     ] {
         let mut event = event();
-        let context = event.pricing_context.as_mut().unwrap();
-        context.tier = ServiceTier::Standard;
-        context.tier_evidence = TierEvidence::ServedResponse;
-        facts(&mut event).tier = tier;
-        facts(&mut event).speed = speed;
+        let context = facts(&mut event);
+        context.tier = tier;
+        context.speed = speed;
         assert_eq!(calculate_estimate(&event), Err(reason));
     }
     for model in [
@@ -268,7 +266,7 @@ fn served_evidence_is_required_and_failures_have_stable_precedence() {
     for model in ["claude-opus-5[1m]", "claude-haiku-4-5"] {
         let mut event = event();
         event.attribution.as_mut().unwrap().model = model.into();
-        facts(&mut event).speed = ServiceTier::Unknown;
+        facts(&mut event).speed = ServiceSpeed::Unknown;
         assert_eq!(calculate_estimate(&event), Err(Reason::UnsupportedModel));
     }
     let mut event = event();
@@ -284,7 +282,8 @@ fn invalid_usage_and_missing_iteration_durations_never_produce_partial_costs() {
     let mut event = event();
     let original = event.tokens;
     event.tokens = original.checked_add(original).unwrap();
-    facts(&mut event).request_usage = Some(vec![original, original]);
+    facts(&mut event).requests =
+        RequestBreakdown::KnownRequests(KnownRequests::from_vec(vec![original, original]).unwrap());
     facts(&mut event).cache_writes = None;
     assert_eq!(
         calculate_estimate(&event),

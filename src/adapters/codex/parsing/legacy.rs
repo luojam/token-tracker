@@ -4,8 +4,8 @@ use super::{
     lifecycle::AccountingTurn,
 };
 use crate::domain::{
-    AgentId, CacheDetail, RequestGranularity, ServiceTier, TierEvidence, UsageEvent,
-    UsageEventIdentity, UsageKind,
+    AgentId, CacheDetail, KnownRequests, PricingContext, RequestBreakdown, ServiceTier,
+    TierEvidence, UsageEvent, UsageEventIdentity, UsageKind,
 };
 use std::collections::BTreeMap;
 
@@ -92,7 +92,7 @@ impl LegacyUsageState {
         let (attribution, pricing_context, raw_tier) = context.observation(
             &turn.id,
             None,
-            RequestGranularity::AggregateOrUnknown,
+            RequestBreakdown::AggregateOrUnknown,
             cache_detail,
         );
         let original_tier = self
@@ -112,16 +112,18 @@ impl LegacyUsageState {
                 attribution: attribution.clone(),
                 tokens: Default::default(),
                 recorded_cost: None,
-                pricing_context: Some(pricing_context.clone()),
+                pricing_context: Some(PricingContext::OpenAi(pricing_context.clone())),
             });
         if event.attribution != attribution {
             event.attribution = None;
         }
-        if let Some(existing) = &mut event.pricing_context {
-            existing
-                .request_usage
-                .get_or_insert_with(Vec::new)
-                .push(tokens);
+        if let Some(PricingContext::OpenAi(existing)) = &mut event.pricing_context {
+            match &mut existing.requests {
+                RequestBreakdown::KnownRequests(requests) => requests.push(tokens),
+                _ => {
+                    existing.requests = RequestBreakdown::KnownRequests(KnownRequests::new(tokens))
+                }
+            }
             if existing.tier != pricing_context.tier
                 || *original_tier != raw_tier
                 || existing.tier_evidence != pricing_context.tier_evidence

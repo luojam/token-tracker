@@ -5,9 +5,9 @@ use crate::application::{
     ParseCompletion, ParseContext, ParseNotice, ParsedSession, SessionParser,
 };
 use crate::domain::{
-    AgentId, CacheDetail, CacheWriteTokens, ModelAttribution, ParentSession, PricingContext,
-    RequestGranularity, ServiceTier, SessionMetadata, TierEvidence, Timestamp, TokenCounts,
-    UsageEvent, UsageEventIdentity, UsageKind,
+    AgentId, AnthropicBilling, CacheWriteTokens, KnownRequests, ModelAttribution, ParentSession,
+    PricingContext, RequestBreakdown, ServiceSpeed, ServiceTier, SessionMetadata, TierEvidence,
+    Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
 use chrono::DateTime;
 use serde::Deserialize;
@@ -413,18 +413,18 @@ fn parse_usage(
             None => {}
         }
     }
-    let pricing = PricingContext {
-        provider: "anthropic".into(),
-        tier: served_value(usage.get("service_tier"), line, false)?,
-        speed: served_value(usage.get("speed"), line, true)?,
+    let pricing = PricingContext::Anthropic(AnthropicBilling {
+        tier: served_tier(usage.get("service_tier"), line)?,
+        speed: served_speed(usage.get("speed"), line)?,
         tier_evidence: TierEvidence::ServedResponse,
-        request_granularity: RequestGranularity::ExactSingleRequest,
-        cache_detail: CacheDetail::Complete,
-        request_usage: Some(
-            components
-                .iter()
-                .map(|component| component.tokens)
-                .collect(),
+        requests: RequestBreakdown::KnownRequests(
+            KnownRequests::from_vec(
+                components
+                    .iter()
+                    .map(|component| component.tokens)
+                    .collect(),
+            )
+            .expect("usage has at least one component"),
         ),
         cache_writes: complete_durations.then(|| {
             writes
@@ -435,7 +435,7 @@ fn parse_usage(
                 })
                 .collect()
         }),
-    };
+    });
     Ok(Some((tokens, pricing)))
 }
 
@@ -485,18 +485,27 @@ struct UsageComponent {
     cache_creation: Option<Vec<CacheWriteTokens>>,
 }
 
-fn served_value(
-    value: Option<&Value>,
-    line: usize,
-    allow_fast: bool,
-) -> Result<ServiceTier, ClaudeParseError> {
+fn served_tier(value: Option<&Value>, line: usize) -> Result<ServiceTier, ClaudeParseError> {
+    match served_value(value, line)? {
+        None => Ok(ServiceTier::Unknown),
+        Some("standard") => Ok(ServiceTier::Standard),
+        Some(value) => Ok(ServiceTier::Unsupported(value.into())),
+    }
+}
+
+fn served_speed(value: Option<&Value>, line: usize) -> Result<ServiceSpeed, ClaudeParseError> {
+    match served_value(value, line)? {
+        None => Ok(ServiceSpeed::Unknown),
+        Some("standard") => Ok(ServiceSpeed::Standard),
+        Some("fast") => Ok(ServiceSpeed::Fast),
+        Some(value) => Ok(ServiceSpeed::Unsupported(value.into())),
+    }
+}
+
+fn served_value(value: Option<&Value>, line: usize) -> Result<Option<&str>, ClaudeParseError> {
     match value {
-        None | Some(Value::Null) => Ok(ServiceTier::Unknown),
-        Some(Value::String(value)) => Ok(match value.as_str() {
-            "standard" => ServiceTier::Standard,
-            "fast" if allow_fast => ServiceTier::Fast,
-            _ => ServiceTier::Unsupported(value.clone()),
-        }),
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value)),
         _ => Err(invalid(line, "served pricing evidence")),
     }
 }
