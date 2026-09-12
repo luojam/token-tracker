@@ -6,6 +6,6 @@ mod parsing;
 pub use discovery::{CodexDiscoveryError, CodexSessionDiscovery, default_session_roots};
 pub use parsing::{CodexParseError, CodexSessionParser};
 
-const CODEX_AGENT_ID: &str = "codex";
+use super::registry::CODEX_AGENT_ID;
 
 const NORMALIZATION_VERSION: NonZeroU32 = NonZeroU32::MIN;

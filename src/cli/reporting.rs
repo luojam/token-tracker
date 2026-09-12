@@ -1,5 +1,6 @@
 use std::fmt::Write;
 
+use crate::adapters::registry::display_label;
 use crate::application::{CostAmount, CostTotal, ImportWarning, UsageReport};
 use crate::domain::{ModelAttribution, SummaryGroup, UsageKind};
 
@@ -94,12 +95,7 @@ pub fn render_terminal_report(report: &UsageReport, warnings: &[ImportWarning]) 
         let mut previous_agent = None;
         for (agent, cells) in &rows {
             if previous_agent != Some(agent) {
-                let label = match agent.as_str() {
-                    "pi" => "Pi".into(),
-                    "codex" => "Codex".into(),
-                    "claude" => "Claude Code".into(),
-                    agent => one_line(agent),
-                };
+                let label = one_line(display_label(agent.as_str()));
                 writeln!(output).unwrap();
                 writeln!(output, "{label} usage:").unwrap();
                 render_table_row(&mut output, &headers, &widths);

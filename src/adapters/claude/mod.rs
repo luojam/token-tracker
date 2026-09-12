@@ -6,6 +6,6 @@ mod parsing;
 pub use discovery::{ClaudeDiscoveryError, ClaudeSessionDiscovery, default_session_root};
 pub use parsing::{ClaudeParseError, ClaudeSessionParser};
 
-const CLAUDE_AGENT_ID: &str = "claude";
+use super::registry::CLAUDE_AGENT_ID;
 
 const NORMALIZATION_VERSION: NonZeroU32 = NonZeroU32::MIN;

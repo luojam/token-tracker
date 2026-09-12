@@ -4,3 +4,4 @@ pub mod pi;
 
 mod discovery;
 mod jsonl;
+pub(crate) mod registry;
