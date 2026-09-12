@@ -115,8 +115,9 @@ impl UsageStore for SqliteUsageStore {
             let path = encode_path(&file.path);
             let (modified_seconds, modified_nanos) =
                 system_time_to_parts(file.revision.modified_at)?;
-            transaction.execute(
-                "INSERT INTO import_sources (
+            transaction
+                .prepare_cached(
+                    "INSERT INTO import_sources (
                     path, last_observed_size, last_observed_modified_seconds,
                     last_observed_modified_nanos, last_discovery_scan_ms, present, agent
                  ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
@@ -127,15 +128,15 @@ impl UsageStore for SqliteUsageStore {
                     last_discovery_scan_ms = excluded.last_discovery_scan_ms,
                     present = 1
                  WHERE excluded.last_discovery_scan_ms >= import_sources.last_discovery_scan_ms",
-                params![
+                )?
+                .execute(params![
                     &path,
                     encode_u64(file.revision.size)?,
                     modified_seconds,
                     modified_nanos,
                     observed_at.as_unix_milliseconds(),
                     agent.as_str(),
-                ],
-            )?;
+                ])?;
             discovered_paths.insert(path);
         }
 
@@ -155,12 +156,13 @@ impl UsageStore for SqliteUsageStore {
 
             let path = decode_path(encoded_path);
             if discovery_covers(&path, report) {
-                transaction.execute(
-                    "UPDATE import_sources
+                transaction
+                    .prepare_cached(
+                        "UPDATE import_sources
                         SET present = 0, last_discovery_scan_ms = ?1
                       WHERE id = ?2 AND last_discovery_scan_ms <= ?1",
-                    params![observed_at.as_unix_milliseconds(), source_id],
-                )?;
+                    )?
+                    .execute(params![observed_at.as_unix_milliseconds(), source_id])?;
             }
         }
 
@@ -192,18 +194,25 @@ impl UsageStore for SqliteUsageStore {
         let mut stats = ImportStats::default();
 
         for event in &import.parsed.events {
-            stats.event_identities_inserted += transaction.execute(
-                "INSERT INTO usage_events (agent, adapter_key)
+            stats.event_identities_inserted += transaction
+                .prepare_cached(
+                    "INSERT INTO usage_events (agent, adapter_key)
                  VALUES (?1, ?2)
                  ON CONFLICT(agent, adapter_key) DO NOTHING",
-                params![event.identity.agent.as_str(), &event.identity.adapter_key],
-            )? as u64;
+                )?
+                .execute(params![
+                    event.identity.agent.as_str(),
+                    &event.identity.adapter_key
+                ])? as u64;
 
-            let event_id: i64 = transaction.query_row(
-                "SELECT id FROM usage_events WHERE agent = ?1 AND adapter_key = ?2",
-                params![event.identity.agent.as_str(), &event.identity.adapter_key],
-                |row| row.get(0),
-            )?;
+            let event_id: i64 = transaction
+                .prepare_cached(
+                    "SELECT id FROM usage_events WHERE agent = ?1 AND adapter_key = ?2",
+                )?
+                .query_row(
+                    params![event.identity.agent.as_str(), &event.identity.adapter_key],
+                    |row| row.get(0),
+                )?;
 
             let inserted =
                 insert_observation(&transaction, source_id, source_session_id, event_id, event)?;

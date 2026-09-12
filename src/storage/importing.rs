@@ -11,10 +11,12 @@ pub(super) fn normalization_changed(
     import: &SessionImport,
 ) -> Result<bool, SqliteStoreError> {
     transaction
-        .query_row(
+        .prepare_cached(
             "SELECT EXISTS (SELECT 1 FROM import_sources
              WHERE agent = ?1 AND path = ?2 AND last_successful_scan_ms IS NOT NULL
                AND normalization_version IS NOT ?3)",
+        )?
+        .query_row(
             params![
                 import.parsed.metadata.agent.as_str(),
                 encode_path(&import.source.path),
@@ -31,8 +33,9 @@ pub(super) fn upsert_imported_source(
 ) -> Result<i64, SqliteStoreError> {
     let path = encode_path(&import.source.path);
     let (seconds, nanos) = system_time_to_parts(import.source.revision.modified_at)?;
-    transaction.execute(
-        "INSERT INTO import_sources (
+    transaction
+        .prepare_cached(
+            "INSERT INTO import_sources (
             path, agent, last_observed_size, last_observed_modified_seconds,
             last_observed_modified_nanos, last_imported_size, last_imported_modified_seconds,
             last_imported_modified_nanos, last_discovery_scan_ms, last_successful_scan_ms,
@@ -51,7 +54,8 @@ pub(super) fn upsert_imported_source(
             parse_notices = excluded.parse_notices,
             normalization_version = excluded.normalization_version,
             present = 1",
-        params![
+        )?
+        .execute(params![
             path,
             import.parsed.metadata.agent.as_str(),
             encode_u64(import.source.revision.size)?,
@@ -61,11 +65,10 @@ pub(super) fn upsert_imported_source(
             completion_to_str(import.parsed.completion),
             parse_notices::encode(&import.parsed.notices)?,
             import.normalization_version.get()
-        ],
-    )?;
+        ])?;
     transaction
+        .prepare_cached("SELECT id FROM import_sources WHERE path = ?1 AND agent = ?2")?
         .query_row(
-            "SELECT id FROM import_sources WHERE path = ?1 AND agent = ?2",
             params![path, import.parsed.metadata.agent.as_str()],
             |row| row.get(0),
         )
@@ -79,7 +82,7 @@ pub(super) fn upsert_source_session(
 ) -> Result<i64, SqliteStoreError> {
     let metadata = &import.parsed.metadata;
     let (parent_kind, parent_value) = encode_parent(metadata.parent_session.as_ref());
-    transaction.execute(
+    transaction.prepare_cached(
         "INSERT INTO sessions (
             source_id, agent, session_id, working_directory, started_at_ms, name, parent_session, parent_kind
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -89,13 +92,16 @@ pub(super) fn upsert_source_session(
             name = excluded.name,
             parent_session = excluded.parent_session,
             parent_kind = excluded.parent_kind",
+    )?.execute(
         params![source_id, metadata.agent.as_str(), metadata.session_id,
             metadata.working_directory.as_deref().map(encode_path), metadata.started_at.as_unix_milliseconds(),
             metadata.name, parent_value, parent_kind],
     )?;
     transaction
-        .query_row(
+        .prepare_cached(
             "SELECT id FROM sessions WHERE source_id = ?1 AND agent = ?2 AND session_id = ?3",
+        )?
+        .query_row(
             params![source_id, metadata.agent.as_str(), metadata.session_id],
             |row| row.get(0),
         )
@@ -106,8 +112,9 @@ pub(super) fn import_is_stale(
     transaction: &Transaction<'_>,
     import: &SessionImport,
 ) -> Result<bool, SqliteStoreError> {
-    let stored = transaction.query_row(
+    let stored = transaction.prepare_cached(
         "SELECT last_successful_scan_ms, last_discovery_scan_ms FROM import_sources WHERE path = ?1 AND agent = ?2",
+    )?.query_row(
         params![encode_path(&import.source.path), import.parsed.metadata.agent.as_str()],
         |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, i64>(1)?)),
     ).optional()?;
@@ -127,13 +134,15 @@ pub(super) fn insert_observation(
     event: &UsageEvent,
 ) -> Result<bool, SqliteStoreError> {
     let (provider, model) = attribution_parts(event);
-    let inserted = transaction.execute(
-        "INSERT INTO usage_observations (
+    let inserted = transaction
+        .prepare_cached(
+            "INSERT INTO usage_observations (
             source_id, source_session_id, event_id, timestamp_ms, usage_kind, provider, model,
             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, recorded_cost_usd
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(source_session_id, event_id) DO NOTHING",
-        params![
+        )?
+        .execute(params![
             source_id,
             source_session_id,
             event_id,
@@ -146,8 +155,8 @@ pub(super) fn insert_observation(
             encode_u64(event.tokens.cache_read)?,
             encode_u64(event.tokens.cache_write)?,
             event.recorded_cost.map(RecordedCost::as_usd)
-        ],
-    )? == 1;
+        ])?
+        == 1;
     if inserted {
         write_billing(transaction, source_session_id, event_id, event)?;
     }
@@ -162,7 +171,7 @@ pub(super) fn update_observation(
     event: &UsageEvent,
 ) -> Result<usize, SqliteStoreError> {
     let (provider, model) = attribution_parts(event);
-    let changed = transaction.execute(
+    let changed = transaction.prepare_cached(
         "UPDATE usage_observations SET timestamp_ms = ?1, usage_kind = ?2, provider = ?3, model = ?4,
             input_tokens = ?5, output_tokens = ?6, cache_read_tokens = ?7, cache_write_tokens = ?8,
             recorded_cost_usd = ?9
@@ -170,6 +179,7 @@ pub(super) fn update_observation(
            AND (timestamp_ms IS NOT ?1 OR usage_kind IS NOT ?2 OR provider IS NOT ?3 OR model IS NOT ?4
                 OR input_tokens IS NOT ?5 OR output_tokens IS NOT ?6 OR cache_read_tokens IS NOT ?7
                 OR cache_write_tokens IS NOT ?8 OR recorded_cost_usd IS NOT ?9)",
+    )?.execute(
         params![event.timestamp.as_unix_milliseconds(), usage_kind_to_str(event.kind), provider, model,
             encode_u64(event.tokens.input)?, encode_u64(event.tokens.output)?, encode_u64(event.tokens.cache_read)?,
             encode_u64(event.tokens.cache_write)?, event.recorded_cost.map(RecordedCost::as_usd), source_id, source_session_id, event_id],
@@ -185,14 +195,16 @@ fn write_billing(
     usage: &UsageEvent,
 ) -> Result<bool, SqliteStoreError> {
     let changed = match billing::encode(usage.pricing_context.as_ref())? {
-        Some(facts) => transaction.execute(
+        Some(facts) => transaction.prepare_cached(
             "INSERT INTO billing_inputs (source_session_id, event_id, facts) VALUES (?1, ?2, ?3)
              ON CONFLICT(source_session_id, event_id) DO UPDATE SET facts = excluded.facts
              WHERE facts IS NOT excluded.facts",
+        )?.execute(
             params![session, event, facts],
         )?,
-        None => transaction.execute(
+        None => transaction.prepare_cached(
             "DELETE FROM billing_inputs WHERE source_session_id = ?1 AND event_id = ?2",
+        )?.execute(
             params![session, event],
         )?,
     };
