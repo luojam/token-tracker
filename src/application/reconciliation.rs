@@ -13,6 +13,15 @@ use crate::domain::{
 /// Counts each event once, preferring ancestors, then session start, ID, and normalized path.
 /// Missing files retain precedence; scan and import order do not affect selection.
 pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, SummaryError> {
+    summarize_canonical_usage(&select_canonical_usage(snapshot)?)
+}
+
+struct CanonicalUsage<'a> {
+    session_count: u64,
+    observations: Vec<&'a UsageObservation>,
+}
+
+fn select_canonical_usage(snapshot: &UsageSnapshot) -> Result<CanonicalUsage<'_>, SummaryError> {
     let mut sessions = HashMap::new();
     for session in &snapshot.sessions {
         if sessions.insert(session.key.clone(), session).is_some() {
@@ -37,19 +46,26 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
             .or_default()
             .push(observation);
     }
-    let mut totals = SummaryTotals {
+    // Stable event order also makes floating-point cost accumulation deterministic.
+    let observations = by_event
+        .values()
+        .map(|observations| select_canonical_observation(observations, &sessions, &parents))
+        .collect();
+    Ok(CanonicalUsage {
         session_count: count(session_count)?,
-        unique_usage_event_count: count(by_event.len())?,
+        observations,
+    })
+}
+
+fn summarize_canonical_usage(canonical: &CanonicalUsage<'_>) -> Result<UsageSummary, SummaryError> {
+    let mut totals = SummaryTotals {
+        session_count: canonical.session_count,
+        unique_usage_event_count: count(canonical.observations.len())?,
         ..SummaryTotals::default()
     };
     let mut breakdown = BTreeMap::<(AgentId, SummaryGroup), SummaryBreakdown>::new();
-    let canonical = by_event
-        .values()
-        .map(|observations| select_canonical_observation(observations, &sessions, &parents))
-        .collect::<Vec<_>>();
-    // Stable event order also makes floating-point cost accumulation deterministic.
-    for canonical in &canonical {
-        let event = &canonical.event;
+    for observation in &canonical.observations {
+        let event = &observation.event;
         totals.tokens = add_tokens(totals.tokens, event.tokens)?;
         add_cost(&mut totals.recorded_cost, event.recorded_cost)?;
         let group = match &event.attribution {
@@ -72,8 +88,12 @@ pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, Summary
             .checked_add(1)
             .ok_or(SummaryError::Overflow("event count"))?;
     }
-    let estimates =
-        crate::pricing::summarize_estimates(canonical.iter().map(|observation| &observation.event));
+    let estimates = crate::pricing::summarize_estimates(
+        canonical
+            .observations
+            .iter()
+            .map(|observation| &observation.event),
+    );
     Ok(UsageSummary {
         totals,
         breakdown: breakdown.into_values().collect(),
