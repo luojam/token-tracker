@@ -11,17 +11,22 @@ CREATE TABLE import_sources (
     last_discovery_scan_ms INTEGER NOT NULL,
     last_successful_scan_ms INTEGER,
     last_parse_completion TEXT CHECK (last_parse_completion IN ('complete', 'incomplete_final_line')),
-    normalization_version INTEGER CHECK (normalization_version > 0),
+    normalization_version INTEGER CHECK (normalization_version BETWEEN 1 AND 4294967295),
     parse_notices TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(parse_notices)),
     present INTEGER NOT NULL CHECK (present IN (0, 1)),
     UNIQUE (agent, path),
     CHECK (last_observed_modified_nanos BETWEEN 0 AND 999999999),
     CHECK (
         (last_imported_size IS NULL AND last_imported_modified_seconds IS NULL
-         AND last_imported_modified_nanos IS NULL)
+         AND last_imported_modified_nanos IS NULL AND last_successful_scan_ms IS NULL
+         AND last_parse_completion IS NULL AND normalization_version IS NULL
+         AND parse_notices = '[]')
         OR
         (last_imported_size IS NOT NULL AND last_imported_modified_seconds IS NOT NULL
-         AND last_imported_modified_nanos BETWEEN 0 AND 999999999)
+         AND last_imported_modified_nanos IS NOT NULL
+         AND last_imported_modified_nanos BETWEEN 0 AND 999999999
+         AND last_successful_scan_ms IS NOT NULL AND last_parse_completion IS NOT NULL
+         AND normalization_version IS NOT NULL)
     )
 );
 

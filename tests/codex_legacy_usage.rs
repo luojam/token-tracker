@@ -377,7 +377,7 @@ fn synchronization_updates_turn_aggregates_and_retains_the_last_valid_import() {
 
     let snapshot = store.usage_snapshot().unwrap();
     let last_imported = store.source_states(&AgentId::from("codex")).unwrap()[0]
-        .last_imported_revision
+        .last_import
         .clone();
     fs::write(&path, fixture("reject-counter-decrease.jsonl")).unwrap();
     let report = synchronize_sessions_at(
@@ -392,7 +392,7 @@ fn synchronization_updates_turn_aggregates_and_retains_the_last_valid_import() {
     assert_eq!(report.warnings.len(), 1);
     assert_eq!(store.usage_snapshot().unwrap(), snapshot);
     assert_eq!(
-        store.source_states(&AgentId::from("codex")).unwrap()[0].last_imported_revision,
+        store.source_states(&AgentId::from("codex")).unwrap()[0].last_import,
         last_imported
     );
 }

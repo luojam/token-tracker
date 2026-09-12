@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::io::BufRead;
-use std::num::NonZeroU64;
+use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use super::ValidatedSessionImport;
 use crate::domain::{AgentId, ParentSession, SessionMetadata, Timestamp, UsageEvent};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,8 +84,8 @@ pub trait SessionParser {
 
     /// Bump to reimport unchanged files after normalization changes.
     /// Session and event identity changes require a migration.
-    fn normalization_version(&self) -> u32 {
-        1
+    fn normalization_version(&self) -> NonZeroU32 {
+        NonZeroU32::MIN
     }
 
     fn parse(
@@ -99,17 +100,22 @@ pub struct SourceState {
     pub path: PathBuf,
     /// Latest discovered revision, even if import failed.
     pub last_observed_revision: FileRevision,
-    pub last_imported_revision: Option<FileRevision>,
-    pub last_successful_scan: Option<Timestamp>,
-    pub last_parse_completion: Option<ParseCompletion>,
-    pub normalization_version: Option<u32>,
-    pub notices: Vec<ParseNotice>,
+    pub last_import: Option<SuccessfulImport>,
     pub present: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SuccessfulImport {
+    pub revision: FileRevision,
+    pub scanned_at: Timestamp,
+    pub completion: ParseCompletion,
+    pub normalization_version: NonZeroU32,
+    pub notices: Vec<ParseNotice>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionImport {
-    pub normalization_version: u32,
+    pub normalization_version: NonZeroU32,
     pub source: DiscoveredSessionFile,
     pub scanned_at: Timestamp,
     pub parsed: ParsedSession,
@@ -145,8 +151,10 @@ pub trait UsageStore {
 
     /// Atomically upserts source/session metadata and observations, retaining omitted history.
     /// Normalization changes are deferred until parsing completes.
-    fn commit_import(&mut self, import: &SessionImport)
-    -> Result<CommitImportOutcome, Self::Error>;
+    fn commit_import(
+        &mut self,
+        import: &ValidatedSessionImport,
+    ) -> Result<CommitImportOutcome, Self::Error>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]

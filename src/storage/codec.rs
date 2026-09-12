@@ -1,8 +1,11 @@
 use super::{SqliteStoreError, parse_notices};
-use crate::application::{DiscoveryReport, FileRevision, ParseCompletion, SourceState};
+use crate::application::{
+    DiscoveryReport, FileRevision, ParseCompletion, SourceState, SuccessfulImport,
+};
 use crate::domain::{ParentSession, Timestamp, UsageEvent, UsageKind};
 use std::{
     ffi::OsString,
+    num::NonZeroU32,
     path::{Path, PathBuf},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -26,15 +29,36 @@ pub(super) fn source_state_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result
         _ => return Err(corrupt_sql_value("invalid source presence value")),
     };
 
-    Ok(SourceState {
-        path,
-        last_observed_revision,
+    let normalization_version = row
+        .get::<_, Option<u32>>(11)?
+        .map(|value| {
+            NonZeroU32::new(value).ok_or_else(|| corrupt_sql_value("invalid normalization version"))
+        })
+        .transpose()?;
+    let notices =
+        parse_notices::decode(&row.get::<_, String>(10)?).map_err(to_sql_conversion_error)?;
+    let last_import = match (
         last_imported_revision,
         last_successful_scan,
         last_parse_completion,
-        normalization_version: row.get(11)?,
-        notices: parse_notices::decode(&row.get::<_, String>(10)?)
-            .map_err(to_sql_conversion_error)?,
+        normalization_version,
+    ) {
+        (None, None, None, None) if notices.is_empty() => None,
+        (Some(revision), Some(scanned_at), Some(completion), Some(normalization_version)) => {
+            Some(SuccessfulImport {
+                revision,
+                scanned_at,
+                completion,
+                normalization_version,
+                notices,
+            })
+        }
+        _ => return Err(corrupt_sql_value("incomplete successful import")),
+    };
+    Ok(SourceState {
+        path,
+        last_observed_revision,
+        last_import,
         present,
     })
 }

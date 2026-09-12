@@ -3,6 +3,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs::{self, File, Metadata};
 use std::io::{self, BufReader};
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -155,20 +156,6 @@ where
             }
         };
 
-        if parsed.metadata.agent != agent
-            || parsed
-                .events
-                .iter()
-                .any(|event| event.identity.agent != agent)
-        {
-            report.counts.files_failed += 1;
-            report.warnings.push(ImportWarning {
-                path: Some(file.path),
-                message: "parser returned usage for a different agent".into(),
-            });
-            continue;
-        }
-
         let incomplete = parsed.completion == ParseCompletion::IncompleteFinalLine;
         let import = SessionImport {
             normalization_version: parser.normalization_version(),
@@ -178,6 +165,18 @@ where
             },
             scanned_at,
             parsed,
+        };
+
+        let import = match import.validate(&agent) {
+            Ok(import) => import,
+            Err(error) => {
+                report.counts.files_failed += 1;
+                report.warnings.push(ImportWarning {
+                    path: Some(file.path),
+                    message: error.to_string(),
+                });
+                continue;
+            }
         };
 
         match store.commit_import(&import) {
@@ -220,7 +219,10 @@ where
                 source: Box::new(source),
             })?;
     for state in retained_states {
-        for notice in state.notices {
+        let Some(last_import) = state.last_import else {
+            continue;
+        };
+        for notice in last_import.notices {
             report.warnings.push(ImportWarning {
                 path: Some(state.path.clone()),
                 message: notice_message(&notice),
@@ -247,11 +249,13 @@ fn notice_message(notice: &ParseNotice) -> String {
 fn source_is_unchanged(
     state: &SourceState,
     discovered: &DiscoveredSessionFile,
-    version: u32,
+    version: NonZeroU32,
 ) -> bool {
-    state.normalization_version == Some(version)
-        && state.last_imported_revision.as_ref() == Some(&discovered.revision)
-        && state.last_parse_completion == Some(ParseCompletion::Complete)
+    state.last_import.as_ref().is_some_and(|import| {
+        import.normalization_version == version
+            && import.revision == discovered.revision
+            && import.completion == ParseCompletion::Complete
+    })
 }
 
 fn add_import_stats(counts: &mut ImportCounts, stats: ImportStats) {

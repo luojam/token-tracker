@@ -288,7 +288,10 @@ fn failed_inaccessible_deleted_and_rewritten_sources_retain_usage_and_notices() 
     assert_eq!(initial.warnings.len(), 1);
     let snapshot = ledger.snapshot();
     let state = ledger.states().remove(0);
-    assert_eq!(state.notices[0].count.get(), 2);
+    assert_eq!(
+        state.last_import.as_ref().unwrap().notices[0].count.get(),
+        2
+    );
     totals(&ledger, 1, 1, 5);
     let unchanged = ledger.sync();
     assert_eq!(unchanged.counts.files_unchanged, 1);
@@ -309,11 +312,7 @@ fn failed_inaccessible_deleted_and_rewritten_sources_retain_usage_and_notices() 
     assert_eq!(failed.counts.files_failed, 1);
     assert!(failed.warnings.contains(&initial.warnings[0]));
     let failed_state = ledger.states().remove(0);
-    assert_eq!(
-        failed_state.last_imported_revision,
-        state.last_imported_revision
-    );
-    assert_eq!(failed_state.notices, state.notices);
+    assert_eq!(failed_state.last_import, state.last_import);
     assert_eq!(ledger.snapshot(), snapshot);
 
     let moved = ledger.root.join("uninspected-projects");
@@ -333,7 +332,14 @@ fn failed_inaccessible_deleted_and_rewritten_sources_retain_usage_and_notices() 
 
     ledger.write_fixture("metadata-only.jsonl");
     assert!(ledger.sync().warnings.is_empty());
-    assert!(ledger.states()[0].notices.is_empty());
+    assert!(
+        ledger.states()[0]
+            .last_import
+            .as_ref()
+            .unwrap()
+            .notices
+            .is_empty()
+    );
     assert!(ledger.states()[0].present);
     assert_eq!(ledger.snapshot().observations, snapshot.observations);
     totals(&ledger, 1, 1, 5);

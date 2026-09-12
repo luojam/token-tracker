@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use super::PI_AGENT_ID;
 use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
 use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
@@ -25,7 +27,7 @@ impl PiSessionParser {
 impl SessionParser for PiSessionParser {
     type Error = PiParseError;
 
-    fn normalization_version(&self) -> u32 {
+    fn normalization_version(&self) -> NonZeroU32 {
         super::NORMALIZATION_VERSION
     }
 

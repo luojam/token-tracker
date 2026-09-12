@@ -270,7 +270,7 @@ fn identical_paths_have_independent_revisions_presence_and_scan_times() {
     assert_eq!(rejected.counts.files_imported, 0);
     assert!(
         store.source_states(&"third".into()).unwrap()[0]
-            .last_imported_revision
+            .last_import
             .is_none()
     );
     assert_eq!(

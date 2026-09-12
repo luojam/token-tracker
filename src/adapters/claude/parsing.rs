@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use super::CLAUDE_AGENT_ID;
 use super::discovery::{is_agent_id, is_session_id};
 use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
@@ -30,7 +32,7 @@ impl ClaudeSessionParser {
 impl SessionParser for ClaudeSessionParser {
     type Error = ClaudeParseError;
 
-    fn normalization_version(&self) -> u32 {
+    fn normalization_version(&self) -> NonZeroU32 {
         super::NORMALIZATION_VERSION
     }
 

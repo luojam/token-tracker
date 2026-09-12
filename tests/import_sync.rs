@@ -110,8 +110,8 @@ fn repeat_append_rewrite_parse_failure_and_missing_source_are_synchronized() {
     assert_eq!(rewritten.counts.event_identities_inserted, 0);
     assert_eq!(rewritten.counts.observations_inserted, 0);
     assert_eq!(rewritten.counts.observations_updated, 1);
-    let last_good_revision = store.source_states(&AgentId::from("pi")).unwrap()[0]
-        .last_imported_revision
+    let last_good_import = store.source_states(&AgentId::from("pi")).unwrap()[0]
+        .last_import
         .clone();
 
     fs::write(
@@ -124,15 +124,18 @@ fn repeat_append_rewrite_parse_failure_and_missing_source_are_synchronized() {
     assert_eq!(malformed.counts.files_imported, 0);
     assert_eq!(malformed.warnings.len(), 1);
     let state = &store.source_states(&AgentId::from("pi")).unwrap()[0];
-    assert_eq!(state.last_imported_revision, last_good_revision);
-    assert_ne!(state.last_observed_revision, last_good_revision.unwrap());
+    assert_eq!(state.last_import, last_good_import);
+    assert_ne!(
+        state.last_observed_revision,
+        last_good_import.unwrap().revision
+    );
 
     fs::remove_file(path).unwrap();
     let missing = synchronize(&tree.root, &mut store, 6_000);
     assert_eq!(missing.counts.files_discovered, 0);
     let state = &store.source_states(&AgentId::from("pi")).unwrap()[0];
     assert!(!state.present);
-    assert!(state.last_imported_revision.is_some());
+    assert!(state.last_import.is_some());
 }
 
 #[test]
@@ -229,12 +232,22 @@ fn notices_survive_scans_reopen_and_failures_until_a_successful_replacement() {
     assert_eq!(reopened.counts.files_unchanged, 1);
     assert_eq!(reopened.warnings, first.warnings);
     assert_eq!(
-        store.source_states(&"pi".into()).unwrap()[0].notices,
+        store.source_states(&"pi".into()).unwrap()[0]
+            .last_import
+            .as_ref()
+            .unwrap()
+            .notices,
         notices
     );
 
-    fs::write(&path, format!("{}{{malformed}}\n", header("partial", None))).unwrap();
-    let failed = synchronize(&root, &mut store, 4_000);
+    fs::write(&path, session("partial", None, &[("final-response", 999)])).unwrap();
+    let failed = synchronize_sessions_at(
+        &PiSessionDiscovery::new(&root),
+        &NoticeParser(vec![notices[0].clone(), notices[0].clone()]),
+        &mut store,
+        scan_time(4_000),
+    )
+    .unwrap();
     assert_eq!(failed.counts.files_failed, 1);
     assert_eq!(failed.warnings.len(), 3);
     assert!(
@@ -245,7 +258,11 @@ fn notices_survive_scans_reopen_and_failures_until_a_successful_replacement() {
     );
     assert_eq!(store.usage_snapshot().unwrap(), snapshot);
     assert_eq!(
-        store.source_states(&"pi".into()).unwrap()[0].notices,
+        store.source_states(&"pi".into()).unwrap()[0]
+            .last_import
+            .as_ref()
+            .unwrap()
+            .notices,
         notices
     );
 
@@ -279,6 +296,9 @@ fn notices_survive_scans_reopen_and_failures_until_a_successful_replacement() {
     let mut store = SqliteUsageStore::open(&database).unwrap();
     assert!(
         store.source_states(&"pi".into()).unwrap()[0]
+            .last_import
+            .as_ref()
+            .unwrap()
             .notices
             .is_empty()
     );
@@ -452,9 +472,10 @@ fn a_file_change_during_an_import_attempt_is_retried() {
     assert_eq!(report.counts.observations_inserted, 2);
     assert_eq!(
         store.source_states(&AgentId::from("pi")).unwrap()[0]
-            .last_imported_revision
+            .last_import
             .as_ref()
             .unwrap()
+            .revision
             .size,
         fs::metadata(path).unwrap().len()
     );
@@ -508,7 +529,7 @@ fn a_file_that_keeps_changing_is_deferred() {
     assert!(report.warnings[0].message.contains("import deferred"));
     assert!(
         store.source_states(&AgentId::from("pi")).unwrap()[0]
-            .last_imported_revision
+            .last_import
             .is_none()
     );
 }
@@ -523,8 +544,8 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
     impl SessionParser for VersionedParser {
         type Error = std::io::Error;
 
-        fn normalization_version(&self) -> u32 {
-            self.version
+        fn normalization_version(&self) -> std::num::NonZeroU32 {
+            self.version.try_into().unwrap()
         }
 
         fn parse(
@@ -574,7 +595,10 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
     assert_eq!(sync(&mut store, 1, false, 2).counts.files_unchanged, 1);
     assert_eq!(sync(&mut store, 2, true, 3).counts.files_failed, 1);
     assert_eq!(
-        store.source_states(&"pi".into()).unwrap()[0].normalization_version,
+        store.source_states(&"pi".into()).unwrap()[0]
+            .last_import
+            .as_ref()
+            .map(|import| import.normalization_version.get()),
         Some(1)
     );
     assert_eq!(
@@ -588,7 +612,10 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
     drop(store);
     let mut store = SqliteUsageStore::open(&database).unwrap();
     assert_eq!(
-        store.source_states(&"pi".into()).unwrap()[0].normalization_version,
+        store.source_states(&"pi".into()).unwrap()[0]
+            .last_import
+            .as_ref()
+            .map(|import| import.normalization_version.get()),
         Some(2)
     );
     assert_eq!(
@@ -615,7 +642,10 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
     assert_eq!(incomplete.counts.files_failed, 1);
     assert_eq!(store.usage_snapshot().unwrap(), before);
     assert_eq!(
-        store.source_states(&"pi".into()).unwrap()[0].normalization_version,
+        store.source_states(&"pi".into()).unwrap()[0]
+            .last_import
+            .as_ref()
+            .map(|import| import.normalization_version.get()),
         Some(2)
     );
 
@@ -634,7 +664,10 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
     let mut store = SqliteUsageStore::open(&database).unwrap();
     assert_eq!(store.usage_snapshot().unwrap(), normalized);
     assert_eq!(
-        store.source_states(&"pi".into()).unwrap()[0].normalization_version,
+        store.source_states(&"pi".into()).unwrap()[0]
+            .last_import
+            .as_ref()
+            .map(|import| import.normalization_version.get()),
         Some(4)
     );
     assert_eq!(sync(&mut store, 4, false, 9).counts.files_unchanged, 1);

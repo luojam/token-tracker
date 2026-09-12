@@ -15,7 +15,7 @@ fn failed_and_stale_commits_preserve_notices_with_observations() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     let mut original = session_import("/sessions/a.jsonl", 10);
     original.parsed.notices = vec![notice()];
-    store.commit_import(&original).unwrap();
+    store.commit_import(&validated(&original)).unwrap();
     let before = store.usage_snapshot().unwrap();
     let states = store.source_states(&"pi".into()).unwrap();
     store
@@ -29,44 +29,41 @@ fn failed_and_stale_commits_preserve_notices_with_observations() {
     replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
     replacement.parsed.notices.clear();
     replacement.parsed.events[0].tokens.input = 99;
-    assert!(store.commit_import(&replacement).is_err());
+    assert!(store.commit_import(&validated(&replacement)).is_err());
     assert_eq!(store.source_states(&"pi".into()).unwrap(), states);
     assert_eq!(store.usage_snapshot().unwrap(), before);
 
     replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_000_000);
     assert_eq!(
-        store.commit_import(&replacement).unwrap(),
+        store.commit_import(&validated(&replacement)).unwrap(),
         CommitImportOutcome::IgnoredStale
     );
     assert_eq!(store.source_states(&"pi".into()).unwrap(), states);
 }
 
 #[test]
-fn invalid_notice_data_is_rejected_without_exposing_contents() {
+fn corrupt_notice_data_is_rejected_without_exposing_contents() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
-    let mut import = session_import("/sessions/a.jsonl", 10);
-    store.commit_import(&import).unwrap();
-    import.parsed.notices = vec![notice(), notice()];
-    assert!(matches!(
-        store.commit_import(&import),
-        Err(SqliteStoreError::InvalidImport(_))
-    ));
-    assert!(
-        store.source_states(&"pi".into()).unwrap()[0]
-            .notices
-            .is_empty()
-    );
-
+    let import = session_import("/sessions/a.jsonl", 10);
+    store.commit_import(&validated(&import)).unwrap();
+    let valid = serde_json::to_value(notice()).unwrap();
+    let invalid_field = |field: &str, value: serde_json::Value| {
+        let mut invalid = valid.clone();
+        invalid[field] = value;
+        serde_json::json!([invalid])
+    };
     for invalid in [
-        r#"[{"code":"incomplete_response_usage","count":0}]"#,
-        r#"[{"code":"incomplete_response_usage","count":1,"line":0}]"#,
-        r#"[{"code":"PRIVATE_TEXT","count":1}]"#,
-        r#"[{"code":"truncated_tail","count":1,"text":"PRIVATE_TEXT"}]"#,
-        r#"[{"code":"truncated_tail","count":1},{"code":"truncated_tail","count":1}]"#,
+        invalid_field("count", serde_json::json!(0)),
+        invalid_field("line", serde_json::json!(0)),
+        invalid_field("text", serde_json::json!("PRIVATE_TEXT")),
+        serde_json::json!([valid.clone(), valid.clone()]),
     ] {
         store
             .connection
-            .execute("UPDATE import_sources SET parse_notices = ?1", [invalid])
+            .execute(
+                "UPDATE import_sources SET parse_notices = ?1",
+                [invalid.to_string()],
+            )
             .unwrap();
         let error = store.source_states(&"pi".into()).unwrap_err().to_string();
         assert!(!error.contains("PRIVATE_TEXT"));

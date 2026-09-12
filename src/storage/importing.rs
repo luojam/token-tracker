@@ -18,7 +18,7 @@ pub(super) fn normalization_changed(
             params![
                 import.parsed.metadata.agent.as_str(),
                 encode_path(&import.source.path),
-                import.normalization_version
+                import.normalization_version.get()
             ],
             |row| row.get(0),
         )
@@ -60,7 +60,7 @@ pub(super) fn upsert_imported_source(
             import.scanned_at.as_unix_milliseconds(),
             completion_to_str(import.parsed.completion),
             parse_notices::encode(&import.parsed.notices)?,
-            import.normalization_version
+            import.normalization_version.get()
         ],
     )?;
     transaction
@@ -197,29 +197,4 @@ fn write_billing(
         )?,
     };
     Ok(changed > 0)
-}
-
-pub(super) fn validate_import(import: &SessionImport) -> Result<(), SqliteStoreError> {
-    if import.normalization_version == 0 {
-        return Err(SqliteStoreError::InvalidImport(
-            "normalization version must be positive",
-        ));
-    }
-    for event in &import.parsed.events {
-        if event
-            .pricing_context
-            .as_ref()
-            .is_some_and(|context| !context.usage_matches(event.tokens))
-        {
-            return Err(SqliteStoreError::InvalidImport(
-                "invalid billing usage components or totals",
-            ));
-        }
-        if event.identity.agent != import.parsed.metadata.agent {
-            return Err(SqliteStoreError::InvalidImport(
-                "an event agent does not match its session agent",
-            ));
-        }
-    }
-    Ok(())
 }

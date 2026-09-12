@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 mod discovery;
 mod parsing;
 
@@ -6,4 +8,4 @@ pub use parsing::{CodexParseError, CodexSessionParser};
 
 const CODEX_AGENT_ID: &str = "codex";
 
-const NORMALIZATION_VERSION: u32 = 1;
+const NORMALIZATION_VERSION: NonZeroU32 = NonZeroU32::MIN;

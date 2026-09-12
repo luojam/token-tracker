@@ -1,3 +1,4 @@
+mod importing;
 mod ports;
 mod reconciliation;
 mod reporting;
@@ -16,4 +17,6 @@ pub use workflow::{
     AllTimeReport, AllTimeReportError, ImportAdapter, SessionAdapter, run_all_time_report,
 };
 
+pub(crate) use importing::validate_notices;
+pub use importing::{InvalidImport, ValidatedSessionImport};
 pub use ports::*;

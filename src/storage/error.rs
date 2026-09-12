@@ -9,7 +9,7 @@ pub enum SqliteStoreError {
     UnsupportedSchemaVersion(i64),
     ValueOutOfRange(&'static str),
     CorruptData(&'static str),
-    InvalidImport(&'static str),
+    Serialization(serde_json::Error),
 }
 
 impl fmt::Display for SqliteStoreError {
@@ -33,7 +33,9 @@ impl fmt::Display for SqliteStoreError {
             }
             Self::ValueOutOfRange(value) => write!(formatter, "{value} is out of range"),
             Self::CorruptData(message) => write!(formatter, "database contains {message}"),
-            Self::InvalidImport(message) => write!(formatter, "invalid session import: {message}"),
+            Self::Serialization(source) => {
+                write!(formatter, "could not encode stored data: {source}")
+            }
         }
     }
 }
@@ -42,6 +44,7 @@ impl Error for SqliteStoreError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Sqlite(source) => Some(source),
+            Self::Serialization(source) => Some(source),
             Self::CreateDataDirectory { source, .. } => Some(source),
             _ => None,
         }

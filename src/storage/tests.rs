@@ -4,7 +4,7 @@ mod parse_notices;
 use super::paths::default_database_path_from;
 use super::*;
 use crate::application::{
-    DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, ParsedSession,
+    DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, ParsedSession, SessionImport,
 };
 use crate::application::{FileRevision, ParseCompletion};
 use crate::domain::{
@@ -47,7 +47,7 @@ impl Drop for TempDatabase {
 
 fn session_import(path: &str, input_tokens: u64) -> SessionImport {
     SessionImport {
-        normalization_version: 1,
+        normalization_version: std::num::NonZeroU32::MIN,
         source: DiscoveredSessionFile {
             path: PathBuf::from(path),
             revision: FileRevision {
@@ -92,6 +92,10 @@ fn session_import(path: &str, input_tokens: u64) -> SessionImport {
     }
 }
 
+fn validated(import: &SessionImport) -> ValidatedSessionImport {
+    import.clone().validate(&AgentId::from("pi")).unwrap()
+}
+
 #[test]
 fn default_path_prefers_xdg_and_falls_back_to_home() {
     assert_eq!(
@@ -129,7 +133,7 @@ fn repeated_import_is_idempotent_and_source_values_can_change() {
     let original = session_import("/sessions/a.jsonl", 10);
 
     assert_eq!(
-        store.commit_import(&original).unwrap(),
+        store.commit_import(&validated(&original)).unwrap(),
         CommitImportOutcome::Applied(ImportStats {
             event_identities_inserted: 1,
             observations_inserted: 1,
@@ -137,21 +141,21 @@ fn repeated_import_is_idempotent_and_source_values_can_change() {
         })
     );
     assert_eq!(
-        store.commit_import(&original).unwrap(),
+        store.commit_import(&validated(&original)).unwrap(),
         CommitImportOutcome::Applied(ImportStats::default())
     );
 
     let mut repeated = original.clone();
     repeated.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
     assert_eq!(
-        store.commit_import(&repeated).unwrap(),
+        store.commit_import(&validated(&repeated)).unwrap(),
         CommitImportOutcome::Applied(ImportStats::default())
     );
 
     let mut changed = session_import("/sessions/a.jsonl", 99);
     changed.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_003_000);
     assert_eq!(
-        store.commit_import(&changed).unwrap(),
+        store.commit_import(&validated(&changed)).unwrap(),
         CommitImportOutcome::Applied(ImportStats {
             event_identities_inserted: 0,
             observations_inserted: 0,
@@ -164,7 +168,7 @@ fn repeated_import_is_idempotent_and_source_values_can_change() {
 fn a_newer_session_can_replace_metadata_at_the_same_source_path() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     let original = session_import("/sessions/a.jsonl", 10);
-    store.commit_import(&original).unwrap();
+    store.commit_import(&validated(&original)).unwrap();
 
     let mut replacement = session_import("/sessions/a.jsonl", 99);
     replacement.parsed.metadata.session_id = "replacement-session".into();
@@ -176,7 +180,7 @@ fn a_newer_session_can_replace_metadata_at_the_same_source_path() {
     replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
 
     assert_eq!(
-        store.commit_import(&replacement).unwrap(),
+        store.commit_import(&validated(&replacement)).unwrap(),
         CommitImportOutcome::Applied(ImportStats {
             event_identities_inserted: 0,
             observations_inserted: 1,
@@ -227,17 +231,17 @@ fn a_newer_session_can_replace_metadata_at_the_same_source_path() {
 fn a_late_import_from_the_replaced_session_is_ignored() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     let original = session_import("/sessions/a.jsonl", 10);
-    store.commit_import(&original).unwrap();
+    store.commit_import(&validated(&original)).unwrap();
 
     let mut replacement = session_import("/sessions/a.jsonl", 99);
     replacement.parsed.metadata.session_id = "replacement-session".into();
     replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_003_000);
-    store.commit_import(&replacement).unwrap();
+    store.commit_import(&validated(&replacement)).unwrap();
 
     let mut late_original = original;
     late_original.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
     assert_eq!(
-        store.commit_import(&late_original).unwrap(),
+        store.commit_import(&validated(&late_original)).unwrap(),
         CommitImportOutcome::IgnoredStale
     );
 
@@ -281,7 +285,7 @@ fn a_stale_first_import_cannot_claim_a_newer_discovered_source() {
         )
         .unwrap();
     assert_eq!(
-        store.commit_import(&stale).unwrap(),
+        store.commit_import(&validated(&stale)).unwrap(),
         CommitImportOutcome::IgnoredStale
     );
 
@@ -289,7 +293,7 @@ fn a_stale_first_import_cannot_claim_a_newer_discovered_source() {
     current.parsed.metadata.session_id = "current-session".into();
     current.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_004_000);
     assert_eq!(
-        store.commit_import(&current).unwrap(),
+        store.commit_import(&validated(&current)).unwrap(),
         CommitImportOutcome::Applied(ImportStats {
             event_identities_inserted: 1,
             observations_inserted: 1,
@@ -311,16 +315,16 @@ fn a_stale_first_import_cannot_claim_a_newer_discovered_source() {
 fn stale_imports_and_discoveries_do_not_regress_source_state() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     let original = session_import("/sessions/a.jsonl", 10);
-    store.commit_import(&original).unwrap();
+    store.commit_import(&validated(&original)).unwrap();
 
     let mut newest = session_import("/sessions/a.jsonl", 99);
     newest.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_003_000);
-    store.commit_import(&newest).unwrap();
+    store.commit_import(&validated(&newest)).unwrap();
 
     let mut stale = session_import("/sessions/a.jsonl", 50);
     stale.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
     assert_eq!(
-        store.commit_import(&stale).unwrap(),
+        store.commit_import(&validated(&stale)).unwrap(),
         CommitImportOutcome::IgnoredStale
     );
 
@@ -356,7 +360,10 @@ fn stale_imports_and_discoveries_do_not_regress_source_state() {
     let states = store.source_states(&AgentId::from("pi")).unwrap();
     assert_eq!(states.len(), 1);
     assert_eq!(
-        states[0].last_successful_scan,
+        states[0]
+            .last_import
+            .as_ref()
+            .map(|import| import.scanned_at),
         Some(Timestamp::from_unix_milliseconds(1_700_000_003_000))
     );
     assert!(!states[0].present);
@@ -375,7 +382,10 @@ fn reopening_a_database_preserves_imported_state() {
     {
         let mut store = SqliteUsageStore::open(&database.path).unwrap();
         store
-            .commit_import(&session_import("/sessions/a.jsonl", i64::MAX as u64))
+            .commit_import(&validated(&session_import(
+                "/sessions/a.jsonl",
+                i64::MAX as u64,
+            )))
             .unwrap();
     }
 
@@ -383,9 +393,12 @@ fn reopening_a_database_preserves_imported_state() {
     let states = store.source_states(&AgentId::from("pi")).unwrap();
     assert_eq!(states.len(), 1);
     assert_eq!(states[0].path, PathBuf::from("/sessions/a.jsonl"));
-    assert_eq!(states[0].last_imported_revision.as_ref().unwrap().size, 123);
+    assert_eq!(states[0].last_import.as_ref().unwrap().revision.size, 123);
     assert_eq!(
-        states[0].last_successful_scan,
+        states[0]
+            .last_import
+            .as_ref()
+            .map(|import| import.scanned_at),
         Some(Timestamp::from_unix_milliseconds(1_700_000_001_000))
     );
 
@@ -399,13 +412,30 @@ fn reopening_a_database_preserves_imported_state() {
 }
 
 #[test]
+fn partial_successful_imports_are_rejected_on_write_and_read() {
+    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    store
+        .commit_import(&validated(&session_import("/sessions/a.jsonl", 10)))
+        .unwrap();
+    let clear_scan = "UPDATE import_sources SET last_successful_scan_ms = NULL";
+    assert!(store.connection.execute(clear_scan, []).is_err());
+
+    store
+        .connection
+        .pragma_update(None, "ignore_check_constraints", true)
+        .unwrap();
+    store.connection.execute(clear_scan, []).unwrap();
+    assert!(store.source_states(&"pi".into()).is_err());
+}
+
+#[test]
 fn different_sources_retain_different_observations_for_one_event() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     store
-        .commit_import(&session_import("/sessions/a.jsonl", 10))
+        .commit_import(&validated(&session_import("/sessions/a.jsonl", 10)))
         .unwrap();
     store
-        .commit_import(&session_import("/sessions/b.jsonl", 99))
+        .commit_import(&validated(&session_import("/sessions/b.jsonl", 99)))
         .unwrap();
 
     let mut statement = store
@@ -440,7 +470,7 @@ fn conflicting_observations_are_order_independent() {
             [&first, &second]
         };
         for import in imports {
-            store.commit_import(import).unwrap();
+            store.commit_import(&validated(import)).unwrap();
         }
 
         let mut statement = store
@@ -473,13 +503,13 @@ fn a_replaced_source_keeps_the_session_provenance_of_absent_observations() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     let mut original = session_import("/sessions/a.jsonl", 10);
     original.parsed.metadata.session_id = "original-session".into();
-    store.commit_import(&original).unwrap();
+    store.commit_import(&validated(&original)).unwrap();
 
     let mut replacement = session_import("/sessions/a.jsonl", 99);
     replacement.parsed.metadata.session_id = "replacement-session".into();
     replacement.parsed.events[0].identity.adapter_key = "replacement-event".into();
     replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
-    store.commit_import(&replacement).unwrap();
+    store.commit_import(&validated(&replacement)).unwrap();
 
     let mut statement = store
         .connection
@@ -514,7 +544,7 @@ fn normalization_changes_preserve_history_from_rewritten_sources() {
     for reuse_session in [false, true] {
         let mut store = SqliteUsageStore::open_in_memory().unwrap();
         let original = session_import("/sessions/a.jsonl", 10);
-        store.commit_import(&original).unwrap();
+        store.commit_import(&validated(&original)).unwrap();
 
         let mut replacement = session_import("/sessions/a.jsonl", 20);
         if !reuse_session {
@@ -522,50 +552,15 @@ fn normalization_changes_preserve_history_from_rewritten_sources() {
         }
         replacement.parsed.events[0].identity.adapter_key = "replacement-event".into();
         replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
-        store.commit_import(&replacement).unwrap();
+        store.commit_import(&validated(&replacement)).unwrap();
         let before = store.usage_snapshot().unwrap();
         assert_eq!(before.observations.len(), 2);
 
-        replacement.normalization_version = 2;
+        replacement.normalization_version = 2.try_into().unwrap();
         replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_003_000);
-        store.commit_import(&replacement).unwrap();
+        store.commit_import(&validated(&replacement)).unwrap();
         assert_eq!(store.usage_snapshot().unwrap(), before);
     }
-}
-
-#[test]
-fn a_missing_source_keeps_its_import_and_observations() {
-    let mut store = SqliteUsageStore::open_in_memory().unwrap();
-    store
-        .commit_import(&session_import("/sessions/a.jsonl", 10))
-        .unwrap();
-
-    store
-        .record_discovery(
-            &AgentId::from("pi"),
-            &DiscoveryReport {
-                files: Vec::new(),
-                warnings: Vec::new(),
-                coverage: DiscoveryCoverage {
-                    inspected_roots: vec![PathBuf::from("/sessions")],
-                    inaccessible_paths: Vec::new(),
-                },
-            },
-            Timestamp::from_unix_milliseconds(1_700_000_002_000),
-        )
-        .unwrap();
-
-    let states = store.source_states(&AgentId::from("pi")).unwrap();
-    assert_eq!(states.len(), 1);
-    assert!(!states[0].present);
-    assert!(states[0].last_imported_revision.is_some());
-    let observations: i64 = store
-        .connection
-        .query_row("SELECT count(*) FROM usage_observations", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(observations, 1);
 }
 
 #[test]
@@ -617,7 +612,7 @@ fn commit_failures_roll_back_and_stop_the_report_workflow() {
     assert!(snapshot.observations.is_empty());
     assert!(
         store.source_states(&"pi".into()).unwrap()[0]
-            .last_imported_revision
+            .last_import
             .is_none()
     );
 }

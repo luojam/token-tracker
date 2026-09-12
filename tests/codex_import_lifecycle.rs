@@ -118,14 +118,17 @@ fn rejected_mirror_offset_retains_the_last_valid_import() {
     imported(&ledger.sync(&prefix(&source, 12)), 2, 0);
     let original = ledger.snapshot();
     assert_eq!(original.observations.len(), 2);
-    let revision = ledger.store.source_states(&AgentId::from("codex")).unwrap()[0]
-        .last_imported_revision
+    let last_import = ledger.store.source_states(&AgentId::from("codex")).unwrap()[0]
+        .last_import
         .clone();
     let rejected = ledger.sync(&source);
     assert_eq!(rejected.counts.files_failed, 1, "{rejected:?}");
     assert_eq!(rejected.counts.files_imported, 0);
     assert_eq!(ledger.snapshot(), original);
     let states = ledger.store.source_states(&AgentId::from("codex")).unwrap();
-    assert_eq!(states[0].last_imported_revision, revision);
-    assert_ne!(Some(&states[0].last_observed_revision), revision.as_ref());
+    assert_eq!(states[0].last_import, last_import);
+    assert_ne!(
+        Some(&states[0].last_observed_revision),
+        last_import.as_ref().map(|import| &import.revision)
+    );
 }

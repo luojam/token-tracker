@@ -15,7 +15,7 @@ mod tests;
 
 use importing::{
     import_is_stale, insert_observation, normalization_changed, update_observation,
-    upsert_imported_source, upsert_source_session, validate_import,
+    upsert_imported_source, upsert_source_session,
 };
 use reading::{load_stored_observations, load_stored_sessions};
 use schema::migrate;
@@ -27,8 +27,8 @@ use std::path::Path;
 use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::application::{
-    CommitImportOutcome, DiscoveryReport, ImportStats, ParseCompletion, SessionImport, SourceState,
-    UsageReadStore, UsageSnapshot, UsageStore,
+    CommitImportOutcome, DiscoveryReport, ImportStats, ParseCompletion, SourceState,
+    UsageReadStore, UsageSnapshot, UsageStore, ValidatedSessionImport,
 };
 use crate::domain::{AgentId, Timestamp};
 
@@ -172,9 +172,9 @@ impl UsageStore for SqliteUsageStore {
 
     fn commit_import(
         &mut self,
-        import: &SessionImport,
+        import: &ValidatedSessionImport,
     ) -> Result<CommitImportOutcome, Self::Error> {
-        validate_import(import)?;
+        let import = import.as_import();
 
         let transaction = self
             .connection

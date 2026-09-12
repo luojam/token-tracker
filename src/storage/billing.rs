@@ -5,7 +5,7 @@ pub(super) fn encode(context: Option<&PricingContext>) -> Result<Option<String>,
     context
         .map(serde_json::to_string)
         .transpose()
-        .map_err(|_| SqliteStoreError::InvalidImport("invalid billing inputs"))
+        .map_err(SqliteStoreError::Serialization)
 }
 
 pub(super) fn decode(
