@@ -81,6 +81,30 @@ fn pi_session(tokens: u64) -> String {
 }
 
 #[test]
+fn invalid_imports_warn_without_preventing_reporting() {
+    let tree = TempTree::new();
+    let valid = pi_session(7);
+    tree.write("valid.jsonl", &valid);
+    tree.write("oversized.jsonl", pi_session(u64::MAX));
+    let conflicting = pi_session(20);
+    tree.write(
+        "conflicting.jsonl",
+        format!("{valid}{}\n", conflicting.lines().nth(1).unwrap()),
+    );
+    let pi = SessionAdapter::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
+    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    let report = run_all_time_report(&[&pi], &mut store, vec![]).unwrap();
+    assert_eq!(report.summary.totals.tokens.input, 7);
+    assert_eq!(report.warnings.len(), 2);
+    assert!(report.warnings.iter().any(|warning| {
+        warning.message == "pi: conflicting usage events with the same identity"
+    }));
+    assert!(report.warnings.iter().any(|warning| {
+        warning.message == "pi: token count exceeds the supported integer range"
+    }));
+}
+
+#[test]
 fn discovery_failure_does_not_prevent_other_adapters_from_importing() {
     let tree = TempTree::new();
     tree.write("pi.jsonl", pi_session(7));

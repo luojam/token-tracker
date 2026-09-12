@@ -242,7 +242,9 @@ fn stale_imports_and_discoveries_cannot_regress_source_state() {
 
 #[test]
 fn normalization_failure_rolls_back_usage_billing_and_notices() {
-    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    let tree = TempTree::new();
+    let path = tree.root.join("usage.db");
+    let mut store = SqliteUsageStore::open(&path).unwrap();
     let original = session_import("/sessions/a.jsonl", 10);
     store.commit_import(&validated(&original)).unwrap();
     let before = store.usage_snapshot().unwrap();
@@ -250,14 +252,20 @@ fn normalization_failure_rolls_back_usage_billing_and_notices() {
     let mut replacement = session_import("/sessions/a.jsonl", 20);
     replacement.normalization_version = 2.try_into().unwrap();
     replacement.parsed.notices.clear();
-    let mut invalid = replacement.parsed.events[0].clone();
-    invalid.identity.adapter_key = "out-of-range".into();
-    invalid.tokens.input = u64::MAX;
-    invalid.pricing_context = None;
-    replacement.parsed.events.push(invalid);
+    let mut additional = replacement.parsed.events[0].clone();
+    additional.identity.adapter_key = "additional-event".into();
+    replacement.parsed.events.push(additional);
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER fail_insert BEFORE INSERT ON usage_events
+             WHEN NEW.adapter_key = 'additional-event'
+             BEGIN SELECT RAISE(ABORT, 'test failure'); END;",
+        )
+        .unwrap();
     assert!(matches!(
         store.commit_import(&validated(&replacement)),
-        Err(SqliteStoreError::ValueOutOfRange(_))
+        Err(SqliteStoreError::Sqlite(_))
     ));
     assert_eq!(store.usage_snapshot().unwrap(), before);
     assert_eq!(store.source_states(&"pi".into()).unwrap(), states);
