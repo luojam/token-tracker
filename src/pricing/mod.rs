@@ -8,7 +8,7 @@ use crate::domain::{
 };
 use std::collections::BTreeMap;
 
-/// Includes events with pricing context or no recorded cost, even if unpriced.
+/// Includes only events without recorded cost, even if unpriced.
 pub fn summarize_estimates<'a>(
     events: impl IntoIterator<Item = &'a UsageEvent>,
 ) -> BTreeMap<AgentId, EstimateSummary> {
@@ -16,7 +16,7 @@ pub fn summarize_estimates<'a>(
     let mut rows = BTreeMap::<(AgentId, SummaryGroup, ServiceTier), EstimateTotals>::new();
     for event in events {
         let context = event.pricing_context.as_ref();
-        if context.is_none() && event.recorded_cost.is_some() {
+        if event.recorded_cost.is_some() {
             continue;
         }
         let (estimate, tier, evidence, snapshot) = match context {

@@ -188,6 +188,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
         observation.session.agent = "codex".into();
         observation.event.identity.agent = "codex".into();
         if observation.event.identity.adapter_key != "shared" {
+            observation.event.recorded_cost = None;
             observation.event.attribution = Some(model.clone());
             observation.event.pricing_context = Some(PricingContext::OpenAi(context.clone()));
         }
@@ -214,6 +215,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     data.observations.push(conflicting);
     let (pi, mut observations) = sessions().into_iter().next().unwrap();
     observations[0].event.attribution = Some(model.clone());
+    observations[0].event.pricing_context = Some(PricingContext::OpenAi(context));
     data.sessions.push(pi);
     data.observations.extend(observations);
 
@@ -223,7 +225,10 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     assert_eq!(summarize_usage(&data).unwrap(), summary);
     let estimate = summary.estimates[&AgentId::from("codex")].clone();
     assert_eq!(summary.totals.tokens.input, 27);
-    assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 1.0);
+    assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 0.5);
+    assert_eq!(summary.estimates[&"pi".into()].totals.imported_event_count, 1);
+    let report = render_terminal_report(&build_usage_report(&summary), &[]);
+    assert!(report.contains("Total cost: $0.500395 (partial)\n"));
     assert_eq!(estimate.totals.imported_event_count, 2);
     assert_eq!(estimate.totals.priced_event_count, 2);
     assert_eq!(estimate.totals.requested_setting_event_count, 0);
