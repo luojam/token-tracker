@@ -8,7 +8,6 @@
   ],
   "fixtures": {
     "legacy-corrected.jsonl": {
-      "evidence": "adversarial",
       "completion": "complete",
       "events": [
         {
@@ -18,30 +17,13 @@
             110,
             0,
             40
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 300
+      ]
     },
     "legacy-fork.jsonl": {
-      "evidence": "observed_shape",
       "completion": "complete",
       "events": [
-        {
-          "key": "legacy-turn-v1:turn-legacy-a",
-          "tokens": [
-            120,
-            100,
-            0,
-            30
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
-        },
         {
           "key": "legacy-turn-v1:turn-fork",
           "tokens": [
@@ -49,16 +31,20 @@
             40,
             0,
             10
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
+        },
+        {
+          "key": "legacy-turn-v1:turn-legacy-a",
+          "tokens": [
+            120,
+            100,
+            0,
+            30
+          ]
         }
-      ],
-      "total_tokens": 360
+      ]
     },
     "legacy-fresh.jsonl": {
-      "evidence": "observed_shape",
       "completion": "complete",
       "events": [
         {
@@ -68,16 +54,11 @@
             100,
             0,
             30
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 250
+      ]
     },
     "legacy-parent.jsonl": {
-      "evidence": "observed_shape",
       "completion": "complete",
       "events": [
         {
@@ -87,30 +68,13 @@
             100,
             0,
             30
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 250
+      ]
     },
     "legacy-partial-fork.jsonl": {
-      "evidence": "producer_backed",
       "completion": "complete",
       "events": [
-        {
-          "key": "legacy-turn-v1:turn-legacy-a",
-          "tokens": [
-            60,
-            40,
-            0,
-            10
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
-        },
         {
           "key": "legacy-turn-v1:turn-fork",
           "tokens": [
@@ -118,16 +82,20 @@
             40,
             0,
             10
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
+        },
+        {
+          "key": "legacy-turn-v1:turn-legacy-a",
+          "tokens": [
+            60,
+            40,
+            0,
+            10
+          ]
         }
-      ],
-      "total_tokens": 220
+      ]
     },
     "legacy-resume-compaction.jsonl": {
-      "evidence": "observed_shape",
       "completion": "complete",
       "events": [
         {
@@ -137,10 +105,7 @@
             100,
             0,
             30
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
         },
         {
           "key": "legacy-turn-v1:turn-legacy-b",
@@ -149,16 +114,11 @@
             40,
             0,
             10
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 360
+      ]
     },
     "legacy-resume-corrected.jsonl": {
-      "evidence": "adversarial",
       "completion": "complete",
       "events": [
         {
@@ -168,10 +128,7 @@
             110,
             0,
             40
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
         },
         {
           "key": "legacy-turn-v1:turn-legacy-b",
@@ -180,16 +137,11 @@
             40,
             0,
             10
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 410
+      ]
     },
     "legacy-zero-correction.jsonl": {
-      "evidence": "adversarial",
       "completion": "complete",
       "events": [
         {
@@ -199,16 +151,11 @@
             0,
             0,
             0
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 0
+      ]
     },
     "legacy-zero-first-request.jsonl": {
-      "evidence": "adversarial",
       "completion": "complete",
       "events": [
         {
@@ -218,68 +165,50 @@
             60,
             0,
             20
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 140
+      ]
     },
     "reject-ambiguous-mirrors.jsonl": {
-      "evidence": "adversarial",
       "reject": "ambiguous_pending_responses"
     },
     "reject-checkpoint-baseline.jsonl": {
-      "evidence": "adversarial",
       "reject": "checkpoint_without_full_history"
     },
     "reject-context-reset.jsonl": {
-      "evidence": "adversarial",
       "reject": "context_size_reset"
     },
     "reject-counter-decrease.jsonl": {
-      "evidence": "adversarial",
       "reject": "counter_decrease"
     },
     "reject-initial-baseline.jsonl": {
-      "evidence": "adversarial",
       "reject": "unproven_initial_baseline"
     },
     "reject-legacy-correction.jsonl": {
-      "evidence": "adversarial",
       "reject": "usage_without_active_turn"
     },
     "reject-legacy-first-mirror.jsonl": {
-      "evidence": "adversarial",
       "reject": "legacy_first_mirror"
     },
     "reject-mid-turn-upgrade.jsonl": {
-      "evidence": "adversarial",
       "reject": "mid_turn_upgrade"
     },
     "reject-mirror-offset.jsonl": {
-      "evidence": "adversarial",
       "reject": "mirror_progression"
     },
     "reject-overlapping-delta.jsonl": {
-      "evidence": "adversarial",
       "reject": "invalid_delta"
     },
     "reject-overlapping-turns.jsonl": {
-      "evidence": "adversarial",
       "reject": "overlapping_legacy_turns"
     },
     "reject-response-identity.jsonl": {
-      "evidence": "adversarial",
       "reject": "conflicting_response_identity"
     },
     "reject-reused-turn.jsonl": {
-      "evidence": "adversarial",
       "reject": "reused_closed_turn"
     },
     "response-cache-write.jsonl": {
-      "evidence": "adversarial",
       "completion": "complete",
       "events": [
         {
@@ -289,16 +218,11 @@
             40,
             10,
             10
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 110
+      ]
     },
     "response-cleared-tier.jsonl": {
-      "evidence": "adversarial",
       "completion": "complete",
       "events": [
         {
@@ -308,10 +232,7 @@
             40,
             0,
             10
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         },
         {
           "key": "response-v1:response-b",
@@ -320,16 +241,11 @@
             60,
             0,
             20
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 250
+      ]
     },
     "response-equal-counts.jsonl": {
-      "evidence": "adversarial",
       "completion": "complete",
       "events": [
         {
@@ -339,10 +255,7 @@
             40,
             0,
             10
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         },
         {
           "key": "response-v1:response-distinct",
@@ -351,16 +264,11 @@
             40,
             0,
             10
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 220
+      ]
     },
     "response-mirrors.jsonl": {
-      "evidence": "observed_shape",
       "completion": "complete",
       "events": [
         {
@@ -370,10 +278,7 @@
             40,
             0,
             10
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         },
         {
           "key": "response-v1:response-b",
@@ -382,16 +287,11 @@
             60,
             0,
             20
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "requested_priority"
+          ]
         }
-      ],
-      "total_tokens": 250
+      ]
     },
     "response-partial-tail.jsonl": {
-      "evidence": "observed_shape",
       "completion": "incomplete_final_line",
       "events": [
         {
@@ -401,16 +301,11 @@
             40,
             0,
             10
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 110
+      ]
     },
     "response-pending-mirror.jsonl": {
-      "evidence": "observed_shape",
       "completion": "complete",
       "events": [
         {
@@ -420,10 +315,7 @@
             40,
             0,
             10
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         },
         {
           "key": "response-v1:response-b",
@@ -432,16 +324,11 @@
             60,
             0,
             20
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "requested_priority"
+          ]
         }
-      ],
-      "total_tokens": 250
+      ]
     },
     "response-repeat-correction.jsonl": {
-      "evidence": "adversarial",
       "completion": "complete",
       "events": [
         {
@@ -451,16 +338,11 @@
             50,
             0,
             20
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 170
+      ]
     },
     "response-subagent.jsonl": {
-      "evidence": "observed_shape",
       "completion": "complete",
       "events": [
         {
@@ -470,16 +352,11 @@
             40,
             0,
             10
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 110
+      ]
     },
     "upgrade-response-first.jsonl": {
-      "evidence": "producer_backed",
       "completion": "complete",
       "events": [
         {
@@ -489,10 +366,7 @@
             100,
             0,
             30
-          ],
-          "granularity": "aggregate_or_unknown",
-          "cache_detail_complete": false,
-          "tier_evidence": "unknown"
+          ]
         },
         {
           "key": "response-v1:response-a",
@@ -501,13 +375,9 @@
             40,
             0,
             10
-          ],
-          "granularity": "single_request",
-          "cache_detail_complete": true,
-          "tier_evidence": "unknown"
+          ]
         }
-      ],
-      "total_tokens": 360
+      ]
     }
   },
   "prefixes": {

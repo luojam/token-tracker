@@ -1,0 +1,22 @@
+Token Tracker — All Time
+
+Total tokens: 49
+Input tokens: 16
+Output tokens: 9
+Cache-read tokens: 11
+Cache-write tokens: 13
+Total cost: $0.750000 (partial)
+Sessions: 2
+Unique usage events: 3
+
+Usage by provider/model:
+
+Pi usage:
+  Provider / model               Input  Output  Cache read  Cache write  Total  Events         Cost
+  provider-a / model-a              10       2           3            4     19       1    $0.250000
+  Unattributed tool results          1       1           1            1      4       1  unavailable
+  Unattributed branch summaries      5       6           7            8     26       1    $0.500000
+
+Warnings (2):
+- discovery warning
+- /sessions/z-bad.jsonl: could not parse

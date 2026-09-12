@@ -102,3 +102,81 @@ fn valid_unicode_escape_prefixes(bytes: &[u8]) -> bool {
     }
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_unterminated_valid_json_prefixes_are_retryable() {
+        for tail in [
+            "{",
+            r#"{"text":"unfinished"#,
+            r#"{"items":[1,"#,
+            r#"{"n":-"#,
+            r#"{"n":1."#,
+            r#"{"n":1e+"#,
+            r#"{"text":"\u0a"#,
+            r#"{"text":"\\uX"#,
+        ] {
+            assert_eq!(complete_line(tail.as_bytes(), 7).unwrap(), None, "{tail}");
+            assert!(
+                matches!(
+                    complete_line(format!("{tail}\n").as_bytes(), 7),
+                    Err(JsonlError::MalformedLine { line: 7 })
+                ),
+                "{tail}"
+            );
+        }
+        for tail in [
+            r#"{"n":1e++"#,
+            r#"{"n":01."#,
+            r#"{"items":[1 2."#,
+            r#"{"text":"\uX"#,
+            r#"{"text":"\u00X"#,
+            "{} trailing",
+        ] {
+            assert!(
+                matches!(
+                    complete_line(tail.as_bytes(), 7),
+                    Err(JsonlError::MalformedLine { line: 7 })
+                ),
+                "{tail}"
+            );
+        }
+        for ending in ["", "\n", "\r\n"] {
+            let line = format!("{{}}{ending}");
+            assert_eq!(
+                complete_line(line.as_bytes(), 7).unwrap(),
+                Some(line.as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn split_utf8_is_retryable_only_inside_a_valid_final_string() {
+        let mut bytes = b"{\"text\":\"".to_vec();
+        bytes.extend_from_slice(&[0xf0, 0x9f]);
+        assert_eq!(complete_line(&bytes, 2).unwrap(), None);
+        bytes.push(b'\n');
+        assert!(matches!(
+            complete_line(&bytes, 2),
+            Err(JsonlError::InvalidUtf8 { line: 2 })
+        ));
+        for prefix in ["{}", r#"{"text": "#, r#"{"text":"\u"#] {
+            let mut bytes = prefix.as_bytes().to_vec();
+            bytes.extend_from_slice(&[0xf0, 0x9f]);
+            assert!(
+                matches!(
+                    complete_line(&bytes, 2),
+                    Err(JsonlError::MalformedLine { line: 2 })
+                ),
+                "{prefix}"
+            );
+        }
+        assert!(matches!(
+            complete_line(b"\xff", 2),
+            Err(JsonlError::InvalidUtf8 { line: 2 })
+        ));
+    }
+}

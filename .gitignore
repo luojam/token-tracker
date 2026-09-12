@@ -10,3 +10,5 @@ debug
 .env
 .env.*
 !.env.example
+
+AGENTS.md

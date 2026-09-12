@@ -34,3 +34,39 @@ fn absolute_environment_path(value: Option<&OsStr>) -> Option<PathBuf> {
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_path_prefers_xdg_and_falls_back_to_home() {
+        assert_eq!(
+            default_database_path_from(Some(OsStr::new("/data")), Some(OsStr::new("/home/me")))
+                .unwrap(),
+            PathBuf::from("/data/token-tracker/usage.db")
+        );
+        assert_eq!(
+            default_database_path_from(None, Some(OsStr::new("/home/me"))).unwrap(),
+            PathBuf::from("/home/me/.local/share/token-tracker/usage.db")
+        );
+        assert_eq!(
+            default_database_path_from(
+                Some(OsStr::new("relative-data")),
+                Some(OsStr::new("/home/me")),
+            )
+            .unwrap(),
+            PathBuf::from("/home/me/.local/share/token-tracker/usage.db")
+        );
+    }
+
+    #[test]
+    fn default_path_rejects_an_invalid_home() {
+        for home in [OsStr::new(""), OsStr::new("relative-home")] {
+            assert!(matches!(
+                default_database_path_from(None, Some(home)),
+                Err(SqliteStoreError::HomeDirectoryUnavailable)
+            ));
+        }
+    }
+}

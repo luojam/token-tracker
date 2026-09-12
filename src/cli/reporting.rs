@@ -214,16 +214,3 @@ fn format_integer(value: impl Into<u128>) -> String {
     }
     formatted
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn integer_formatting_uses_thousands_separators() {
-        assert_eq!(format_integer(0_u64), "0");
-        assert_eq!(format_integer(12_u64), "12");
-        assert_eq!(format_integer(1_234_u64), "1,234");
-        assert_eq!(format_integer(12_345_678_u64), "12,345,678");
-    }
-}

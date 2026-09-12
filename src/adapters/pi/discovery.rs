@@ -126,36 +126,6 @@ impl Error for PiDiscoveryError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    static NEXT_TEMP_TREE: AtomicU64 = AtomicU64::new(0);
-
-    struct TempTree {
-        root: PathBuf,
-    }
-
-    impl TempTree {
-        fn new() -> Self {
-            Self::new_in(&env::temp_dir())
-        }
-
-        fn new_in(parent: &Path) -> Self {
-            let sequence = NEXT_TEMP_TREE.fetch_add(1, Ordering::Relaxed);
-            let root = parent.join(format!(
-                "token-tracker-pi-discovery-test-{}-{sequence}",
-                std::process::id()
-            ));
-            fs::create_dir(&root).unwrap();
-            Self { root }
-        }
-    }
-
-    impl Drop for TempTree {
-        fn drop(&mut self) {
-            fs::remove_dir_all(&self.root).unwrap();
-        }
-    }
 
     #[test]
     fn default_root_honors_the_directory_overrides() {
@@ -204,63 +174,5 @@ mod tests {
             default_session_root_from(None, None, Some(OsStr::new("relative-home"))),
             Err(PiDiscoveryError::HomeDirectoryUnavailable)
         ));
-    }
-
-    #[test]
-    fn discovery_rejects_an_empty_root() {
-        assert!(matches!(
-            PiSessionDiscovery::new("").discover(),
-            Err(PiDiscoveryError::EmptySessionRoot)
-        ));
-    }
-
-    #[test]
-    fn discovery_resolves_relative_roots_to_absolute_paths() {
-        let current_directory = env::current_dir().unwrap();
-        let tree = TempTree::new_in(&current_directory);
-        let relative_root = tree.root.strip_prefix(&current_directory).unwrap();
-        let session = tree.root.join("session.jsonl");
-        fs::write(&session, b"session").unwrap();
-
-        let report = PiSessionDiscovery::new(relative_root).discover().unwrap();
-
-        assert_eq!(report.coverage.inspected_roots, vec![tree.root.clone()]);
-        assert_eq!(report.files[0].path, session);
-    }
-
-    #[test]
-    fn discovery_recurses_and_returns_file_revisions_in_path_order() {
-        let tree = TempTree::new();
-        let project = tree.root.join("project");
-        let nested = project.join("nested");
-        fs::create_dir_all(&nested).unwrap();
-        let first = project.join("a.jsonl");
-        let second = nested.join("b.jsonl");
-        fs::write(&first, b"first").unwrap();
-        fs::write(&second, b"second session").unwrap();
-        fs::write(project.join("ignored.txt"), b"not a session").unwrap();
-        fs::write(project.join("ignored.JSONL"), b"not a Pi session").unwrap();
-
-        let report = PiSessionDiscovery::new(&tree.root).discover().unwrap();
-
-        assert!(report.warnings.is_empty());
-        assert_eq!(report.coverage.inspected_roots, vec![tree.root.clone()]);
-        assert!(report.coverage.inaccessible_paths.is_empty());
-        assert_eq!(
-            report
-                .files
-                .iter()
-                .map(|file| (&file.path, file.revision.size))
-                .collect::<Vec<_>>(),
-            vec![(&first, 5), (&second, 14)]
-        );
-        assert_eq!(
-            report.files[0].revision.modified_at,
-            fs::metadata(&first).unwrap().modified().unwrap()
-        );
-        assert_eq!(
-            report.files[1].revision.modified_at,
-            fs::metadata(&second).unwrap().modified().unwrap()
-        );
     }
 }

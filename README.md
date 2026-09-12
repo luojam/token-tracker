@@ -54,6 +54,8 @@ session files are deleted.
 
 ## Development
 
+See [tests/README.md](tests/README.md) for test layout and conventions.
+
 ```sh
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings

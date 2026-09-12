@@ -10,8 +10,6 @@ mod importing;
 mod parse_notices;
 mod reading;
 mod schema;
-#[cfg(test)]
-mod tests;
 
 use importing::{
     import_is_stale, insert_observation, normalization_changed, update_observation,
