@@ -2,7 +2,7 @@ use super::{parse, tokens};
 use crate::support::fixture;
 use crate::support::prefix;
 use token_tracker::adapters::codex::CodexParseError;
-use token_tracker::application::ParseCompletion;
+use token_tracker::application::SnapshotCompletion;
 
 use serde_json::{Value, json};
 use token_tracker::domain::{Timestamp, TokenCounts};
@@ -56,7 +56,7 @@ fn open_turn_prefixes_keep_identity_and_timestamp_through_noops_and_partial_tail
     ))
     .unwrap();
     assert_eq!(partial.events, original.events);
-    assert_eq!(partial.completion, ParseCompletion::IncompleteFinalLine);
+    assert_eq!(partial.completion, SnapshotCompletion::Partial);
 }
 
 #[test]

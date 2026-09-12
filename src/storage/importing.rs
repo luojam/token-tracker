@@ -1,6 +1,6 @@
 use super::{
     SqliteStoreError, attribution_parts, billing, completion_to_str, encode_parent, encode_path,
-    encode_u64, parse_notices, system_time_to_parts, usage_kind_to_str,
+    encode_u64, parse_notices, usage_kind_to_str,
 };
 use crate::application::SessionImport;
 use crate::domain::{RecordedCost, UsageEvent};
@@ -13,13 +13,13 @@ pub(super) fn normalization_changed(
     transaction
         .prepare_cached(
             "SELECT EXISTS (SELECT 1 FROM import_sources
-             WHERE agent = ?1 AND path = ?2 AND last_successful_scan_ms IS NOT NULL
+             WHERE agent = ?1 AND source_key = ?2 AND last_successful_scan_ms IS NOT NULL
                AND normalization_version IS NOT ?3)",
         )?
         .query_row(
             params![
-                import.parsed.metadata.agent.as_str(),
-                encode_path(&import.source.path),
+                import.session.metadata.agent.as_str(),
+                import.source.key.0,
                 import.normalization_version.get()
             ],
             |row| row.get(0),
@@ -31,23 +31,17 @@ pub(super) fn upsert_imported_source(
     transaction: &Transaction<'_>,
     import: &SessionImport,
 ) -> Result<i64, SqliteStoreError> {
-    let path = encode_path(&import.source.path);
-    let (seconds, nanos) = system_time_to_parts(import.source.revision.modified_at)?;
     transaction
         .prepare_cached(
             "INSERT INTO import_sources (
-            path, agent, last_observed_size, last_observed_modified_seconds,
-            last_observed_modified_nanos, last_imported_size, last_imported_modified_seconds,
-            last_imported_modified_nanos, last_discovery_scan_ms, last_successful_scan_ms,
-            last_parse_completion, present, parse_notices, normalization_version
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?3, ?4, ?5, ?6, ?6, ?7, 1, ?8, ?9)
-         ON CONFLICT(agent, path) DO UPDATE SET
-            last_observed_size = excluded.last_observed_size,
-            last_observed_modified_seconds = excluded.last_observed_modified_seconds,
-            last_observed_modified_nanos = excluded.last_observed_modified_nanos,
-            last_imported_size = excluded.last_imported_size,
-            last_imported_modified_seconds = excluded.last_imported_modified_seconds,
-            last_imported_modified_nanos = excluded.last_imported_modified_nanos,
+            source_key, path, agent, last_observed_revision, last_imported_revision,
+            last_discovery_scan_ms, last_successful_scan_ms, last_parse_completion,
+            present, parse_notices, normalization_version
+         ) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?5, ?6, 1, ?7, ?8)
+         ON CONFLICT(agent, source_key) DO UPDATE SET
+            path = excluded.path,
+            last_observed_revision = excluded.last_observed_revision,
+            last_imported_revision = excluded.last_imported_revision,
             last_discovery_scan_ms = excluded.last_discovery_scan_ms,
             last_successful_scan_ms = excluded.last_successful_scan_ms,
             last_parse_completion = excluded.last_parse_completion,
@@ -56,20 +50,19 @@ pub(super) fn upsert_imported_source(
             present = 1",
         )?
         .execute(params![
-            path,
-            import.parsed.metadata.agent.as_str(),
-            encode_u64(import.source.revision.size)?,
-            seconds,
-            nanos,
+            import.source.key.0,
+            import.source.path.as_deref().map(encode_path),
+            import.session.metadata.agent.as_str(),
+            import.source.revision.0,
             import.scanned_at.as_unix_milliseconds(),
-            completion_to_str(import.parsed.completion),
-            parse_notices::encode(&import.parsed.notices)?,
+            completion_to_str(import.session.completion),
+            parse_notices::encode(&import.session.notices)?,
             import.normalization_version.get()
         ])?;
     transaction
-        .prepare_cached("SELECT id FROM import_sources WHERE path = ?1 AND agent = ?2")?
+        .prepare_cached("SELECT id FROM import_sources WHERE source_key = ?1 AND agent = ?2")?
         .query_row(
-            params![path, import.parsed.metadata.agent.as_str()],
+            params![import.source.key.0, import.session.metadata.agent.as_str()],
             |row| row.get(0),
         )
         .map_err(Into::into)
@@ -80,7 +73,7 @@ pub(super) fn upsert_source_session(
     source_id: i64,
     import: &SessionImport,
 ) -> Result<i64, SqliteStoreError> {
-    let metadata = &import.parsed.metadata;
+    let metadata = &import.session.metadata;
     let (parent_kind, parent_value) = encode_parent(metadata.parent_session.as_ref());
     transaction.prepare_cached(
         "INSERT INTO sessions (
@@ -113,9 +106,9 @@ pub(super) fn import_is_stale(
     import: &SessionImport,
 ) -> Result<bool, SqliteStoreError> {
     let stored = transaction.prepare_cached(
-        "SELECT last_successful_scan_ms, last_discovery_scan_ms FROM import_sources WHERE path = ?1 AND agent = ?2",
+        "SELECT last_successful_scan_ms, last_discovery_scan_ms FROM import_sources WHERE source_key = ?1 AND agent = ?2",
     )?.query_row(
-        params![encode_path(&import.source.path), import.parsed.metadata.agent.as_str()],
+        params![import.source.key.0, import.session.metadata.agent.as_str()],
         |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, i64>(1)?)),
     ).optional()?;
     let Some((last_successful_scan, last_discovery_scan)) = stored else {

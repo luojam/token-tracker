@@ -1,6 +1,7 @@
 use super::CLAUDE_AGENT_ID;
 use crate::adapters::discovery::{self, DirectoryLayout};
-use crate::application::{DiscoveryReport, SessionDiscovery};
+use crate::adapters::files::{FileDiscoveryReport, SessionFileDiscovery};
+
 use crate::domain::AgentId;
 use std::path::{Path, PathBuf};
 use std::{env, error::Error, ffi::OsStr, fmt, io};
@@ -47,14 +48,14 @@ impl ClaudeSessionDiscovery {
     }
 }
 
-impl SessionDiscovery for ClaudeSessionDiscovery {
+impl SessionFileDiscovery for ClaudeSessionDiscovery {
     type Error = ClaudeDiscoveryError;
 
     fn agent_id(&self) -> AgentId {
         AgentId::from(CLAUDE_AGENT_ID)
     }
 
-    fn discover(&self) -> Result<DiscoveryReport, Self::Error> {
+    fn discover(&self) -> Result<FileDiscoveryReport, Self::Error> {
         let root = absolute_root(&self.root)?;
         Ok(discovery::discover([root], Layout::Root))
     }

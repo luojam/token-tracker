@@ -1,8 +1,9 @@
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
+use token_tracker::adapters::files::{ParseContext, SessionParser};
 
 use token_tracker::adapters::pi::{PiParseError, PiSessionParser};
-use token_tracker::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
+use token_tracker::application::{SessionData, SnapshotCompletion};
 use token_tracker::domain::{
     AgentId, ModelAttribution, ParentSession, RecordedCost, SessionMetadata, Timestamp,
     TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
@@ -13,11 +14,11 @@ const INCOMPLETE_FINAL_LINE: &str = include_str!("../../fixtures/pi/incomplete-f
 const MALFORMED_COMPLETE_LINE: &str =
     include_str!("../../fixtures/pi/malformed-complete-line.jsonl");
 
-fn parse(source: &str) -> Result<ParsedSession, PiParseError> {
+fn parse(source: &str) -> Result<SessionData, PiParseError> {
     parse_bytes(source.as_bytes())
 }
 
-fn parse_bytes(source: &[u8]) -> Result<ParsedSession, PiParseError> {
+fn parse_bytes(source: &[u8]) -> Result<SessionData, PiParseError> {
     PiSessionParser::new().parse(
         &mut Cursor::new(source),
         ParseContext {
@@ -42,7 +43,7 @@ fn parses_every_usage_location_without_exposing_session_content() {
             parent_session: Some(ParentSession::SourcePath("/sessions/original.jsonl".into())),
         }
     );
-    assert_eq!(parsed.completion, ParseCompletion::Complete);
+    assert_eq!(parsed.completion, SnapshotCompletion::Complete);
     let expected = [
         (
             "v1:assistant:1735787100100:a1a1a1a1",
@@ -134,7 +135,7 @@ fn parses_every_usage_location_without_exposing_session_content() {
 #[test]
 fn distinguishes_an_incomplete_final_line_from_a_malformed_complete_line() {
     let parsed = parse(INCOMPLETE_FINAL_LINE).unwrap();
-    assert_eq!(parsed.completion, ParseCompletion::IncompleteFinalLine);
+    assert_eq!(parsed.completion, SnapshotCompletion::Partial);
     assert_eq!(parsed.events.len(), 1);
 
     let error = parse(MALFORMED_COMPLETE_LINE).unwrap_err();

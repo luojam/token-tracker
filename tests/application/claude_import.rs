@@ -2,6 +2,7 @@ use crate::support::{TempTree, fixture, prefix};
 use std::fs::{self, File, FileTimes};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
+use token_tracker::adapters::files::FileSessionSource;
 
 use serde_json::Value;
 use token_tracker::adapters::claude::{ClaudeSessionDiscovery, ClaudeSessionParser};
@@ -58,8 +59,10 @@ impl Ledger {
     fn sync(&mut self) -> SynchronizationReport {
         self.clock += 1;
         synchronize_sessions_at(
-            &ClaudeSessionDiscovery::new(self.projects()),
-            &ClaudeSessionParser::new(),
+            &FileSessionSource::new(
+                &ClaudeSessionDiscovery::new(self.projects()),
+                &ClaudeSessionParser::new(),
+            ),
             &mut self.store(),
             Timestamp::from_unix_milliseconds(self.clock as i64),
         )
@@ -109,7 +112,7 @@ fn final_responses_and_billing_corrections_survive_reopen() {
     assert_eq!(partial.warnings.len(), 1);
     totals(&ledger, 1, 0, 0);
     let unchanged = ledger.sync();
-    assert_eq!(unchanged.counts.files_unchanged, 1);
+    assert_eq!(unchanged.counts.sources_unchanged, 1);
     assert_eq!(unchanged.warnings, partial.warnings);
 
     ledger.write(&path, &prefix(&source, 6));
@@ -156,7 +159,7 @@ fn final_responses_and_billing_corrections_survive_reopen() {
     assert_eq!(event(&ledger.snapshot(), "response-v1:msg_equal"), equal);
     totals(&ledger, 1, 2, 333);
     let snapshot = ledger.snapshot();
-    assert_eq!(ledger.sync().counts.files_unchanged, 1);
+    assert_eq!(ledger.sync().counts.sources_unchanged, 1);
     assert_eq!(ledger.snapshot(), snapshot);
 }
 
@@ -189,7 +192,7 @@ fn shared_history_and_children_are_counted_once() {
         totals(&ledger, 4, 5, 348);
         let summary = summarize_usage(&snapshot).unwrap();
         assert_eq!(&summary, expected_summary.get_or_insert(summary.clone()));
-        assert_eq!(ledger.sync().counts.files_unchanged, 4);
+        assert_eq!(ledger.sync().counts.sources_unchanged, 4);
         assert_eq!(ledger.snapshot(), snapshot);
 
         let child = fixture("claude", "child-b2c3d4e.jsonl");
@@ -201,8 +204,8 @@ fn shared_history_and_children_are_counted_once() {
         );
         let changed = ledger.sync();
         assert!(changed.warnings.is_empty());
-        assert_eq!(changed.counts.files_imported, 1);
-        assert_eq!(changed.counts.files_unchanged, 3);
+        assert_eq!(changed.counts.sources_imported, 1);
+        assert_eq!(changed.counts.sources_unchanged, 3);
         assert_eq!(changed.counts.observations_updated, 1);
         totals(&ledger, 4, 5, 358);
     }
@@ -217,7 +220,7 @@ fn placeholders_do_not_suppress_complete_copies() {
         &prefix(&fixture("claude", "snapshots.jsonl"), 3),
     );
     ledger.write_fixture("shared-history.jsonl");
-    assert_eq!(ledger.sync().counts.files_failed, 0);
+    assert_eq!(ledger.sync().counts.sources_failed, 0);
     totals(&ledger, 2, 2, 168);
     ledger.write(
         &main_path,

@@ -2,11 +2,12 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{BufReader, Cursor};
 use std::path::Path;
+use token_tracker::adapters::files::{ParseContext, SessionParser};
 
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use token_tracker::adapters::claude::{ClaudeParseError, ClaudeSessionParser};
-use token_tracker::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
+use token_tracker::application::{SessionData, SnapshotCompletion};
 use token_tracker::domain::{ParentSession, Timestamp, TokenCounts, UsageKind};
 
 const SOURCE_PATH: &str =
@@ -14,7 +15,7 @@ const SOURCE_PATH: &str =
 const SNAPSHOTS: &str = include_str!("../../fixtures/claude/snapshots.jsonl");
 const CHILD: &str = include_str!("../../fixtures/claude/child-a1b2c3d.jsonl");
 
-fn parse(source: &[u8], path: &str) -> Result<ParsedSession, ClaudeParseError> {
+fn parse(source: &[u8], path: &str) -> Result<SessionData, ClaudeParseError> {
     ClaudeSessionParser::new().parse(
         &mut BufReader::with_capacity(1, Cursor::new(source)),
         ParseContext {
@@ -43,7 +44,7 @@ fn tokens(tokens: TokenCounts) -> Value {
     ])
 }
 
-fn check_usage(parsed: &ParsedSession, expected: &Value, name: &str) {
+fn check_usage(parsed: &SessionData, expected: &Value, name: &str) {
     let actual: BTreeMap<_, _> = parsed
         .events
         .iter()
@@ -151,8 +152,8 @@ fn fixtures_preserve_metadata_usage_and_errors() {
         );
         assert_eq!(
             match parsed.completion {
-                ParseCompletion::Complete => "complete",
-                ParseCompletion::IncompleteFinalLine => "incomplete_final_line",
+                SnapshotCompletion::Complete => "complete",
+                SnapshotCompletion::Partial => "incomplete_final_line",
             },
             expected["completion"],
             "{name}"
@@ -167,7 +168,7 @@ fn snapshot_prefixes_keep_finals_and_first_final_timestamps() {
         let count = expected["complete_lines"].as_u64().unwrap() as usize;
         let source = SNAPSHOTS.lines().take(count).collect::<Vec<_>>().join("\n");
         let parsed = parse(source.as_bytes(), SOURCE_PATH).unwrap();
-        assert_eq!(parsed.completion, ParseCompletion::Complete);
+        assert_eq!(parsed.completion, SnapshotCompletion::Complete);
         check_usage(&parsed, expected, &format!("prefix {count}"));
     }
 }
@@ -176,7 +177,7 @@ fn final_record() -> Value {
     serde_json::from_str(SNAPSHOTS.lines().nth(3).unwrap()).unwrap()
 }
 
-fn parse_record(record: &Value) -> Result<ParsedSession, ClaudeParseError> {
+fn parse_record(record: &Value) -> Result<SessionData, ClaudeParseError> {
     parse(record.to_string().as_bytes(), SOURCE_PATH)
 }
 
@@ -386,7 +387,7 @@ fn truncated_tails_preserve_finals_and_report_the_omission() {
     let tail = format!("{original}\n{{\"ignored\":\"PRIVATE");
     let parsed = parse(tail.as_bytes(), SOURCE_PATH).unwrap();
     assert_eq!(parsed.events, parse_record(&original).unwrap().events);
-    assert_eq!(parsed.completion, ParseCompletion::IncompleteFinalLine);
+    assert_eq!(parsed.completion, SnapshotCompletion::Partial);
     assert_eq!(parsed.notices[0].code, "truncated_tail");
     assert_eq!(parsed.notices[0].count.get(), 1);
     assert_eq!(parsed.notices[0].line.unwrap().get(), 2);

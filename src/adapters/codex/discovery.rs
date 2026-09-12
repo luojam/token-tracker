@@ -1,6 +1,7 @@
 use super::CODEX_AGENT_ID;
 use crate::adapters::discovery::{self, RecursiveLayout};
-use crate::application::{DiscoveryReport, SessionDiscovery};
+use crate::adapters::files::{FileDiscoveryReport, SessionFileDiscovery};
+
 use crate::domain::AgentId;
 use std::path::{Component, Path, PathBuf};
 use std::{env, error::Error, ffi::OsStr, fmt, io};
@@ -49,14 +50,14 @@ impl CodexSessionDiscovery {
     }
 }
 
-impl SessionDiscovery for CodexSessionDiscovery {
+impl SessionFileDiscovery for CodexSessionDiscovery {
     type Error = CodexDiscoveryError;
 
     fn agent_id(&self) -> AgentId {
         AgentId::from(CODEX_AGENT_ID)
     }
 
-    fn discover(&self) -> Result<DiscoveryReport, Self::Error> {
+    fn discover(&self) -> Result<FileDiscoveryReport, Self::Error> {
         let mut roots = self
             .roots
             .iter()

@@ -4,8 +4,8 @@ use std::io::{self, BufReader, Cursor, Read};
 use std::path::{Path, PathBuf};
 use token_tracker::adapters::codex::CodexParseError;
 use token_tracker::adapters::codex::CodexSessionParser;
-use token_tracker::application::ParseCompletion;
-use token_tracker::application::{ParseContext, SessionParser};
+use token_tracker::adapters::files::{ParseContext, SessionParser};
+use token_tracker::application::SnapshotCompletion;
 
 use serde_json::{Value, json};
 use token_tracker::domain::{AgentId, ParentSession, SessionMetadata, Timestamp};
@@ -34,7 +34,7 @@ fn preserves_original_metadata_across_resume_and_client_upgrades() {
         }
     );
     assert!(original.events.is_empty());
-    assert_eq!(original.completion, ParseCompletion::Complete);
+    assert_eq!(original.completion, SnapshotCompletion::Complete);
 
     let mut resumed: Value = serde_json::from_str(HEADER).unwrap();
     resumed["timestamp"] = json!("2026-02-01T00:00:00Z");
@@ -182,7 +182,7 @@ fn requires_a_complete_header_with_original_id_and_source_timestamp() {
 fn truncated_tails_preserve_usage_but_complete_malformed_lines_fail() {
     let partial = include_str!("../../fixtures/codex/response-partial-tail.jsonl");
     let parsed = parse(partial).unwrap();
-    assert_eq!(parsed.completion, ParseCompletion::IncompleteFinalLine);
+    assert_eq!(parsed.completion, SnapshotCompletion::Partial);
     assert_eq!(parsed.events.len(), 1);
     assert!(matches!(
         parse(&format!("{partial}\n")),
@@ -264,7 +264,10 @@ fn validates_recognized_accounting_fields_without_exposing_values() {
     assert!(parse(&format!("{HEADER}\n[\"future_record\"]")).is_err());
 
     let legacy = include_str!("../../fixtures/codex/legacy-fresh.jsonl");
-    assert_eq!(parse(legacy).unwrap().completion, ParseCompletion::Complete);
+    assert_eq!(
+        parse(legacy).unwrap().completion,
+        SnapshotCompletion::Complete
+    );
     let bad_legacy = legacy.replace("\"input_tokens\":100", "\"input_tokens\":false");
     assert!(matches!(
         parse(&bad_legacy),
@@ -311,7 +314,7 @@ fn unknown_fields_and_client_versions_do_not_change_accounting() {
     let prefix = fixture.lines().take(4).collect::<Vec<_>>().join("\n");
     for client in ["0.128.0", "0.153.4", "future-client"] {
         let parsed = parse(&prefix.replace("0.153.4", client)).unwrap();
-        assert_eq!(parsed.completion, ParseCompletion::Complete);
+        assert_eq!(parsed.completion, SnapshotCompletion::Complete);
     }
 }
 

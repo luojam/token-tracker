@@ -1,11 +1,10 @@
+use crate::adapters::files::{ParseContext, SessionParser};
 use std::num::NonZeroU32;
 
 use super::CLAUDE_AGENT_ID;
 use super::discovery::{is_agent_id, is_session_id};
 use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
-use crate::application::{
-    ParseCompletion, ParseContext, ParseNotice, ParsedSession, SessionParser,
-};
+use crate::application::{ParseNotice, SessionData, SnapshotCompletion};
 use crate::domain::{
     AgentId, AnthropicBilling, CacheWriteTokens, KnownRequests, ModelAttribution, ParentSession,
     PricingContext, RequestBreakdown, ServiceSpeed, ServiceTier, SessionMetadata, TierEvidence,
@@ -40,17 +39,17 @@ impl SessionParser for ClaudeSessionParser {
         &self,
         input: &mut dyn BufRead,
         context: ParseContext<'_>,
-    ) -> Result<ParsedSession, Self::Error> {
+    ) -> Result<SessionData, Self::Error> {
         let mut metadata = Metadata::from_path(context.source_path)?;
         let mut responses = BTreeMap::<String, Response>::new();
         let mut notices = Vec::new();
-        let mut completion = ParseCompletion::Complete;
+        let mut completion = SnapshotCompletion::Complete;
         let mut lines = JsonlReader::new(input);
         loop {
             let (line, text) = match lines.next_line()? {
                 JsonlLine::Complete { number, text } => (number, text),
                 JsonlLine::Incomplete { number } => {
-                    completion = ParseCompletion::IncompleteFinalLine;
+                    completion = SnapshotCompletion::Partial;
                     add_notice(&mut notices, ParseNoticeCode::TruncatedTail, number)?;
                     break;
                 }
@@ -102,7 +101,7 @@ impl SessionParser for ClaudeSessionParser {
                 )?,
             }
         }
-        Ok(ParsedSession {
+        Ok(SessionData {
             metadata: metadata.finish()?,
             events,
             completion,

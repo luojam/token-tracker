@@ -2,7 +2,7 @@ use super::{
     SqliteStoreError, billing, decode_parent, decode_path, decode_u64, to_sql_conversion_error,
     usage_kind_from_str,
 };
-use crate::application::{SessionProvenance, SourceSessionKey, UsageObservation};
+use crate::application::{SessionProvenance, SourceKey, SourceSessionKey, UsageObservation};
 use crate::domain::{
     AgentId, ModelAttribution, RecordedCost, Timestamp, TokenCounts, UsageEvent, UsageEventIdentity,
 };
@@ -14,7 +14,7 @@ pub(super) fn load_stored_sessions(
 ) -> Result<HashMap<i64, SessionProvenance>, SqliteStoreError> {
     let mut statement = connection.prepare(
         "SELECT session.id, session.agent, session.session_id,
-                session.started_at_ms, session.parent_session, source.path, session.parent_kind
+                session.started_at_ms, session.parent_session, source.source_key, session.parent_kind, source.path
          FROM sessions session JOIN import_sources source ON source.id = session.source_id",
     )?;
     let rows = statement.query_map([], |row| {
@@ -24,8 +24,9 @@ pub(super) fn load_stored_sessions(
                 key: SourceSessionKey {
                     agent: AgentId::new(row.get::<_, String>(1)?),
                     session_id: row.get(2)?,
-                    source_path: decode_path(row.get(5)?),
+                    source: SourceKey(row.get(5)?),
                 },
+                source_path: row.get::<_, Option<Vec<u8>>>(7)?.map(decode_path),
                 started_at: Timestamp::from_unix_milliseconds(row.get(3)?),
                 parent_session: decode_parent(row.get(6)?, row.get(4)?)
                     .map_err(to_sql_conversion_error)?,

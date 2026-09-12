@@ -1,5 +1,6 @@
 use crate::support::{TempTree, prefix};
 use token_tracker::adapters::codex::{CodexSessionDiscovery, CodexSessionParser};
+use token_tracker::adapters::files::FileSessionSource;
 use token_tracker::application::{UsageReadStore, synchronize_sessions_at};
 use token_tracker::domain::Timestamp;
 use token_tracker::storage::SqliteUsageStore;
@@ -12,8 +13,10 @@ fn switching_from_turn_totals_to_responses_keeps_imported_keys() {
     let sync = |store: &mut SqliteUsageStore, source: &str, time| {
         tree.write("rollout-active.jsonl", source);
         synchronize_sessions_at(
-            &CodexSessionDiscovery::new([&tree.root]),
-            &CodexSessionParser::new(),
+            &FileSessionSource::new(
+                &CodexSessionDiscovery::new([&tree.root]),
+                &CodexSessionParser::new(),
+            ),
             store,
             Timestamp::from_unix_milliseconds(time),
         )
@@ -40,12 +43,12 @@ fn switching_from_turn_totals_to_responses_keeps_imported_keys() {
     assert_eq!(
         sync(&mut store, &source[..cut], 3)
             .counts
-            .incomplete_files_imported,
+            .partial_sources_imported,
         1
     );
     assert_eq!(store.usage_snapshot().unwrap(), snapshot);
     assert_eq!(
-        sync(&mut store, source, 4).counts.incomplete_files_imported,
+        sync(&mut store, source, 4).counts.partial_sources_imported,
         0
     );
     assert_eq!(store.usage_snapshot().unwrap(), snapshot);

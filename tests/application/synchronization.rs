@@ -3,11 +3,14 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use token_tracker::adapters::files::{
+    FileRevision, FileSessionSource, ParseContext, SessionParser,
+};
 
 use token_tracker::adapters::pi::{PiParseError, PiSessionDiscovery, PiSessionParser};
 use token_tracker::application::{
-    ParseCompletion, ParseContext, ParseNotice, ParsedSession, SessionParser, UsageReadStore,
-    UsageStore, synchronize_sessions_at,
+    ParseNotice, SessionData, SnapshotCompletion, UsageReadStore, UsageStore,
+    synchronize_sessions_at,
 };
 use token_tracker::domain::{AgentId, Timestamp};
 use token_tracker::storage::SqliteUsageStore;
@@ -45,8 +48,7 @@ fn synchronize(
     time: i64,
 ) -> token_tracker::application::SynchronizationReport {
     synchronize_sessions_at(
-        &PiSessionDiscovery::new(root),
-        &PiSessionParser::new(),
+        &FileSessionSource::new(&PiSessionDiscovery::new(root), &PiSessionParser::new()),
         store,
         scan_time(time),
     )
@@ -61,13 +63,13 @@ fn imports_append_and_correct_usage_while_retaining_omitted_history() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
 
     let first = synchronize(&tree.root, &mut store, 1_000);
-    assert_eq!(first.counts.files_imported, 1);
+    assert_eq!(first.counts.sources_imported, 1);
     assert_eq!(first.counts.event_identities_inserted, 1);
     assert_eq!(first.counts.observations_inserted, 1);
 
     let repeated = synchronize(&tree.root, &mut store, 2_000);
-    assert_eq!(repeated.counts.files_unchanged, 1);
-    assert_eq!(repeated.counts.files_imported, 0);
+    assert_eq!(repeated.counts.sources_unchanged, 1);
+    assert_eq!(repeated.counts.sources_imported, 0);
 
     OpenOptions::new()
         .append(true)
@@ -76,14 +78,14 @@ fn imports_append_and_correct_usage_while_retaining_omitted_history() {
         .write_all(assistant_event("event-b", 20).as_bytes())
         .unwrap();
     let appended = synchronize(&tree.root, &mut store, 2_000);
-    assert_eq!(appended.counts.files_imported, 1);
+    assert_eq!(appended.counts.sources_imported, 1);
     assert_eq!(appended.counts.event_identities_inserted, 1);
     assert_eq!(appended.counts.observations_inserted, 1);
     assert_eq!(appended.counts.observations_updated, 0);
 
     fs::write(&path, session("session-a", None, &[("event-a", 999_999)])).unwrap();
     let rewritten = synchronize(&tree.root, &mut store, 4_000);
-    assert_eq!(rewritten.counts.files_imported, 1);
+    assert_eq!(rewritten.counts.sources_imported, 1);
     assert_eq!(rewritten.counts.event_identities_inserted, 0);
     assert_eq!(rewritten.counts.observations_inserted, 0);
     assert_eq!(rewritten.counts.observations_updated, 1);
@@ -105,8 +107,8 @@ fn imports_append_and_correct_usage_while_retaining_omitted_history() {
     )
     .unwrap();
     let malformed = synchronize(&tree.root, &mut store, 5_000);
-    assert_eq!(malformed.counts.files_failed, 1);
-    assert_eq!(malformed.counts.files_imported, 0);
+    assert_eq!(malformed.counts.sources_failed, 1);
+    assert_eq!(malformed.counts.sources_imported, 0);
     assert_eq!(malformed.warnings.len(), 1);
     let state = &store.source_states(&AgentId::from("pi")).unwrap()[0];
     assert_eq!(state.last_import, last_good_import);
@@ -117,7 +119,7 @@ fn imports_append_and_correct_usage_while_retaining_omitted_history() {
 
     fs::remove_file(path).unwrap();
     let missing = synchronize(&tree.root, &mut store, 6_000);
-    assert_eq!(missing.counts.files_discovered, 0);
+    assert_eq!(missing.counts.sources_discovered, 0);
     let state = &store.source_states(&AgentId::from("pi")).unwrap()[0];
     assert!(!state.present);
     assert!(state.last_import.is_some());
@@ -137,14 +139,14 @@ fn incomplete_final_lines_are_committed_and_retried_without_a_revision_change() 
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
 
     let first = synchronize(&tree.root, &mut store, 1_000);
-    assert_eq!(first.counts.files_imported, 1);
-    assert_eq!(first.counts.incomplete_files_imported, 1);
+    assert_eq!(first.counts.sources_imported, 1);
+    assert_eq!(first.counts.partial_sources_imported, 1);
     assert_eq!(first.counts.observations_inserted, 1);
 
     let retried = synchronize(&tree.root, &mut store, 2_000);
-    assert_eq!(retried.counts.files_unchanged, 0);
-    assert_eq!(retried.counts.files_imported, 1);
-    assert_eq!(retried.counts.incomplete_files_imported, 1);
+    assert_eq!(retried.counts.sources_unchanged, 0);
+    assert_eq!(retried.counts.sources_imported, 1);
+    assert_eq!(retried.counts.partial_sources_imported, 1);
     assert_eq!(retried.counts.observations_inserted, 0);
 }
 
@@ -157,7 +159,7 @@ impl SessionParser for NoticeParser {
         &self,
         input: &mut dyn BufRead,
         context: ParseContext<'_>,
-    ) -> Result<ParsedSession, Self::Error> {
+    ) -> Result<SessionData, Self::Error> {
         let mut parsed = PiSessionParser::new().parse(input, context)?;
         parsed.notices = self.0.clone();
         Ok(parsed)
@@ -189,14 +191,16 @@ fn notices_persist_until_a_successful_replacement() {
         },
     ];
     let first = synchronize_sessions_at(
-        &PiSessionDiscovery::new(&root),
-        &NoticeParser(notices.clone()),
+        &FileSessionSource::new(
+            &PiSessionDiscovery::new(&root),
+            &NoticeParser(notices.clone()),
+        ),
         &mut store,
         scan_time(1_000),
     )
     .unwrap();
-    assert_eq!(first.counts.files_imported, 1);
-    assert_eq!(first.counts.incomplete_files_imported, 0);
+    assert_eq!(first.counts.sources_imported, 1);
+    assert_eq!(first.counts.partial_sources_imported, 0);
     assert_eq!(first.warnings.len(), 2);
     assert_eq!(first.warnings[0].path.as_ref(), Some(&path));
     assert_eq!(
@@ -212,18 +216,20 @@ fn notices_persist_until_a_successful_replacement() {
     drop(store);
     let mut store = SqliteUsageStore::open(&database).unwrap();
     let reopened = synchronize(&root, &mut store, 3_000);
-    assert_eq!(reopened.counts.files_unchanged, 1);
+    assert_eq!(reopened.counts.sources_unchanged, 1);
     assert_eq!(reopened.warnings, first.warnings);
 
     fs::write(&path, session("partial", None, &[("final-response", 999)])).unwrap();
     let failed = synchronize_sessions_at(
-        &PiSessionDiscovery::new(&root),
-        &NoticeParser(vec![notices[0].clone(), notices[0].clone()]),
+        &FileSessionSource::new(
+            &PiSessionDiscovery::new(&root),
+            &NoticeParser(vec![notices[0].clone(), notices[0].clone()]),
+        ),
         &mut store,
         scan_time(4_000),
     )
     .unwrap();
-    assert_eq!(failed.counts.files_failed, 1);
+    assert_eq!(failed.counts.sources_failed, 1);
     assert_eq!(failed.warnings.len(), 3);
     assert!(
         first
@@ -237,7 +243,7 @@ fn notices_persist_until_a_successful_replacement() {
     fs::rename(&root, &moved).unwrap();
     fs::write(&root, b"temporarily not a directory").unwrap();
     let inaccessible = synchronize(&root, &mut store, 5_000);
-    assert_eq!(inaccessible.counts.files_discovered, 0);
+    assert_eq!(inaccessible.counts.sources_discovered, 0);
     assert!(
         first
             .warnings
@@ -256,13 +262,13 @@ fn notices_persist_until_a_successful_replacement() {
 
     fs::write(&path, session("partial", None, &[("final-response", 999)])).unwrap();
     let replaced = synchronize(&root, &mut store, 7_000);
-    assert_eq!(replaced.counts.files_imported, 1);
+    assert_eq!(replaced.counts.sources_imported, 1);
     assert_eq!(replaced.counts.observations_updated, 1);
     assert!(replaced.warnings.is_empty());
     drop(store);
     let mut store = SqliteUsageStore::open(&database).unwrap();
     let unchanged = synchronize(&root, &mut store, 8_000);
-    assert_eq!(unchanged.counts.files_unchanged, 1);
+    assert_eq!(unchanged.counts.sources_unchanged, 1);
     assert!(unchanged.warnings.is_empty());
 }
 
@@ -283,9 +289,9 @@ fn malformed_sources_do_not_block_valid_imports() {
 
     let report = synchronize(&tree.root, &mut store, 1_000);
 
-    assert_eq!(report.counts.files_discovered, 2);
-    assert_eq!(report.counts.files_imported, 1);
-    assert_eq!(report.counts.files_failed, 1);
+    assert_eq!(report.counts.sources_discovered, 2);
+    assert_eq!(report.counts.sources_imported, 1);
+    assert_eq!(report.counts.sources_failed, 1);
     assert_eq!(report.counts.event_identities_inserted, 1);
     assert_eq!(report.warnings.len(), 1);
 }
@@ -309,7 +315,7 @@ fn copied_history_has_one_identity_and_an_observation_per_source() {
 
     let report = synchronize(&tree.root, &mut store, 1_000);
 
-    assert_eq!(report.counts.files_imported, 2);
+    assert_eq!(report.counts.sources_imported, 2);
     assert_eq!(report.counts.event_identities_inserted, 1);
     assert_eq!(report.counts.observations_inserted, 2);
 }
@@ -325,7 +331,7 @@ impl SessionParser for MutatingParser {
         &self,
         input: &mut dyn BufRead,
         context: ParseContext<'_>,
-    ) -> Result<ParsedSession, Self::Error> {
+    ) -> Result<SessionData, Self::Error> {
         let path = context.source_path.to_owned();
         let parsed = PiSessionParser::new().parse(input, context);
         if self
@@ -359,15 +365,14 @@ fn files_changed_during_parsing_are_retried() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
 
     let report = synchronize_sessions_at(
-        &PiSessionDiscovery::new(&tree.root),
-        &parser,
+        &FileSessionSource::new(&PiSessionDiscovery::new(&tree.root), &parser),
         &mut store,
         scan_time(1_000),
     )
     .unwrap();
 
     assert!(report.warnings.is_empty());
-    assert_eq!(report.counts.files_imported, 1);
+    assert_eq!(report.counts.sources_imported, 1);
     assert_eq!(report.counts.event_identities_inserted, 2);
     assert_eq!(report.counts.observations_inserted, 2);
     assert_eq!(
@@ -375,9 +380,12 @@ fn files_changed_during_parsing_are_retried() {
             .last_import
             .as_ref()
             .unwrap()
-            .revision
-            .size,
-        fs::metadata(path).unwrap().len()
+            .revision,
+        FileRevision {
+            size: fs::metadata(&path).unwrap().len(),
+            modified_at: fs::metadata(&path).unwrap().modified().unwrap()
+        }
+        .into()
     );
 }
 
@@ -393,17 +401,19 @@ fn continuously_changing_files_are_deferred() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
 
     let report = synchronize_sessions_at(
-        &PiSessionDiscovery::new(&tree.root),
-        &MutatingParser {
-            remaining_changes: AtomicUsize::new(usize::MAX),
-        },
+        &FileSessionSource::new(
+            &PiSessionDiscovery::new(&tree.root),
+            &MutatingParser {
+                remaining_changes: AtomicUsize::new(usize::MAX),
+            },
+        ),
         &mut store,
         scan_time(1_000),
     )
     .unwrap();
 
-    assert_eq!(report.counts.files_imported, 0);
-    assert_eq!(report.counts.files_failed, 1);
+    assert_eq!(report.counts.sources_imported, 0);
+    assert_eq!(report.counts.sources_failed, 1);
     assert!(report.warnings[0].message.contains("import deferred"));
     assert!(
         store.source_states(&AgentId::from("pi")).unwrap()[0]
@@ -430,7 +440,7 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
             &self,
             input: &mut dyn BufRead,
             context: ParseContext<'_>,
-        ) -> Result<ParsedSession, Self::Error> {
+        ) -> Result<SessionData, Self::Error> {
             if self.fail {
                 return Err(std::io::Error::other("normalization failed"));
             }
@@ -442,7 +452,7 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
                 parsed.events.clear();
             }
             if self.incomplete {
-                parsed.completion = ParseCompletion::IncompleteFinalLine;
+                parsed.completion = SnapshotCompletion::Partial;
             }
             Ok(parsed)
         }
@@ -458,27 +468,24 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
     let mut store = SqliteUsageStore::open(&database).unwrap();
     let sync = |store: &mut SqliteUsageStore, version, fail, time| {
         synchronize_sessions_at(
-            &discovery,
-            &VersionedParser {
-                version,
-                fail,
-                incomplete: false,
-            },
+            &FileSessionSource::new(
+                &discovery,
+                &VersionedParser {
+                    version,
+                    fail,
+                    incomplete: false,
+                },
+            ),
             store,
             scan_time(time),
         )
         .unwrap()
     };
-    assert_eq!(sync(&mut store, 1, false, 1).counts.files_imported, 1);
-    assert_eq!(sync(&mut store, 1, false, 2).counts.files_unchanged, 1);
-    assert_eq!(sync(&mut store, 2, true, 3).counts.files_failed, 1);
-    assert_eq!(
-        store.source_states(&"pi".into()).unwrap()[0]
-            .last_import
-            .as_ref()
-            .map(|import| import.normalization_version.get()),
-        Some(1)
-    );
+    assert_eq!(sync(&mut store, 1, false, 1).counts.sources_imported, 1);
+    assert_eq!(sync(&mut store, 1, false, 2).counts.sources_unchanged, 1);
+    let states = store.source_states(&"pi".into()).unwrap();
+    assert_eq!(sync(&mut store, 2, true, 3).counts.sources_failed, 1);
+    assert_eq!(store.source_states(&"pi".into()).unwrap(), states);
     assert_eq!(
         store.usage_snapshot().unwrap().observations[0]
             .event
@@ -490,44 +497,34 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
     drop(store);
     let mut store = SqliteUsageStore::open(&database).unwrap();
     assert_eq!(
-        store.source_states(&"pi".into()).unwrap()[0]
-            .last_import
-            .as_ref()
-            .map(|import| import.normalization_version.get()),
-        Some(2)
-    );
-    assert_eq!(
         store.usage_snapshot().unwrap().observations[0]
             .event
             .tokens
             .input,
         20
     );
-    assert_eq!(sync(&mut store, 2, false, 5).counts.files_unchanged, 1);
+    assert_eq!(sync(&mut store, 2, false, 5).counts.sources_unchanged, 1);
 
     let before = store.usage_snapshot().unwrap();
+    let states = store.source_states(&"pi".into()).unwrap();
     let incomplete = synchronize_sessions_at(
-        &discovery,
-        &VersionedParser {
-            version: 3,
-            fail: false,
-            incomplete: true,
-        },
+        &FileSessionSource::new(
+            &discovery,
+            &VersionedParser {
+                version: 3,
+                fail: false,
+                incomplete: true,
+            },
+        ),
         &mut store,
         scan_time(6),
     )
     .unwrap();
-    assert_eq!(incomplete.counts.files_failed, 1);
+    assert_eq!(incomplete.counts.sources_failed, 1);
     assert_eq!(store.usage_snapshot().unwrap(), before);
-    assert_eq!(
-        store.source_states(&"pi".into()).unwrap()[0]
-            .last_import
-            .as_ref()
-            .map(|import| import.normalization_version.get()),
-        Some(2)
-    );
+    assert_eq!(store.source_states(&"pi".into()).unwrap(), states);
 
-    assert_eq!(sync(&mut store, 3, false, 7).counts.files_imported, 1);
+    assert_eq!(sync(&mut store, 3, false, 7).counts.sources_imported, 1);
     let normalized = store.usage_snapshot().unwrap();
     assert_eq!(normalized.observations.len(), 1);
     assert_eq!(
@@ -537,16 +534,9 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
     assert_eq!(normalized.observations[0].event.tokens.input, 30);
     assert_eq!(normalized.sessions, before.sessions);
 
-    assert_eq!(sync(&mut store, 4, false, 8).counts.files_imported, 1);
+    assert_eq!(sync(&mut store, 4, false, 8).counts.sources_imported, 1);
     drop(store);
     let mut store = SqliteUsageStore::open(&database).unwrap();
     assert_eq!(store.usage_snapshot().unwrap(), normalized);
-    assert_eq!(
-        store.source_states(&"pi".into()).unwrap()[0]
-            .last_import
-            .as_ref()
-            .map(|import| import.normalization_version.get()),
-        Some(4)
-    );
-    assert_eq!(sync(&mut store, 4, false, 9).counts.files_unchanged, 1);
+    assert_eq!(sync(&mut store, 4, false, 9).counts.sources_unchanged, 1);
 }

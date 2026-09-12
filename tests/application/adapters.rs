@@ -2,12 +2,14 @@ use crate::support::TempTree;
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::PathBuf;
+use token_tracker::adapters::files::{
+    FileDiscoveryReport, FileSessionSource, ParseContext, SessionFileDiscovery, SessionParser,
+};
 
 use token_tracker::adapters::pi::{PiSessionDiscovery, PiSessionParser};
 use token_tracker::application::{
-    DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, FileRevision, ParseContext,
-    ParsedSession, SessionAdapter, SessionDiscovery, SessionParser, UsageReadStore, UsageStore,
-    run_all_time_report, summarize_usage, synchronize_sessions_at,
+    SessionData, UsageReadStore, UsageStore, run_all_time_report, summarize_usage,
+    synchronize_sessions_at,
 };
 use token_tracker::domain::{AgentId, Timestamp};
 use token_tracker::storage::SqliteUsageStore;
@@ -18,41 +20,25 @@ struct TestDiscovery {
     files: Vec<PathBuf>,
     fail: bool,
 }
-impl SessionDiscovery for TestDiscovery {
+impl SessionFileDiscovery for TestDiscovery {
     type Error = io::Error;
     fn agent_id(&self) -> AgentId {
         self.agent.into()
     }
-    fn discover(&self) -> Result<DiscoveryReport, Self::Error> {
+    fn discover(&self) -> Result<FileDiscoveryReport, Self::Error> {
         if self.fail {
             return Err(io::Error::other("discovery unavailable"));
         }
-        Ok(DiscoveryReport {
-            files: self
-                .files
-                .iter()
-                .map(|path| {
-                    let metadata = fs::metadata(path)?;
-                    Ok(DiscoveredSessionFile {
-                        path: path.clone(),
-                        revision: FileRevision {
-                            size: metadata.len(),
-                            modified_at: metadata.modified()?,
-                        },
-                    })
-                })
-                .collect::<io::Result<_>>()?,
-            warnings: vec![],
-            coverage: DiscoveryCoverage {
-                inspected_roots: vec![self.root.clone()],
-                inaccessible_paths: vec![],
-            },
-        })
+        let mut report = PiSessionDiscovery::new(&self.root)
+            .discover()
+            .map_err(io::Error::other)?;
+        report.files.retain(|file| self.files.contains(&file.path));
+        Ok(report)
     }
 }
 
-struct TestParser {
-    agent: &'static str,
+pub(super) struct TestParser {
+    pub(super) agent: &'static str,
 }
 
 impl SessionParser for TestParser {
@@ -62,7 +48,7 @@ impl SessionParser for TestParser {
         &self,
         input: &mut dyn BufRead,
         context: ParseContext<'_>,
-    ) -> Result<ParsedSession, Self::Error> {
+    ) -> Result<SessionData, Self::Error> {
         let mut parsed = PiSessionParser::new().parse(input, context)?;
         parsed.metadata.agent = self.agent.into();
         for event in &mut parsed.events {
@@ -72,7 +58,7 @@ impl SessionParser for TestParser {
     }
 }
 
-fn pi_session(tokens: u64) -> String {
+pub(super) fn pi_session(tokens: u64) -> String {
     format!(
         r#"{{"type":"session","version":3,"id":"original","timestamp":"1970-01-01T00:00:02Z","cwd":"/work"}}
 {{"type":"message","id":"shared","timestamp":"1970-01-01T00:00:01Z","message":{{"role":"assistant","provider":"provider","model":"model","usage":{{"input":{tokens},"output":0,"cacheRead":0,"cacheWrite":0}}}}}}
@@ -91,7 +77,7 @@ fn invalid_imports_warn_without_preventing_reporting() {
         "conflicting.jsonl",
         format!("{valid}{}\n", conflicting.lines().nth(1).unwrap()),
     );
-    let pi = SessionAdapter::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
+    let pi = FileSessionSource::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     let report = run_all_time_report(&[&pi], &mut store, vec![]).unwrap();
     assert_eq!(report.summary.totals.tokens.input, 7);
@@ -108,8 +94,8 @@ fn invalid_imports_warn_without_preventing_reporting() {
 fn discovery_failure_does_not_prevent_other_adapters_from_importing() {
     let tree = TempTree::new();
     tree.write("pi.jsonl", pi_session(7));
-    let pi = SessionAdapter::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
-    let unavailable = SessionAdapter::new(
+    let pi = FileSessionSource::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
+    let unavailable = FileSessionSource::new(
         TestDiscovery {
             agent: "test-agent",
             root: tree.root.clone(),
@@ -133,7 +119,7 @@ fn discovery_failure_does_not_prevent_other_adapters_from_importing() {
 #[test]
 fn agents_have_independent_usage_revisions_and_presence_at_the_same_path() {
     let tree = TempTree::new();
-    let path = tree.root.join("shared.usage");
+    let path = tree.root.join("shared.jsonl");
     fs::write(&path, pi_session(10)).unwrap();
     let discovery = |agent, files| TestDiscovery {
         agent,
@@ -143,59 +129,45 @@ fn agents_have_independent_usage_revisions_and_presence_at_the_same_path() {
     };
     let first = discovery("first", vec![path.clone()]);
     let second = discovery("second", vec![path.clone()]);
+    let sync = |store: &mut SqliteUsageStore, source: &TestDiscovery, time| {
+        synchronize_sessions_at(
+            &FileSessionSource::new(
+                source,
+                TestParser {
+                    agent: source.agent,
+                },
+            ),
+            store,
+            Timestamp::from_unix_milliseconds(time),
+        )
+        .unwrap()
+        .counts
+    };
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     for source in [&first, &second] {
-        let result = synchronize_sessions_at(
-            source,
-            &TestParser {
-                agent: source.agent,
-            },
-            &mut store,
-            Timestamp::from_unix_milliseconds(1),
-        )
-        .unwrap();
-        assert_eq!(result.counts.files_imported, 1);
+        assert_eq!(sync(&mut store, source, 1).sources_imported, 1);
     }
-    let result = synchronize_sessions_at(
-        &second,
-        &TestParser { agent: "second" },
-        &mut store,
-        Timestamp::from_unix_milliseconds(2),
-    )
-    .unwrap();
-    assert_eq!(result.counts.files_unchanged, 1);
-    synchronize_sessions_at(
-        &discovery("first", vec![]),
-        &TestParser { agent: "first" },
-        &mut store,
-        Timestamp::from_unix_milliseconds(100),
-    )
-    .unwrap();
+    assert_eq!(sync(&mut store, &second, 2).sources_unchanged, 1);
+    sync(&mut store, &discovery("first", vec![]), 100);
     assert!(!store.source_states(&"first".into()).unwrap()[0].present);
     assert!(store.source_states(&"second".into()).unwrap()[0].present);
 
     fs::write(&path, pi_session(200)).unwrap();
-    let result = synchronize_sessions_at(
-        &second,
-        &TestParser { agent: "second" },
-        &mut store,
-        Timestamp::from_unix_milliseconds(3),
-    )
-    .unwrap();
-    assert_eq!(result.counts.files_imported, 1);
+    assert_eq!(sync(&mut store, &second, 3).sources_imported, 1);
     let summary = summarize_usage(&store.usage_snapshot().unwrap()).unwrap();
     assert_eq!(summary.totals.tokens.input, 210);
     assert_eq!(summary.totals.unique_usage_event_count, 2);
 
     let rejected = synchronize_sessions_at(
-        &discovery("third", vec![path]),
-        &TestParser { agent: "second" },
+        &FileSessionSource::new(
+            &discovery("third", vec![path]),
+            &TestParser { agent: "second" },
+        ),
         &mut store,
         Timestamp::from_unix_milliseconds(4),
     )
     .unwrap();
-    assert_eq!(rejected.counts.files_failed, 1);
-    assert_eq!(rejected.counts.files_imported, 0);
+    assert_eq!(rejected.counts.sources_failed, 1);
     assert!(
         store.source_states(&"third".into()).unwrap()[0]
             .last_import

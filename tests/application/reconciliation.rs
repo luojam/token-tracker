@@ -45,9 +45,10 @@ fn session(
     let key = SourceSessionKey {
         agent: "pi".into(),
         session_id: session_id.into(),
-        source_path: path.into(),
+        source: token_tracker::adapters::files::file_source_key(std::path::Path::new(path)),
     };
     let provenance = SessionProvenance {
+        source_path: Some(path.into()),
         key: key.clone(),
         started_at: Timestamp::from_unix_milliseconds(started_at),
         parent_session: parent_session.map(|path| ParentSession::SourcePath(path.into())),

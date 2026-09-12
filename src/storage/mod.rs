@@ -25,7 +25,7 @@ use std::path::Path;
 use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::application::{
-    CommitImportOutcome, DiscoveryReport, ImportStats, ParseCompletion, SourceState,
+    CommitImportOutcome, DiscoveryReport, ImportStats, SnapshotCompletion, SourceState,
     UsageReadStore, UsageSnapshot, UsageStore, ValidatedSessionImport,
 };
 use crate::domain::{AgentId, Timestamp};
@@ -86,15 +86,11 @@ impl UsageStore for SqliteUsageStore {
 
     fn source_states(&self, agent: &AgentId) -> Result<Vec<SourceState>, Self::Error> {
         let mut statement = self.connection.prepare(
-            "SELECT path,
-                    last_observed_size, last_observed_modified_seconds,
-                    last_observed_modified_nanos,
-                    last_imported_size, last_imported_modified_seconds,
-                    last_imported_modified_nanos,
+            "SELECT source_key, path, last_observed_revision, last_imported_revision,
                     last_successful_scan_ms, last_parse_completion, present, parse_notices, normalization_version
                FROM import_sources
               WHERE agent = ?1
-              ORDER BY path",
+              ORDER BY source_key",
         )?;
         let rows = statement.query_map([agent.as_str()], source_state_from_row)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -109,61 +105,42 @@ impl UsageStore for SqliteUsageStore {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let mut discovered_paths = HashSet::with_capacity(report.files.len());
-
-        for file in &report.files {
-            let path = encode_path(&file.path);
-            let (modified_seconds, modified_nanos) =
-                system_time_to_parts(file.revision.modified_at)?;
+        let discovered_keys: HashSet<_> = report.sources.iter().map(|source| &source.key).collect();
+        for source in &report.sources {
             transaction
                 .prepare_cached(
                     "INSERT INTO import_sources (
-                    path, last_observed_size, last_observed_modified_seconds,
-                    last_observed_modified_nanos, last_discovery_scan_ms, present, agent
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6)
-                 ON CONFLICT(agent, path) DO UPDATE SET
-                    last_observed_size = excluded.last_observed_size,
-                    last_observed_modified_seconds = excluded.last_observed_modified_seconds,
-                    last_observed_modified_nanos = excluded.last_observed_modified_nanos,
+                    source_key, path, agent, last_observed_revision, last_discovery_scan_ms, present
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, 1)
+                 ON CONFLICT(agent, source_key) DO UPDATE SET
+                    path = excluded.path,
+                    last_observed_revision = excluded.last_observed_revision,
                     last_discovery_scan_ms = excluded.last_discovery_scan_ms,
                     present = 1
                  WHERE excluded.last_discovery_scan_ms >= import_sources.last_discovery_scan_ms",
                 )?
                 .execute(params![
-                    &path,
-                    encode_u64(file.revision.size)?,
-                    modified_seconds,
-                    modified_nanos,
-                    observed_at.as_unix_milliseconds(),
+                    source.key.0,
+                    source.path.as_deref().map(encode_path),
                     agent.as_str(),
+                    source.revision.0,
+                    observed_at.as_unix_milliseconds()
                 ])?;
-            discovered_paths.insert(path);
         }
-
-        let stored_sources = {
-            let mut statement =
-                transaction.prepare("SELECT id, path FROM import_sources WHERE agent = ?1")?;
-            let rows = statement.query_map([agent.as_str()], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })?;
-            rows.collect::<Result<Vec<_>, _>>()?
-        };
-
-        for (source_id, encoded_path) in stored_sources {
-            if discovered_paths.contains(&encoded_path) {
+        for key in &report.missing_sources {
+            if discovered_keys.contains(key) {
                 continue;
             }
-
-            let path = decode_path(encoded_path);
-            if discovery_covers(&path, report) {
-                transaction
-                    .prepare_cached(
-                        "UPDATE import_sources
-                        SET present = 0, last_discovery_scan_ms = ?1
-                      WHERE id = ?2 AND last_discovery_scan_ms <= ?1",
-                    )?
-                    .execute(params![observed_at.as_unix_milliseconds(), source_id])?;
-            }
+            transaction
+                .prepare_cached(
+                    "UPDATE import_sources SET present = 0, last_discovery_scan_ms = ?1
+                 WHERE agent = ?2 AND source_key = ?3 AND last_discovery_scan_ms <= ?1",
+                )?
+                .execute(params![
+                    observed_at.as_unix_milliseconds(),
+                    agent.as_str(),
+                    key.0
+                ])?;
         }
 
         transaction.commit()?;
@@ -183,7 +160,7 @@ impl UsageStore for SqliteUsageStore {
             return Ok(CommitImportOutcome::IgnoredStale);
         }
 
-        if import.parsed.completion != ParseCompletion::Complete
+        if import.session.completion != SnapshotCompletion::Complete
             && normalization_changed(&transaction, import)?
         {
             return Ok(CommitImportOutcome::DeferredIncomplete);
@@ -193,7 +170,7 @@ impl UsageStore for SqliteUsageStore {
         let source_session_id = upsert_source_session(&transaction, source_id, import)?;
         let mut stats = ImportStats::default();
 
-        for event in &import.parsed.events {
+        for event in &import.session.events {
             stats.event_identities_inserted += transaction
                 .prepare_cached(
                     "INSERT INTO usage_events (agent, adapter_key)

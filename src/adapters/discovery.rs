@@ -1,6 +1,7 @@
-use crate::application::{
-    DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, DiscoveryWarning, FileRevision,
+use crate::adapters::files::{
+    DiscoveredSessionFile, FileDiscoveryCoverage, FileDiscoveryReport, FileRevision,
 };
+use crate::application::DiscoveryWarning;
 use std::path::{Path, PathBuf};
 use std::{ffi::OsStr, fs, io};
 
@@ -26,11 +27,11 @@ impl DirectoryLayout for RecursiveLayout {
 pub(super) fn discover<L: DirectoryLayout + Clone>(
     roots: impl IntoIterator<Item = PathBuf>,
     layout: L,
-) -> DiscoveryReport {
-    let mut report = DiscoveryReport {
+) -> FileDiscoveryReport {
+    let mut report = FileDiscoveryReport {
         files: Vec::new(),
         warnings: Vec::new(),
-        coverage: DiscoveryCoverage {
+        coverage: FileDiscoveryCoverage {
             inspected_roots: Vec::new(),
             inaccessible_paths: Vec::new(),
         },
@@ -64,7 +65,7 @@ fn scan_directory<L: DirectoryLayout>(
     directory: &Path,
     layout: L,
     pending: &mut Vec<(PathBuf, L)>,
-    report: &mut DiscoveryReport,
+    report: &mut FileDiscoveryReport,
 ) -> bool {
     match fs::symlink_metadata(directory) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -179,7 +180,7 @@ fn scan_directory<L: DirectoryLayout>(
     true
 }
 
-fn record_inaccessible(report: &mut DiscoveryReport, path: &Path, message: String) {
+fn record_inaccessible(report: &mut FileDiscoveryReport, path: &Path, message: String) {
     report.coverage.inaccessible_paths.push(path.to_owned());
     report.warnings.push(DiscoveryWarning {
         path: Some(path.to_owned()),

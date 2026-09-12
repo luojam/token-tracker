@@ -1,8 +1,9 @@
 use std::io::Cursor;
 use std::path::Path;
+use token_tracker::adapters::files::{ParseContext, SessionParser};
 
 use token_tracker::adapters::claude::ClaudeSessionParser;
-use token_tracker::application::{ParseContext, SessionParser};
+
 use token_tracker::domain::{
     AnthropicBilling, CacheWriteTokens, EstimateUnavailableReason as Reason, EstimatedCost,
     KnownRequests, ModelAttribution, PricingContext, RequestBreakdown, ServiceSpeed, ServiceTier,

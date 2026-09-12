@@ -1,22 +1,24 @@
 use std::error::Error;
-use std::io::BufRead;
 use std::num::{NonZeroU32, NonZeroU64};
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::path::PathBuf;
 
 use super::ValidatedSessionImport;
 use crate::domain::{AgentId, ParentSession, SessionMetadata, Timestamp, UsageEvent};
 
+/// Stable source identity defined by the adapter, scoped by agent.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SourceKey(pub Vec<u8>);
+
+/// Compare only for equality: equal tokens mean unchanged metadata and usage across scans and restarts.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FileRevision {
-    pub size: u64,
-    pub modified_at: SystemTime,
-}
+pub struct SourceRevision(pub Vec<u8>);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DiscoveredSessionFile {
-    pub path: PathBuf,
-    pub revision: FileRevision,
+pub struct DiscoveredSource {
+    pub key: SourceKey,
+    pub revision: SourceRevision,
+    /// For diagnostics and parent references; never identity.
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,32 +27,43 @@ pub struct DiscoveryWarning {
     pub message: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DiscoveryCoverage {
-    pub inspected_roots: Vec<PathBuf>,
-    pub inaccessible_paths: Vec<PathBuf>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DiscoveryReport {
-    pub files: Vec<DiscoveredSessionFile>,
+    pub sources: Vec<DiscoveredSource>,
+    /// Confirmed absent sources only; failed or partial discovery cannot establish absence.
+    pub missing_sources: Vec<SourceKey>,
     pub warnings: Vec<DiscoveryWarning>,
-    pub coverage: DiscoveryCoverage,
 }
 
-pub trait SessionDiscovery {
+pub trait SessionSource {
     type Error: Error + Send + Sync + 'static;
 
-    /// Stable namespace for this adapter, including files not yet parsed.
     fn agent_id(&self) -> AgentId;
 
-    fn discover(&self) -> Result<DiscoveryReport, Self::Error>;
+    /// Bump to reimport unchanged sources after normalization changes.
+    fn normalization_version(&self) -> NonZeroU32 {
+        NonZeroU32::MIN
+    }
+
+    /// Known states belong to this agent; returned source keys must be unique.
+    fn discover(&self, known: &[SourceState]) -> Result<DiscoveryReport, Self::Error>;
+
+    /// Return data and revision from one consistent read, possibly newer than discovery.
+    fn load(&self, source: &DiscoveredSource) -> Result<SessionSnapshot, Self::Error>;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionSnapshot {
+    pub revision: SourceRevision,
+    pub session: SessionData,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ParseCompletion {
+pub enum SnapshotCompletion {
+    /// All available data was read; the session may still be active.
     Complete,
-    IncompleteFinalLine,
+    /// Usable subset; retry even if the revision is unchanged.
+    Partial,
 }
 
 /// An adapter-defined diagnostic, retained with the successful import.
@@ -65,50 +78,28 @@ pub struct ParseNotice {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct ParsedSession {
+pub struct SessionData {
     pub metadata: SessionMetadata,
     pub events: Vec<UsageEvent>,
-    pub completion: ParseCompletion,
+    pub completion: SnapshotCompletion,
     pub notices: Vec<ParseNotice>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct ParseContext<'a> {
-    /// Absolute path for source metadata and relative path resolution, never event identity.
-    pub source_path: &'a Path,
-}
-
-/// The caller handles file I/O and revision checks. Parse only the supplied reader.
-pub trait SessionParser {
-    type Error: Error + Send + Sync + 'static;
-
-    /// Bump to reimport unchanged files after normalization changes.
-    /// Session and event identity changes require a migration.
-    fn normalization_version(&self) -> NonZeroU32 {
-        NonZeroU32::MIN
-    }
-
-    fn parse(
-        &self,
-        input: &mut dyn BufRead,
-        context: ParseContext<'_>,
-    ) -> Result<ParsedSession, Self::Error>;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceState {
-    pub path: PathBuf,
+    pub key: SourceKey,
+    pub path: Option<PathBuf>,
     /// Latest discovered revision, even if import failed.
-    pub last_observed_revision: FileRevision,
+    pub last_observed_revision: SourceRevision,
     pub last_import: Option<SuccessfulImport>,
     pub present: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SuccessfulImport {
-    pub revision: FileRevision,
+    pub revision: SourceRevision,
     pub scanned_at: Timestamp,
-    pub completion: ParseCompletion,
+    pub completion: SnapshotCompletion,
     pub normalization_version: NonZeroU32,
     pub notices: Vec<ParseNotice>,
 }
@@ -116,9 +107,9 @@ pub struct SuccessfulImport {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionImport {
     pub normalization_version: NonZeroU32,
-    pub source: DiscoveredSessionFile,
+    pub source: DiscoveredSource,
     pub scanned_at: Timestamp,
-    pub parsed: ParsedSession,
+    pub session: SessionData,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -140,8 +131,8 @@ pub trait UsageStore {
 
     fn source_states(&self, agent: &AgentId) -> Result<Vec<SourceState>, Self::Error>;
 
-    /// Updates this agent's observed revisions and presence, preserving successful imports.
-    /// Omitted sources are missing only under inspected roots outside inaccessible paths.
+    /// Updates observed revisions and presence for this agent, preserving successful imports.
+    /// Marks only explicit missing sources absent; discovered sources take precedence.
     fn record_discovery(
         &mut self,
         agent: &AgentId,
@@ -150,7 +141,7 @@ pub trait UsageStore {
     ) -> Result<(), Self::Error>;
 
     /// Atomically upserts source/session metadata and observations, retaining omitted history.
-    /// Normalization changes are deferred until parsing completes.
+    /// Defers normalization changes until the snapshot is complete.
     fn commit_import(
         &mut self,
         import: &ValidatedSessionImport,
@@ -161,12 +152,13 @@ pub trait UsageStore {
 pub struct SourceSessionKey {
     pub agent: AgentId,
     pub session_id: String,
-    pub source_path: PathBuf,
+    pub source: SourceKey,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionProvenance {
     pub key: SourceSessionKey,
+    pub source_path: Option<PathBuf>,
     pub started_at: Timestamp,
     pub parent_session: Option<ParentSession>,
 }

@@ -2,9 +2,9 @@ use crate::support::TempTree;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use token_tracker::adapters::files::SessionFileDiscovery;
 
 use token_tracker::adapters::codex::CodexSessionDiscovery;
-use token_tracker::application::SessionDiscovery;
 
 #[test]
 fn discovers_only_rollouts_in_nested_active_and_archive_roots_once_in_path_order() {

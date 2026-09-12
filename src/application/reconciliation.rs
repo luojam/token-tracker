@@ -1,14 +1,12 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
-use std::ffi::OsString;
 use std::fmt;
-use std::path::PathBuf;
 
 use super::{SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot};
 use crate::domain::{ParentSession, Timestamp, UsageEventIdentity, UsageSummary};
 
-/// Counts each event once, preferring ancestors, then session start, ID, and normalized path.
-/// Missing files retain precedence; scan and import order do not affect selection.
+/// Counts each event once, preferring ancestors, then session start, ID, and source key.
+/// Missing sources retain precedence, regardless of scan or import order.
 pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, SummaryError> {
     let canonical = select_canonical_usage(snapshot)?;
     super::reporting::summarize_canonical_usage(
@@ -66,11 +64,13 @@ fn resolve_session_parents(
 ) -> HashMap<SourceSessionKey, SourceSessionKey> {
     let mut by_path = HashMap::new();
     let mut by_id = HashMap::new();
-    for key in sessions.keys() {
-        by_path
-            .entry((&key.agent, &key.source_path))
-            .or_insert_with(Vec::new)
-            .push(key);
+    for (key, session) in sessions {
+        if let Some(path) = &session.source_path {
+            by_path
+                .entry((&key.agent, path))
+                .or_insert_with(Vec::new)
+                .push(key);
+        }
         by_id
             .entry((&key.agent, &key.session_id))
             .or_insert_with(Vec::new)
@@ -136,16 +136,11 @@ fn observation_is_ancestor(
     found
 }
 
-fn fallback_key(session: &SessionProvenance) -> (Timestamp, &str, OsString) {
+fn fallback_key(session: &SessionProvenance) -> (Timestamp, &str, &super::SourceKey) {
     (
         session.started_at,
         &session.key.session_id,
-        session
-            .key
-            .source_path
-            .components()
-            .collect::<PathBuf>()
-            .into_os_string(),
+        &session.key.source,
     )
 }
 

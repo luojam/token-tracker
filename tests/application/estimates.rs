@@ -1,10 +1,11 @@
 use std::path::Path;
+use token_tracker::adapters::files::{ParseContext, SessionParser};
 use token_tracker::cli::render_terminal_report;
 
 use token_tracker::adapters::claude::ClaudeSessionParser;
 use token_tracker::application::{
-    ParseContext, SessionParser, SessionProvenance, SourceSessionKey, UsageObservation,
-    UsageSnapshot, build_usage_report, summarize_usage,
+    SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot, build_usage_report,
+    summarize_usage,
 };
 use token_tracker::domain::{
     AnthropicBilling, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, OpenAiBilling,
@@ -42,9 +43,10 @@ fn add_session(snapshot: &mut UsageSnapshot, agent: &str, id: &str, events: Vec<
     let key = SourceSessionKey {
         agent: agent.into(),
         session_id: id.into(),
-        source_path: format!("/sessions/{agent}-{id}.jsonl").into(),
+        source: token_tracker::application::SourceKey(format!("{agent}:{id}").into_bytes()),
     };
     snapshot.sessions.push(SessionProvenance {
+        source_path: None,
         key: key.clone(),
         started_at: Timestamp::from_unix_milliseconds(snapshot.sessions.len() as i64),
         parent_session: None,

@@ -1,8 +1,9 @@
+use crate::adapters::files::{ParseContext, SessionParser};
 use std::num::NonZeroU32;
 
 use super::CODEX_AGENT_ID;
 use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
-use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
+use crate::application::{SessionData, SnapshotCompletion};
 use crate::domain::{
     AgentId, CacheDetail, ParentSession, PricingContext, RequestBreakdown, SessionMetadata,
     Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
@@ -46,10 +47,10 @@ impl SessionParser for CodexSessionParser {
         &self,
         input: &mut dyn BufRead,
         _context: ParseContext<'_>,
-    ) -> Result<ParsedSession, Self::Error> {
+    ) -> Result<SessionData, Self::Error> {
         let mut lines = JsonlReader::new(input);
         let mut session: Option<SessionState> = None;
-        let mut completion = ParseCompletion::Complete;
+        let mut completion = SnapshotCompletion::Complete;
 
         loop {
             let (line_number, text) = match lines.next_line()? {
@@ -58,7 +59,7 @@ impl SessionParser for CodexSessionParser {
                     if session.is_none() {
                         return Err(CodexParseError::IncompleteHeader);
                     }
-                    completion = ParseCompletion::IncompleteFinalLine;
+                    completion = SnapshotCompletion::Partial;
                     break;
                 }
                 JsonlLine::Eof => break,
@@ -86,7 +87,7 @@ impl SessionParser for CodexSessionParser {
         }
 
         let session = session.ok_or(CodexParseError::MissingHeader)?;
-        Ok(ParsedSession {
+        Ok(SessionData {
             metadata: session.metadata,
             events: session
                 .legacy

@@ -1,8 +1,9 @@
+use crate::adapters::files::{ParseContext, SessionParser};
 use std::num::NonZeroU32;
 
 use super::PI_AGENT_ID;
 use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
-use crate::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
+use crate::application::{SessionData, SnapshotCompletion};
 use crate::domain::{
     AgentId, InvalidRecordedCost, ModelAttribution, ParentSession, RecordedCost, SessionMetadata,
     Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
@@ -35,7 +36,7 @@ impl SessionParser for PiSessionParser {
         &self,
         input: &mut dyn BufRead,
         _context: ParseContext<'_>,
-    ) -> Result<ParsedSession, Self::Error> {
+    ) -> Result<SessionData, Self::Error> {
         let mut lines = JsonlReader::new(input);
         let header_line = match lines.next_line()? {
             JsonlLine::Complete { text, .. } => text,
@@ -76,13 +77,13 @@ impl SessionParser for PiSessionParser {
                 .map(|path| ParentSession::SourcePath(path.into())),
         };
         let mut events = Vec::new();
-        let mut completion = ParseCompletion::Complete;
+        let mut completion = SnapshotCompletion::Complete;
 
         loop {
             let (line_number, text) = match lines.next_line()? {
                 JsonlLine::Complete { number, text } => (number, text),
                 JsonlLine::Incomplete { .. } => {
-                    completion = ParseCompletion::IncompleteFinalLine;
+                    completion = SnapshotCompletion::Partial;
                     break;
                 }
                 JsonlLine::Eof => break,
@@ -91,7 +92,7 @@ impl SessionParser for PiSessionParser {
                 .map_err(|error| error.into_parse_error(line_number))?;
         }
 
-        Ok(ParsedSession {
+        Ok(SessionData {
             metadata,
             events,
             completion,

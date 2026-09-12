@@ -2,21 +2,10 @@ use std::error::Error;
 use std::fmt;
 
 use super::{
-    ImportSynchronizationError, ImportWarning, SessionDiscovery, SessionParser,
-    SynchronizationReport, UsageReadStore, UsageStore, summarize_usage, synchronize_sessions,
+    ImportSynchronizationError, ImportWarning, SessionSource, SynchronizationReport,
+    UsageReadStore, UsageStore, summarize_usage, synchronize_sessions,
 };
 use crate::domain::{AgentId, UsageSummary};
-
-pub struct SessionAdapter<D, P> {
-    discovery: D,
-    parser: P,
-}
-
-impl<D: SessionDiscovery, P: SessionParser> SessionAdapter<D, P> {
-    pub fn new(discovery: D, parser: P) -> Self {
-        Self { discovery, parser }
-    }
-}
 
 pub trait ImportAdapter<S: UsageStore> {
     fn agent_id(&self) -> AgentId;
@@ -26,18 +15,16 @@ pub trait ImportAdapter<S: UsageStore> {
     ) -> Result<SynchronizationReport, ImportSynchronizationError>;
 }
 
-impl<D: SessionDiscovery, P: SessionParser, S: UsageStore> ImportAdapter<S>
-    for SessionAdapter<D, P>
-{
+impl<A: SessionSource, S: UsageStore> ImportAdapter<S> for A {
     fn agent_id(&self) -> AgentId {
-        self.discovery.agent_id()
+        SessionSource::agent_id(self)
     }
 
     fn synchronize(
         &self,
         store: &mut S,
     ) -> Result<SynchronizationReport, ImportSynchronizationError> {
-        synchronize_sessions(&self.discovery, &self.parser, store)
+        synchronize_sessions(self, store)
     }
 }
 

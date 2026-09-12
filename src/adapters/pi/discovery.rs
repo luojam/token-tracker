@@ -1,6 +1,7 @@
 use super::PI_AGENT_ID;
 use crate::adapters::discovery::{self, RecursiveLayout};
-use crate::application::{DiscoveryReport, SessionDiscovery};
+use crate::adapters::files::{FileDiscoveryReport, SessionFileDiscovery};
+
 use crate::domain::AgentId;
 use std::path::{Path, PathBuf};
 use std::{env, error::Error, ffi::OsStr, fmt, io};
@@ -72,14 +73,14 @@ impl PiSessionDiscovery {
     }
 }
 
-impl SessionDiscovery for PiSessionDiscovery {
+impl SessionFileDiscovery for PiSessionDiscovery {
     type Error = PiDiscoveryError;
 
     fn agent_id(&self) -> AgentId {
         AgentId::from(PI_AGENT_ID)
     }
 
-    fn discover(&self) -> Result<DiscoveryReport, Self::Error> {
+    fn discover(&self) -> Result<FileDiscoveryReport, Self::Error> {
         if self.root.as_os_str().is_empty() {
             return Err(PiDiscoveryError::EmptySessionRoot);
         }

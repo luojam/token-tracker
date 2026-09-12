@@ -1,28 +1,23 @@
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use std::fs::{self, File, Metadata};
-use std::io::{self, BufReader};
 use std::num::NonZeroU32;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    CommitImportOutcome, DiscoveredSessionFile, ImportStats, ParseCompletion, ParseContext,
-    ParseNotice, ParsedSession, SessionDiscovery, SessionImport, SessionParser, SourceState,
-    UsageStore,
+    CommitImportOutcome, DiscoveredSource, ImportStats, ParseNotice, SessionImport, SessionSource,
+    SnapshotCompletion, SourceState, UsageStore,
 };
 use crate::domain::Timestamp;
 
-const STABLE_READ_ATTEMPTS: usize = 2;
-
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImportCounts {
-    pub files_discovered: u64,
-    pub files_imported: u64,
-    pub files_unchanged: u64,
-    pub files_failed: u64,
-    pub incomplete_files_imported: u64,
+    pub sources_discovered: u64,
+    pub sources_imported: u64,
+    pub sources_unchanged: u64,
+    pub sources_failed: u64,
+    pub partial_sources_imported: u64,
     pub event_identities_inserted: u64,
     pub observations_inserted: u64,
     pub observations_updated: u64,
@@ -69,34 +64,28 @@ impl Error for ImportSynchronizationError {
     }
 }
 
-pub fn synchronize_sessions<D, P, S>(
-    discovery: &D,
-    parser: &P,
+pub fn synchronize_sessions<A, S>(
+    source: &A,
     store: &mut S,
 ) -> Result<SynchronizationReport, ImportSynchronizationError>
 where
-    D: SessionDiscovery,
-    P: SessionParser,
+    A: SessionSource,
     S: UsageStore,
 {
-    synchronize_sessions_at(discovery, parser, store, current_timestamp())
+    synchronize_sessions_at(source, store, current_timestamp())
 }
 
-pub fn synchronize_sessions_at<D, P, S>(
-    discovery: &D,
-    parser: &P,
+pub fn synchronize_sessions_at<A, S>(
+    source: &A,
     store: &mut S,
     scanned_at: Timestamp,
 ) -> Result<SynchronizationReport, ImportSynchronizationError>
 where
-    D: SessionDiscovery,
-    P: SessionParser,
+    A: SessionSource,
     S: UsageStore,
 {
-    let agent = discovery.agent_id();
-    let discovery_report = discovery
-        .discover()
-        .map_err(|source| ImportSynchronizationError::Discovery(Box::new(source)))?;
+    let agent = source.agent_id();
+    let normalization_version = source.normalization_version();
     let states =
         store
             .source_states(&agent)
@@ -105,7 +94,11 @@ where
                 source: Box::new(source),
             })?;
 
-    // Record discovery before parsing so failed imports still update source presence.
+    let discovery_report = source
+        .discover(&states)
+        .map_err(|source| ImportSynchronizationError::Discovery(Box::new(source)))?;
+
+    // Update presence even if loading fails.
     store
         .record_discovery(&agent, &discovery_report, scanned_at)
         .map_err(|source| ImportSynchronizationError::Storage {
@@ -115,14 +108,14 @@ where
 
     let known_sources = states
         .into_iter()
-        .map(|state| (state.path.clone(), state))
+        .map(|state| (state.key.clone(), state))
         .collect::<HashMap<_, _>>();
-    let mut files = discovery_report.files.clone();
-    files.sort_by(|left, right| left.path.cmp(&right.path));
+    let mut sources = discovery_report.sources;
+    sources.sort_by(|left, right| left.key.cmp(&right.key));
 
     let mut report = SynchronizationReport {
         counts: ImportCounts {
-            files_discovered: files.len() as u64,
+            sources_discovered: sources.len() as u64,
             ..ImportCounts::default()
         },
         warnings: discovery_report
@@ -135,44 +128,44 @@ where
             .collect(),
     };
 
-    for file in files {
+    for discovered in sources {
         if known_sources
-            .get(&file.path)
-            .is_some_and(|state| source_is_unchanged(state, &file, parser.normalization_version()))
+            .get(&discovered.key)
+            .is_some_and(|state| source_is_unchanged(state, &discovered, normalization_version))
         {
-            report.counts.files_unchanged += 1;
+            report.counts.sources_unchanged += 1;
             continue;
         }
 
-        let (parsed, revision) = match load_stable_session(&file.path, parser) {
+        let snapshot = match source.load(&discovered) {
             Ok(result) => result,
             Err(error) => {
-                report.counts.files_failed += 1;
+                report.counts.sources_failed += 1;
                 report.warnings.push(ImportWarning {
-                    path: Some(file.path),
+                    path: discovered.path.clone(),
                     message: error.to_string(),
                 });
                 continue;
             }
         };
 
-        let incomplete = parsed.completion == ParseCompletion::IncompleteFinalLine;
+        let incomplete = snapshot.session.completion == SnapshotCompletion::Partial;
         let import = SessionImport {
-            normalization_version: parser.normalization_version(),
-            source: DiscoveredSessionFile {
-                path: file.path.clone(),
-                revision,
+            normalization_version,
+            source: DiscoveredSource {
+                revision: snapshot.revision,
+                ..discovered.clone()
             },
             scanned_at,
-            parsed,
+            session: snapshot.session,
         };
 
         let import = match import.validate(&agent) {
             Ok(import) => import,
             Err(error) => {
-                report.counts.files_failed += 1;
+                report.counts.sources_failed += 1;
                 report.warnings.push(ImportWarning {
-                    path: Some(file.path),
+                    path: discovered.path.clone(),
                     message: error.to_string(),
                 });
                 continue;
@@ -181,24 +174,24 @@ where
 
         match store.commit_import(&import) {
             Ok(CommitImportOutcome::Applied(stats)) => {
-                report.counts.files_imported += 1;
+                report.counts.sources_imported += 1;
                 if incomplete {
-                    report.counts.incomplete_files_imported += 1;
+                    report.counts.partial_sources_imported += 1;
                 }
                 add_import_stats(&mut report.counts, stats);
             }
             Ok(CommitImportOutcome::IgnoredStale) => {
-                report.counts.files_failed += 1;
+                report.counts.sources_failed += 1;
                 report.warnings.push(ImportWarning {
-                    path: Some(file.path),
+                    path: discovered.path.clone(),
                     message: "session import was superseded by a newer scan".into(),
                 });
             }
             Ok(CommitImportOutcome::DeferredIncomplete) => {
-                report.counts.files_failed += 1;
+                report.counts.sources_failed += 1;
                 report.warnings.push(ImportWarning {
-                    path: Some(file.path),
-                    message: "normalization change deferred until the session parses completely"
+                    path: discovered.path.clone(),
+                    message: "normalization change deferred until the session snapshot is complete"
                         .into(),
                 });
             }
@@ -224,7 +217,7 @@ where
         };
         for notice in last_import.notices {
             report.warnings.push(ImportWarning {
-                path: Some(state.path.clone()),
+                path: state.path.clone(),
                 message: notice_message(&notice),
             });
         }
@@ -248,13 +241,13 @@ fn notice_message(notice: &ParseNotice) -> String {
 
 fn source_is_unchanged(
     state: &SourceState,
-    discovered: &DiscoveredSessionFile,
+    discovered: &DiscoveredSource,
     version: NonZeroU32,
 ) -> bool {
     state.last_import.as_ref().is_some_and(|import| {
         import.normalization_version == version
             && import.revision == discovered.revision
-            && import.completion == ParseCompletion::Complete
+            && import.completion == SnapshotCompletion::Complete
     })
 }
 
@@ -268,107 +261,6 @@ fn add_import_stats(counts: &mut ImportCounts, stats: ImportStats) {
     counts.observations_updated = counts
         .observations_updated
         .saturating_add(stats.observations_updated);
-}
-
-fn load_stable_session<P: SessionParser>(
-    path: &Path,
-    parser: &P,
-) -> Result<(ParsedSession, super::FileRevision), SourceLoadError> {
-    let mut last_retry = SourceLoadError::ChangedDuringRead;
-
-    for _ in 0..STABLE_READ_ATTEMPTS {
-        match load_session_once(path, parser) {
-            LoadAttempt::Stable(result) => return *result,
-            LoadAttempt::Retry(error) => last_retry = error,
-        }
-    }
-
-    Err(last_retry)
-}
-
-fn load_session_once<P: SessionParser>(path: &Path, parser: &P) -> LoadAttempt {
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(source) => return LoadAttempt::Retry(SourceLoadError::Io(source)),
-    };
-    let handle_before = match file.metadata() {
-        Ok(metadata) => metadata,
-        Err(source) => return LoadAttempt::Retry(SourceLoadError::Io(source)),
-    };
-    let path_before = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(source) => return LoadAttempt::Retry(SourceLoadError::Io(source)),
-    };
-    if !same_file_and_revision(&handle_before, &path_before) || !path_before.is_file() {
-        return LoadAttempt::Retry(SourceLoadError::ChangedDuringRead);
-    }
-
-    let revision = match revision_from_metadata(&handle_before) {
-        Ok(revision) => revision,
-        Err(source) => return LoadAttempt::Retry(SourceLoadError::Io(source)),
-    };
-    let mut reader = BufReader::new(file);
-    let parsed = parser
-        .parse(&mut reader, ParseContext { source_path: path })
-        .map_err(|error| SourceLoadError::Parse(error.to_string()));
-
-    let handle_after = match reader.get_ref().metadata() {
-        Ok(metadata) => metadata,
-        Err(source) => return LoadAttempt::Retry(SourceLoadError::Io(source)),
-    };
-    let path_after = match fs::metadata(path) {
-        Ok(metadata) => metadata,
-        Err(source) => return LoadAttempt::Retry(SourceLoadError::Io(source)),
-    };
-    if !same_file_and_revision(&handle_before, &handle_after)
-        || !same_file_and_revision(&handle_before, &path_after)
-    {
-        return LoadAttempt::Retry(SourceLoadError::ChangedDuringRead);
-    }
-
-    LoadAttempt::Stable(Box::new(parsed.map(|parsed| (parsed, revision))))
-}
-
-fn revision_from_metadata(metadata: &Metadata) -> io::Result<super::FileRevision> {
-    Ok(super::FileRevision {
-        size: metadata.len(),
-        modified_at: metadata.modified()?,
-    })
-}
-
-fn same_file_and_revision(left: &Metadata, right: &Metadata) -> bool {
-    left.len() == right.len()
-        && left.modified().ok() == right.modified().ok()
-        && same_file_identity(left, right)
-}
-
-fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-
-enum LoadAttempt {
-    Stable(Box<Result<(ParsedSession, super::FileRevision), SourceLoadError>>),
-    Retry(SourceLoadError),
-}
-
-#[derive(Debug)]
-enum SourceLoadError {
-    Io(io::Error),
-    ChangedDuringRead,
-    Parse(String),
-}
-
-impl fmt::Display for SourceLoadError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Io(source) => write!(formatter, "could not read session file: {source}"),
-            Self::ChangedDuringRead => {
-                formatter.write_str("session file kept changing while being read; import deferred")
-            }
-            Self::Parse(source) => write!(formatter, "could not parse session file: {source}"),
-        }
-    }
 }
 
 fn current_timestamp() -> Timestamp {

@@ -2,13 +2,16 @@ use crate::support::TempTree;
 use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::Path;
-use token_tracker::adapters::pi::PiSessionDiscovery;
-use token_tracker::application::UsageStore;
-use token_tracker::application::{DiscoveryReport, SessionDiscovery};
+use token_tracker::adapters::files::{
+    FileDiscoveryReport, FileSessionSource, SessionFileDiscovery,
+};
+use token_tracker::adapters::pi::{PiSessionDiscovery, PiSessionParser};
+use token_tracker::application::{SessionSource, UsageStore};
+
 use token_tracker::domain::{AgentId, Timestamp};
 use token_tracker::storage::SqliteUsageStore;
 
-fn scan(root: &Path) -> DiscoveryReport {
+fn scan(root: &Path) -> FileDiscoveryReport {
     PiSessionDiscovery::new(root).discover().unwrap()
 }
 
@@ -19,11 +22,18 @@ fn skipped_links_preserve_presence_while_readable_files_are_discovered() {
     let project = root.join("project");
     fs::create_dir_all(&project).unwrap();
     fs::write(project.join("session.jsonl"), b"session").unwrap();
-    let agent = AgentId::from("test");
+    let agent = AgentId::from("pi");
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
-    store
-        .record_discovery(&agent, &scan(&root), Timestamp::from_unix_milliseconds(1))
-        .unwrap();
+    let source = FileSessionSource::new(PiSessionDiscovery::new(&root), PiSessionParser::new());
+    let record = |store: &mut SqliteUsageStore, time| {
+        let report = source
+            .discover(&store.source_states(&agent).unwrap())
+            .unwrap();
+        store
+            .record_discovery(&agent, &report, Timestamp::from_unix_milliseconds(time))
+            .unwrap();
+    };
+    record(&mut store, 1);
 
     let target = tree.root.join("outside");
     fs::rename(&project, &target).unwrap();
@@ -54,17 +64,13 @@ fn skipped_links_preserve_presence_while_readable_files_are_discovered() {
     );
     assert_eq!(report.warnings.len(), 5);
     assert_eq!(report, scan(&root));
-    store
-        .record_discovery(&agent, &report, Timestamp::from_unix_milliseconds(2))
-        .unwrap();
+    record(&mut store, 2);
     let states = store.source_states(&agent).unwrap();
     assert_eq!(states.len(), 2);
     assert!(states.iter().all(|source| source.present));
 
     fs::remove_dir_all(&root).unwrap();
-    store
-        .record_discovery(&agent, &scan(&root), Timestamp::from_unix_milliseconds(3))
-        .unwrap();
+    record(&mut store, 3);
     assert!(
         store
             .source_states(&agent)

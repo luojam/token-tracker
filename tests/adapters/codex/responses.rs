@@ -1,7 +1,7 @@
 use super::{parse, tokens};
 use crate::support::prefix;
 use token_tracker::adapters::codex::CodexParseError;
-use token_tracker::application::{ParseCompletion, ParsedSession};
+use token_tracker::application::{SessionData, SnapshotCompletion};
 
 use serde_json::{Value, json};
 use token_tracker::domain::TokenCounts;
@@ -13,7 +13,7 @@ fn response() -> Value {
     serde_json::from_str(RESPONSE.lines().nth(3).unwrap()).unwrap()
 }
 
-fn parse_response(response: &Value) -> Result<ParsedSession, CodexParseError> {
+fn parse_response(response: &Value) -> Result<SessionData, CodexParseError> {
     parse(&format!("{}\n{response}", prefix(RESPONSE, 3)))
 }
 
@@ -53,7 +53,7 @@ fn repeated_responses_and_corrections_keep_original_identity_and_time() {
     let zero = zero.to_string();
     let partial = format!("{source}\n{}", &zero[..zero.len() - 1]);
     let parsed = parse(&partial).unwrap();
-    assert_eq!(parsed.completion, ParseCompletion::IncompleteFinalLine);
+    assert_eq!(parsed.completion, SnapshotCompletion::Partial);
     assert_eq!(parsed.events, corrected.events);
 
     correction["payload"]["usage"]["total_tokens"] = json!(0);

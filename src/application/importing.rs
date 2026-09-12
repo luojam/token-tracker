@@ -15,9 +15,9 @@ impl SessionImport {
         self,
         expected_agent: &AgentId,
     ) -> Result<ValidatedSessionImport, InvalidImport> {
-        if self.parsed.metadata.agent != *expected_agent
+        if self.session.metadata.agent != *expected_agent
             || self
-                .parsed
+                .session
                 .events
                 .iter()
                 .any(|event| event.identity.agent != *expected_agent)
@@ -25,7 +25,7 @@ impl SessionImport {
             return Err(InvalidImport::AgentMismatch);
         }
         let mut events = HashMap::new();
-        for event in &self.parsed.events {
+        for event in &self.session.events {
             if events
                 .insert(&event.identity, event)
                 .is_some_and(|previous| previous != event)
@@ -51,7 +51,7 @@ impl SessionImport {
                 return Err(InvalidImport::BillingUsageMismatch);
             }
         }
-        validate_notices(&self.parsed.notices)?;
+        validate_notices(&self.session.notices)?;
         Ok(ValidatedSessionImport(self))
     }
 }
@@ -74,7 +74,7 @@ pub enum InvalidImport {
 impl fmt::Display for InvalidImport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::AgentMismatch => "parser returned usage for a different agent",
+            Self::AgentMismatch => "source returned usage for a different agent",
             Self::ConflictingEventIdentity => "conflicting usage events with the same identity",
             Self::TokenCountOutOfRange => "token count exceeds the supported integer range",
             Self::BillingUsageMismatch => "invalid billing usage components or totals",

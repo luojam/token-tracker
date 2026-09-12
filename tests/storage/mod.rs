@@ -1,13 +1,12 @@
 use crate::support::TempTree;
 use rusqlite::Connection;
-use std::{
-    path::PathBuf,
-    time::{Duration, UNIX_EPOCH},
-};
+use std::path::PathBuf;
+use token_tracker::adapters::files::{FileSessionSource, file_source_key};
+
 use token_tracker::application::{
-    CommitImportOutcome, DiscoveredSessionFile, DiscoveryCoverage, DiscoveryReport, FileRevision,
-    ImportStats, ParseCompletion, ParseNotice, ParsedSession, SessionImport, UsageReadStore,
-    UsageStore, ValidatedSessionImport,
+    CommitImportOutcome, DiscoveredSource, DiscoveryReport, ImportStats, ParseNotice, SessionData,
+    SessionImport, SnapshotCompletion, SourceRevision, UsageReadStore, UsageStore,
+    ValidatedSessionImport,
 };
 use token_tracker::domain::{
     AgentId, AnthropicBilling, CacheWriteTokens, KnownRequests, ModelAttribution, ParentSession,
@@ -19,15 +18,13 @@ use token_tracker::storage::{SqliteStoreError, SqliteUsageStore};
 fn session_import(path: &str, input_tokens: u64) -> SessionImport {
     SessionImport {
         normalization_version: std::num::NonZeroU32::MIN,
-        source: DiscoveredSessionFile {
-            path: PathBuf::from(path),
-            revision: FileRevision {
-                size: 123,
-                modified_at: UNIX_EPOCH + Duration::new(1_700_000_000, 123),
-            },
+        source: DiscoveredSource {
+            key: file_source_key(std::path::Path::new(path)),
+            path: Some(PathBuf::from(path)),
+            revision: SourceRevision(vec![0, 1, 255]),
         },
         scanned_at: Timestamp::from_unix_milliseconds(1_700_000_001_000),
-        parsed: ParsedSession {
+        session: SessionData {
             metadata: SessionMetadata {
                 agent: AgentId::from("pi"),
                 session_id: format!("session-{path}"),
@@ -62,7 +59,7 @@ fn session_import(path: &str, input_tokens: u64) -> SessionImport {
                     cache_write: 4,
                 })),
             }],
-            completion: ParseCompletion::Complete,
+            completion: SnapshotCompletion::Complete,
             notices: vec![ParseNotice {
                 code: "adapter.notice".into(),
                 message: "incomplete records".into(),
@@ -76,7 +73,7 @@ fn session_import(path: &str, input_tokens: u64) -> SessionImport {
 fn validated(import: &SessionImport) -> ValidatedSessionImport {
     import
         .clone()
-        .validate(&import.parsed.metadata.agent)
+        .validate(&import.session.metadata.agent)
         .unwrap()
 }
 
@@ -93,31 +90,20 @@ fn context(tokens: TokenCounts) -> PricingContext {
     })
 }
 
-fn discovery(files: Vec<DiscoveredSessionFile>) -> DiscoveryReport {
-    DiscoveryReport {
-        files,
-        warnings: vec![],
-        coverage: DiscoveryCoverage {
-            inspected_roots: vec!["/sessions".into()],
-            inaccessible_paths: vec![],
-        },
-    }
-}
-
 #[test]
 fn imports_round_trip_and_corrections_replace_usage_and_billing() {
     let tree = TempTree::new();
     let path = tree.root.join("usage.db");
     let mut store = SqliteUsageStore::open(&path).unwrap();
     let mut import = session_import("/sessions/a.jsonl", i64::MAX as u64);
-    import.source.revision.modified_at = UNIX_EPOCH - Duration::new(1, 250_000_000);
+    import.source.revision = SourceRevision(vec![255, 0, 128]);
     store.commit_import(&validated(&import)).unwrap();
     let snapshot = store.usage_snapshot().unwrap();
     let states = store.source_states(&"pi".into()).unwrap();
-    assert_eq!(snapshot.observations[0].event, import.parsed.events[0]);
+    assert_eq!(snapshot.observations[0].event, import.session.events[0]);
     let last_import = states[0].last_import.as_ref().unwrap();
     assert_eq!(last_import.revision, import.source.revision);
-    assert_eq!(last_import.notices, import.parsed.notices);
+    assert_eq!(last_import.notices, import.session.notices);
     drop(store);
 
     let mut store = SqliteUsageStore::open(&path).unwrap();
@@ -128,9 +114,9 @@ fn imports_round_trip_and_corrections_replace_usage_and_billing() {
         CommitImportOutcome::Applied(ImportStats::default())
     );
 
-    import.parsed.events[0].tokens.input = 20;
+    import.session.events[0].tokens.input = 20;
     assert!(import.clone().validate(&"pi".into()).is_err());
-    import.parsed.events[0].pricing_context = Some(context(import.parsed.events[0].tokens));
+    import.session.events[0].pricing_context = Some(context(import.session.events[0].tokens));
     assert_eq!(
         store.commit_import(&validated(&import)).unwrap(),
         CommitImportOutcome::Applied(ImportStats {
@@ -140,14 +126,14 @@ fn imports_round_trip_and_corrections_replace_usage_and_billing() {
     );
     assert_eq!(
         store.usage_snapshot().unwrap().observations[0].event,
-        import.parsed.events[0]
+        import.session.events[0]
     );
-    import.parsed.events[0].pricing_context = None;
-    import.parsed.notices.clear();
+    import.session.events[0].pricing_context = None;
+    import.session.notices.clear();
     store.commit_import(&validated(&import)).unwrap();
     assert_eq!(
         store.usage_snapshot().unwrap().observations[0].event,
-        import.parsed.events[0]
+        import.session.events[0]
     );
     assert!(
         store.source_states(&"pi".into()).unwrap()[0]
@@ -165,8 +151,8 @@ fn replacing_a_session_preserves_provenance_and_rejects_late_imports() {
     let original = session_import("/sessions/a.jsonl", 10);
     store.commit_import(&validated(&original)).unwrap();
     let mut replacement = session_import("/sessions/a.jsonl", 99);
-    replacement.parsed.metadata.session_id = "replacement".into();
-    replacement.parsed.metadata.parent_session = Some(ParentSession::SessionId("parent".into()));
+    replacement.session.metadata.session_id = "replacement".into();
+    replacement.session.metadata.parent_session = Some(ParentSession::SessionId("parent".into()));
     replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_003_000);
     store.commit_import(&validated(&replacement)).unwrap();
     let snapshot = store.usage_snapshot().unwrap();
@@ -178,7 +164,7 @@ fn replacing_a_session_preserves_provenance_and_rejects_late_imports() {
         .unwrap();
     assert_eq!(
         new_session.parent_session,
-        replacement.parsed.metadata.parent_session
+        replacement.session.metadata.parent_session
     );
     let mut observations: Vec<_> = snapshot
         .observations
@@ -190,7 +176,7 @@ fn replacing_a_session_preserves_provenance_and_rejects_late_imports() {
         observations,
         vec![
             ("replacement", 99),
-            (original.parsed.metadata.session_id.as_str(), 10)
+            (original.session.metadata.session_id.as_str(), 10)
         ]
     );
     let states = store.source_states(&"pi".into()).unwrap();
@@ -207,8 +193,12 @@ fn stale_imports_and_discoveries_cannot_regress_source_state() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     let stale = session_import("/sessions/a.jsonl", 10);
     let now = Timestamp::from_unix_milliseconds(1_700_000_003_000);
+    let discovered = DiscoveryReport {
+        sources: vec![stale.source.clone()],
+        ..DiscoveryReport::default()
+    };
     store
-        .record_discovery(&"pi".into(), &discovery(vec![stale.source.clone()]), now)
+        .record_discovery(&"pi".into(), &discovered, now)
         .unwrap();
     assert_eq!(
         store.commit_import(&validated(&stale)).unwrap(),
@@ -225,16 +215,19 @@ fn stale_imports_and_discoveries_cannot_regress_source_state() {
         CommitImportOutcome::IgnoredStale
     );
     store
-        .record_discovery(&"pi".into(), &discovery(vec![]), now)
+        .record_discovery(
+            &"pi".into(),
+            &DiscoveryReport {
+                missing_sources: vec![stale.source.key.clone()],
+                ..DiscoveryReport::default()
+            },
+            now,
+        )
         .unwrap();
     let states = store.source_states(&"pi".into()).unwrap();
     assert!(!states[0].present);
     store
-        .record_discovery(
-            &"pi".into(),
-            &discovery(vec![stale.source.clone()]),
-            stale.scanned_at,
-        )
+        .record_discovery(&"pi".into(), &discovered, stale.scanned_at)
         .unwrap();
     assert_eq!(store.source_states(&"pi".into()).unwrap(), states);
     assert_eq!(store.usage_snapshot().unwrap(), snapshot);
@@ -251,10 +244,10 @@ fn normalization_failure_rolls_back_usage_billing_and_notices() {
     let states = store.source_states(&"pi".into()).unwrap();
     let mut replacement = session_import("/sessions/a.jsonl", 20);
     replacement.normalization_version = 2.try_into().unwrap();
-    replacement.parsed.notices.clear();
-    let mut additional = replacement.parsed.events[0].clone();
+    replacement.session.notices.clear();
+    let mut additional = replacement.session.events[0].clone();
     additional.identity.adapter_key = "additional-event".into();
-    replacement.parsed.events.push(additional);
+    replacement.session.events.push(additional);
     Connection::open(&path)
         .unwrap()
         .execute_batch(
@@ -280,9 +273,9 @@ fn normalization_changes_preserve_history_from_rewritten_sources() {
 
         let mut replacement = session_import("/sessions/a.jsonl", 20);
         if !reuse_session {
-            replacement.parsed.metadata.session_id = "replacement-session".into();
+            replacement.session.metadata.session_id = "replacement-session".into();
         }
-        replacement.parsed.events[0].identity.adapter_key = "replacement-event".into();
+        replacement.session.events[0].identity.adapter_key = "replacement-event".into();
         replacement.scanned_at = Timestamp::from_unix_milliseconds(1_700_000_002_000);
         store.commit_import(&validated(&replacement)).unwrap();
         let before = store.usage_snapshot().unwrap();
@@ -351,7 +344,7 @@ fn unsupported_schema_is_left_untouched() {
 fn commit_failure_rolls_back_and_stops_reporting() {
     use token_tracker::adapters::pi::{PiSessionDiscovery, PiSessionParser};
     use token_tracker::application::{
-        AllTimeReportError, ImportSynchronizationError, SessionAdapter, run_all_time_report,
+        AllTimeReportError, ImportSynchronizationError, run_all_time_report,
     };
     let tree = TempTree::new();
     tree.write(
@@ -367,7 +360,8 @@ fn commit_failure_rolls_back_and_stops_reporting() {
          BEGIN SELECT RAISE(ABORT, 'storage write failed'); END;",
         )
         .unwrap();
-    let adapter = SessionAdapter::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
+    let adapter =
+        FileSessionSource::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
     assert!(matches!(
         run_all_time_report(&[&adapter], &mut store, vec![]),
         Err(AllTimeReportError::Synchronization(

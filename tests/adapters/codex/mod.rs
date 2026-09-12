@@ -1,3 +1,4 @@
+use token_tracker::adapters::files::{ParseContext, SessionParser};
 mod cache;
 mod context;
 mod discovery;
@@ -12,14 +13,14 @@ use serde_json::{Value, json};
 use std::io::{BufReader, Cursor};
 use std::path::Path;
 use token_tracker::adapters::codex::{CodexParseError, CodexSessionParser};
-use token_tracker::application::{ParseCompletion, ParseContext, ParsedSession, SessionParser};
+use token_tracker::application::{SessionData, SnapshotCompletion};
 use token_tracker::domain::{TokenCounts, UsageKind};
 
-fn parse(source: &str) -> Result<ParsedSession, CodexParseError> {
+fn parse(source: &str) -> Result<SessionData, CodexParseError> {
     parse_bytes(source.as_bytes())
 }
 
-fn parse_bytes(source: &[u8]) -> Result<ParsedSession, CodexParseError> {
+fn parse_bytes(source: &[u8]) -> Result<SessionData, CodexParseError> {
     CodexSessionParser::new().parse(
         &mut BufReader::with_capacity(1, Cursor::new(source)),
         ParseContext {
@@ -28,7 +29,7 @@ fn parse_bytes(source: &[u8]) -> Result<ParsedSession, CodexParseError> {
     )
 }
 
-fn parse_records(records: &[Value]) -> Result<ParsedSession, CodexParseError> {
+fn parse_records(records: &[Value]) -> Result<SessionData, CodexParseError> {
     parse(&jsonl(records))
 }
 
@@ -67,7 +68,7 @@ fn fixtures_and_prefixes_preserve_accounting() {
             .collect();
         assert_eq!(json!(actual), expected["events"], "{name}");
         assert_eq!(
-            parsed.completion == ParseCompletion::Complete,
+            parsed.completion == SnapshotCompletion::Complete,
             expected["completion"] == "complete",
             "{name}"
         );

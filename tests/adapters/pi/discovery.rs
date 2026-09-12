@@ -1,8 +1,8 @@
 use crate::support::TempTree;
 use std::env;
 use std::fs;
+use token_tracker::adapters::files::SessionFileDiscovery;
 use token_tracker::adapters::pi::{PiDiscoveryError, PiSessionDiscovery};
-use token_tracker::application::SessionDiscovery;
 
 #[test]
 fn discovery_rejects_an_empty_root() {
