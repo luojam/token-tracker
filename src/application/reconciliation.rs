@@ -5,15 +5,19 @@ use std::fmt;
 use std::path::PathBuf;
 
 use super::{SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot};
-use crate::domain::{
-    AgentId, ParentSession, RecordedCost, SummaryBreakdown, SummaryGroup, SummaryTotals, Timestamp,
-    TokenCounts, UsageEventIdentity, UsageSummary,
-};
+use crate::domain::{ParentSession, Timestamp, UsageEventIdentity, UsageSummary};
 
 /// Counts each event once, preferring ancestors, then session start, ID, and normalized path.
 /// Missing files retain precedence; scan and import order do not affect selection.
 pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, SummaryError> {
-    summarize_canonical_usage(&select_canonical_usage(snapshot)?)
+    let canonical = select_canonical_usage(snapshot)?;
+    super::reporting::summarize_canonical_usage(
+        canonical.session_count,
+        canonical
+            .observations
+            .iter()
+            .map(|observation| &observation.event),
+    )
 }
 
 struct CanonicalUsage<'a> {
@@ -54,50 +58,6 @@ fn select_canonical_usage(snapshot: &UsageSnapshot) -> Result<CanonicalUsage<'_>
     Ok(CanonicalUsage {
         session_count: count(session_count)?,
         observations,
-    })
-}
-
-fn summarize_canonical_usage(canonical: &CanonicalUsage<'_>) -> Result<UsageSummary, SummaryError> {
-    let mut totals = SummaryTotals {
-        session_count: canonical.session_count,
-        unique_usage_event_count: count(canonical.observations.len())?,
-        ..SummaryTotals::default()
-    };
-    let mut breakdown = BTreeMap::<(AgentId, SummaryGroup), SummaryBreakdown>::new();
-    for observation in &canonical.observations {
-        let event = &observation.event;
-        totals.tokens = add_tokens(totals.tokens, event.tokens)?;
-        add_cost(&mut totals.recorded_cost, event.recorded_cost)?;
-        let group = match &event.attribution {
-            Some(attribution) => SummaryGroup::ProviderModel(attribution.clone()),
-            None => SummaryGroup::Unattributed(event.kind),
-        };
-        let row = breakdown
-            .entry((event.identity.agent.clone(), group.clone()))
-            .or_insert(SummaryBreakdown {
-                agent: event.identity.agent.clone(),
-                group: group.clone(),
-                tokens: TokenCounts::default(),
-                recorded_cost: None,
-                unique_usage_event_count: 0,
-            });
-        row.tokens = add_tokens(row.tokens, event.tokens)?;
-        add_cost(&mut row.recorded_cost, event.recorded_cost)?;
-        row.unique_usage_event_count = row
-            .unique_usage_event_count
-            .checked_add(1)
-            .ok_or(SummaryError::Overflow("event count"))?;
-    }
-    let estimates = crate::pricing::summarize_estimates(
-        canonical
-            .observations
-            .iter()
-            .map(|observation| &observation.event),
-    );
-    Ok(UsageSummary {
-        totals,
-        breakdown: breakdown.into_values().collect(),
-        estimates,
     })
 }
 
@@ -191,27 +151,6 @@ fn fallback_key(session: &SessionProvenance) -> (Timestamp, &str, OsString) {
 
 fn count(value: usize) -> Result<u64, SummaryError> {
     u64::try_from(value).map_err(|_| SummaryError::Overflow("count"))
-}
-
-fn add_tokens(current: TokenCounts, value: TokenCounts) -> Result<TokenCounts, SummaryError> {
-    current
-        .checked_add(value)
-        .ok_or(SummaryError::Overflow("token total"))
-}
-
-fn add_cost(
-    current: &mut Option<RecordedCost>,
-    value: Option<RecordedCost>,
-) -> Result<(), SummaryError> {
-    if let Some(value) = value {
-        *current = Some(match *current {
-            Some(current) => current
-                .checked_add(value)
-                .map_err(|_| SummaryError::Overflow("recorded cost"))?,
-            None => value,
-        });
-    }
-    Ok(())
 }
 
 #[derive(Debug)]

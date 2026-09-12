@@ -2,7 +2,10 @@ use std::fmt::Write;
 
 use crate::adapters::registry::display_label;
 use crate::application::{CostAmount, CostTotal, ImportWarning, UsageReport};
-use crate::domain::{ModelAttribution, SummaryGroup, UsageKind};
+use crate::domain::{
+    EstimateTotals, EstimateUnavailableReason, ModelAttribution, ServiceTier, SummaryGroup,
+    UsageKind,
+};
 
 pub fn render_terminal_report(report: &UsageReport, warnings: &[ImportWarning]) -> String {
     let mut output = String::new();
@@ -105,6 +108,8 @@ pub fn render_terminal_report(report: &UsageReport, warnings: &[ImportWarning]) 
         }
     }
 
+    render_estimate_diagnostics(&mut output, &totals.estimates);
+
     if !warnings.is_empty() {
         let mut warnings = warnings.iter().collect::<Vec<_>>();
         warnings.sort_by(|left, right| {
@@ -130,6 +135,96 @@ pub fn render_terminal_report(report: &UsageReport, warnings: &[ImportWarning]) 
     }
 
     output
+}
+
+fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) {
+    if estimates.imported_event_count == 0 {
+        return;
+    }
+    writeln!(output).unwrap();
+    writeln!(output, "Cost estimates:").unwrap();
+    writeln!(
+        output,
+        "- Priced events: {} / {} without recorded cost",
+        format_integer(estimates.priced_event_count),
+        format_integer(estimates.imported_event_count)
+    )
+    .unwrap();
+    for (label, count) in [
+        (
+            "Tier from requested settings",
+            estimates.requested_setting_event_count,
+        ),
+        (
+            "Tier from served responses",
+            estimates.served_response_event_count,
+        ),
+        (
+            "Assumed standard tier",
+            estimates.assumed_standard_event_count,
+        ),
+        (
+            "Assumed cache writes priced as input",
+            estimates.assumed_cache_write_event_count,
+        ),
+    ] {
+        if count > 0 {
+            writeln!(output, "- {label}: {} events", format_integer(count)).unwrap();
+        }
+    }
+    if estimates.requested_setting_event_count > 0 {
+        writeln!(
+            output,
+            "- Requested settings do not confirm the served tier."
+        )
+        .unwrap();
+    }
+    for (tier, count) in &estimates.tier_event_counts {
+        let tier = match tier {
+            ServiceTier::Standard => "standard".into(),
+            ServiceTier::Fast => "fast".into(),
+            ServiceTier::Unknown => "unknown".into(),
+            ServiceTier::Unsupported(value) => one_line(value),
+        };
+        writeln!(
+            output,
+            "- Priced tier {tier}: {} events",
+            format_integer(*count)
+        )
+        .unwrap();
+    }
+    for (reason, count) in &estimates.unavailable_reasons {
+        let label = match reason {
+            EstimateUnavailableReason::MissingPricingContext => "missing pricing context",
+            EstimateUnavailableReason::UnknownAttribution => "unknown attribution",
+            EstimateUnavailableReason::UnsupportedProvider => "unsupported provider",
+            EstimateUnavailableReason::UnsupportedModel => "unsupported model",
+            EstimateUnavailableReason::UnknownTier => "unknown tier",
+            EstimateUnavailableReason::UnsupportedTier => "unsupported tier",
+            EstimateUnavailableReason::UnknownSpeed => "unknown speed",
+            EstimateUnavailableReason::UnsupportedSpeed => "unsupported speed",
+            EstimateUnavailableReason::InvalidUsageBreakdown => "invalid usage breakdown",
+            EstimateUnavailableReason::UnknownRequestGranularity => "unknown request granularity",
+            EstimateUnavailableReason::UnsupportedContextBand => "unsupported context band",
+            EstimateUnavailableReason::IncompleteCacheDetail => "incomplete cache detail",
+            EstimateUnavailableReason::ArithmeticOverflow => "arithmetic overflow",
+        };
+        writeln!(
+            output,
+            "- Unpriced ({label}): {} events",
+            format_integer(*count)
+        )
+        .unwrap();
+    }
+    for (snapshot, date) in &estimates.rate_snapshots {
+        writeln!(
+            output,
+            "- Rates: {} ({})",
+            one_line(snapshot),
+            one_line(date)
+        )
+        .unwrap();
+    }
 }
 
 fn render_table_row(output: &mut String, cells: &[String; 8], widths: &[usize; 8]) {

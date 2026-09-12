@@ -7,9 +7,9 @@ use token_tracker::application::{
     UsageSnapshot, build_usage_report, summarize_usage,
 };
 use token_tracker::domain::{
-    AgentId, AnthropicBilling, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution,
-    OpenAiBilling, PricingContext, RecordedCost, RequestBreakdown, ServiceSpeed, ServiceTier,
-    TierEvidence, Timestamp, TokenCounts, UsageEvent,
+    AnthropicBilling, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, OpenAiBilling,
+    PricingContext, RecordedCost, RequestBreakdown, ServiceSpeed, ServiceTier, TierEvidence,
+    Timestamp, TokenCounts, UsageEvent,
 };
 
 fn oracle_event() -> UsageEvent {
@@ -79,12 +79,15 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     let mut missing_speed = oracle.clone();
     missing_speed.identity.adapter_key = "missing-speed".into();
     facts(&mut missing_speed).speed = ServiceSpeed::Unknown;
+    let mut recorded = oracle.clone();
+    recorded.identity.adapter_key = "recorded".into();
+    recorded.recorded_cost = Some(RecordedCost::from_usd(1.0).unwrap());
     let mut snapshot = UsageSnapshot::default();
     add_session(
         &mut snapshot,
         "claude",
         "main",
-        vec![oracle.clone(), missing_speed],
+        vec![oracle.clone(), missing_speed, recorded],
     );
     let mut conflicting = oracle.clone();
     facts(&mut conflicting).speed = ServiceSpeed::Fast;
@@ -116,23 +119,20 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     add_session(&mut snapshot, "codex", "main", vec![codex, unsupported]);
 
     let summary = summarize_usage(&snapshot).unwrap();
-    assert_eq!(summary.estimates.len(), 2);
-    for (agent, cost) in [("claude", 887_500_000), ("codex", 112_500_000)] {
-        let totals = &summary.estimates[&AgentId::from(agent)].totals;
-        assert_eq!(totals.imported_event_count, 2);
-        assert_eq!(totals.priced_event_count, 1);
-        assert_eq!(
-            totals.cost,
-            EstimateTotal::Available(EstimatedCost::from_picodollars(cost))
-        );
+    assert_eq!(summary.totals.estimates.imported_event_count, 4);
+    assert_eq!(summary.totals.estimates.priced_event_count, 2);
+    let usage_report = build_usage_report(&summary);
+    assert_eq!(usage_report.totals.estimates, summary.totals.estimates);
+    for (row, source) in usage_report.rows.iter().zip(&summary.breakdown) {
+        assert_eq!(row.estimates, source.estimates);
     }
-    let report = render_terminal_report(&build_usage_report(&summary), &[]);
+    let report = render_terminal_report(&usage_report, &[]);
     assert!(
-        report.contains("Total cost: $1.001000 (partial)\n"),
+        report.contains("Total cost: $2.001000 (partial)\n"),
         "{report}"
     );
     for (agent, model, expected) in [
-        ("Claude Code", "claude-opus-5", "$0.000888 (partial)"),
+        ("Claude Code", "claude-opus-5", "$1.000887 (partial)"),
         ("Codex", "claude-opus-5", "unavailable"),
         ("Pi", "claude-opus-5", "$1.000000"),
         ("Codex", "gpt-6-astra", "$0.000113"),
@@ -172,18 +172,24 @@ fn pricing_follows_billing_provider_for_any_agent_and_retains_all_rate_versions(
         vec![anthropic, openai, unknown],
     );
     let summary = summarize_usage(&snapshot).unwrap();
-    let estimate = &summary.estimates[&AgentId::from("another-agent")];
-    assert_eq!(estimate.totals.imported_event_count, 3);
-    assert_eq!(estimate.totals.priced_event_count, 2);
+    let estimate = &summary.totals.estimates;
+    assert_eq!(estimate.imported_event_count, 3);
+    assert_eq!(estimate.priced_event_count, 2);
     assert_eq!(
-        estimate.totals.cost,
+        estimate.cost,
         EstimateTotal::Available(EstimatedCost::from_picodollars(2_587_500_000))
     );
     assert_eq!(
-        estimate.totals.unavailable_reasons
+        estimate.unavailable_reasons
             [&token_tracker::domain::EstimateUnavailableReason::UnsupportedProvider],
         1
     );
+    let report = render_terminal_report(&build_usage_report(&summary), &[]);
+    assert!(report.contains("- Priced events: 2 / 3 without recorded cost\n"));
+    assert!(report.contains("- Unpriced (unsupported provider): 1 events\n"));
+    for (snapshot, date) in &estimate.rate_snapshots {
+        assert!(report.contains(&format!("- Rates: {snapshot} ({date})\n")));
+    }
     assert_eq!(estimate.rate_snapshots.len(), 2);
     assert!(
         estimate
@@ -205,8 +211,10 @@ fn missing_pricing_facts_still_count_toward_coverage() {
     missing.identity.adapter_key = "missing".into();
     missing.pricing_context = None;
     missing.attribution = None;
-    let summary = token_tracker::pricing::summarize_estimates([&priced, &missing]);
-    let totals = &summary[&priced.identity.agent].totals;
+    let mut snapshot = UsageSnapshot::default();
+    add_session(&mut snapshot, "claude", "main", vec![priced, missing]);
+    let summary = summarize_usage(&snapshot).unwrap();
+    let totals = &summary.totals.estimates;
     assert_eq!(
         (totals.imported_event_count, totals.priced_event_count),
         (2, 1)

@@ -17,6 +17,10 @@ Pi usage:
   Unattributed tool results          1       1           1            1      4       1  unavailable
   Unattributed branch summaries      5       6           7            8     26       1    $0.500000
 
+Cost estimates:
+- Priced events: 0 / 1 without recorded cost
+- Unpriced (missing pricing context): 1 events
+
 Warnings (2):
 - discovery warning
 - /sessions/z-bad.jsonl: could not parse

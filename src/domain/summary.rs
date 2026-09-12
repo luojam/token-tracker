@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 pub struct SummaryTotals {
     pub tokens: TokenCounts,
     pub recorded_cost: Option<RecordedCost>,
+    pub estimates: EstimateTotals,
     pub session_count: u64,
     pub unique_usage_event_count: u64,
 }
@@ -23,6 +24,7 @@ pub struct SummaryBreakdown {
     pub group: SummaryGroup,
     pub tokens: TokenCounts,
     pub recorded_cost: Option<RecordedCost>,
+    pub estimates: EstimateTotals,
     pub unique_usage_event_count: u64,
 }
 
@@ -73,23 +75,10 @@ pub struct EstimateTotals {
     pub assumed_cache_write_event_count: u64,
     /// Each unpriced event contributes to exactly one reason.
     pub unavailable_reasons: BTreeMap<EstimateUnavailableReason, u64>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EstimateBreakdown {
-    pub group: SummaryGroup,
-    /// Normalized service tier; speed is a separate billing input.
-    pub tier: ServiceTier,
-    pub totals: EstimateTotals,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct EstimateSummary {
+    /// Normalized tiers for priced events.
+    pub tier_event_counts: BTreeMap<ServiceTier, u64>,
     /// Price snapshot IDs and their dates (YYYY-MM-DD).
     pub rate_snapshots: BTreeMap<String, String>,
-    pub totals: EstimateTotals,
-    /// Ordered by group, then tier.
-    pub breakdown: Vec<EstimateBreakdown>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -97,5 +86,4 @@ pub struct UsageSummary {
     pub totals: SummaryTotals,
     /// Ordered by agent, then group.
     pub breakdown: Vec<SummaryBreakdown>,
-    pub estimates: BTreeMap<AgentId, EstimateSummary>,
 }

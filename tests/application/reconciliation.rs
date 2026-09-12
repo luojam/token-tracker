@@ -223,39 +223,47 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     data.sessions.reverse();
     data.observations.reverse();
     assert_eq!(summarize_usage(&data).unwrap(), summary);
-    let estimate = summary.estimates[&AgentId::from("codex")].clone();
+    let estimate = &summary
+        .breakdown
+        .iter()
+        .find(|row| {
+            row.agent.as_str() == "codex"
+                && row.group == token_tracker::domain::SummaryGroup::ProviderModel(model.clone())
+        })
+        .unwrap()
+        .estimates;
     assert_eq!(summary.totals.tokens.input, 27);
     assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 0.5);
-    assert_eq!(summary.estimates[&"pi".into()].totals.imported_event_count, 1);
+    assert_eq!(summary.totals.estimates.imported_event_count, 3);
     let report = render_terminal_report(&build_usage_report(&summary), &[]);
     assert!(report.contains("Total cost: $0.500395 (partial)\n"));
-    assert_eq!(estimate.totals.imported_event_count, 2);
-    assert_eq!(estimate.totals.priced_event_count, 2);
-    assert_eq!(estimate.totals.requested_setting_event_count, 0);
-    assert_eq!(estimate.totals.served_response_event_count, 1);
-    assert_eq!(estimate.totals.assumed_standard_event_count, 1);
-    assert_eq!(estimate.totals.assumed_cache_write_event_count, 1);
+    assert_eq!(estimate.imported_event_count, 2);
+    assert_eq!(estimate.priced_event_count, 2);
+    assert_eq!(estimate.requested_setting_event_count, 0);
+    assert_eq!(estimate.served_response_event_count, 1);
+    assert_eq!(estimate.assumed_standard_event_count, 1);
+    assert_eq!(estimate.assumed_cache_write_event_count, 1);
     assert_eq!(
-        estimate.breakdown[0].totals.assumed_cache_write_event_count,
-        1
-    );
-    assert_eq!(estimate.breakdown[0].totals.assumed_standard_event_count, 1);
-    assert_eq!(
-        estimate.totals.cost,
+        estimate.cost,
         EstimateTotal::Available(EstimatedCost::from_picodollars(395_000_000))
     );
     assert_eq!(
-        estimate.totals.unavailable_reasons,
+        estimate.unavailable_reasons,
         std::collections::BTreeMap::new()
     );
     assert_eq!(
-        estimate
-            .breakdown
-            .iter()
-            .map(|row| (&row.tier, row.totals.priced_event_count))
-            .collect::<Vec<_>>(),
-        vec![(&ServiceTier::Standard, 1), (&ServiceTier::Fast, 1)]
+        estimate.tier_event_counts,
+        std::collections::BTreeMap::from([(ServiceTier::Standard, 1), (ServiceTier::Fast, 1)])
     );
+    for diagnostic in [
+        "- Tier from served responses: 1 events",
+        "- Assumed standard tier: 1 events",
+        "- Assumed cache writes priced as input: 1 events",
+        "- Priced tier standard: 1 events",
+        "- Priced tier fast: 1 events",
+    ] {
+        assert!(report.contains(diagnostic), "{report}");
+    }
 }
 
 #[test]
