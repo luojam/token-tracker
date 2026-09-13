@@ -47,22 +47,20 @@ pub(super) fn upsert_imported_source(
             last_parse_completion = excluded.last_parse_completion,
             parse_notices = excluded.parse_notices,
             normalization_version = excluded.normalization_version,
-            present = 1",
+            present = 1
+         RETURNING id",
         )?
-        .execute(params![
-            import.source.key.0,
-            import.source.path.as_deref().map(encode_path),
-            import.session.metadata.agent.as_str(),
-            import.source.revision.0,
-            import.scanned_at.as_unix_milliseconds(),
-            completion_to_str(import.session.completion),
-            parse_notices::encode(&import.session.notices)?,
-            import.normalization_version.get()
-        ])?;
-    transaction
-        .prepare_cached("SELECT id FROM import_sources WHERE source_key = ?1 AND agent = ?2")?
         .query_row(
-            params![import.source.key.0, import.session.metadata.agent.as_str()],
+            params![
+                import.source.key.0,
+                import.source.path.as_deref().map(encode_path),
+                import.session.metadata.agent.as_str(),
+                import.source.revision.0,
+                import.scanned_at.as_unix_milliseconds(),
+                completion_to_str(import.session.completion),
+                parse_notices::encode(&import.session.notices)?,
+                import.normalization_version.get()
+            ],
             |row| row.get(0),
         )
         .map_err(Into::into)
@@ -84,21 +82,14 @@ pub(super) fn upsert_source_session(
             started_at_ms = excluded.started_at_ms,
             name = excluded.name,
             parent_session = excluded.parent_session,
-            parent_kind = excluded.parent_kind",
-    )?.execute(
+            parent_kind = excluded.parent_kind
+         RETURNING id",
+    )?.query_row(
         params![source_id, metadata.agent.as_str(), metadata.session_id,
             metadata.working_directory.as_deref().map(encode_path), metadata.started_at.as_unix_milliseconds(),
             metadata.name, parent_value, parent_kind],
-    )?;
-    transaction
-        .prepare_cached(
-            "SELECT id FROM sessions WHERE source_id = ?1 AND agent = ?2 AND session_id = ?3",
-        )?
-        .query_row(
-            params![source_id, metadata.agent.as_str(), metadata.session_id],
-            |row| row.get(0),
-        )
-        .map_err(Into::into)
+        |row| row.get(0),
+    ).map_err(Into::into)
 }
 
 pub(super) fn import_is_stale(
