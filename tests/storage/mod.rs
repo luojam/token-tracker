@@ -130,7 +130,13 @@ fn imports_round_trip_and_corrections_replace_usage_and_billing() {
     );
     import.session.events[0].pricing_context = None;
     import.session.notices.clear();
-    store.commit_import(&validated(&import)).unwrap();
+    assert_eq!(
+        store.commit_import(&validated(&import)).unwrap(),
+        CommitImportOutcome::Applied(ImportStats {
+            observations_updated: 1,
+            ..ImportStats::default()
+        })
+    );
     assert_eq!(
         store.usage_snapshot().unwrap().observations[0].event,
         import.session.events[0]
@@ -293,8 +299,8 @@ fn corrupt_state_is_rejected_without_exposing_contents() {
     for sql in [
         "UPDATE import_sources SET last_successful_scan_ms = NULL",
         "UPDATE import_sources SET parse_notices = '[{\"code\":\"PRIVATE\",\"message\":\"PRIVATE\",\"count\":0}]'",
-        "UPDATE billing_inputs SET facts = '{\"PRIVATE\":42}'",
-        "UPDATE billing_inputs SET facts = json_set(facts, '$.anthropic.requests.known_requests[0].input', 999)",
+        "UPDATE usage_observations SET billing_facts = '{\"PRIVATE\":42}'",
+        "UPDATE usage_observations SET billing_facts = json_set(billing_facts, '$.anthropic.requests.known_requests[0].input', 999)",
     ] {
         let tree = TempTree::new();
         let path = tree.root.join("usage.db");
@@ -309,7 +315,7 @@ fn corrupt_state_is_rejected_without_exposing_contents() {
                 .unwrap();
         }
         connection.execute(sql, []).unwrap();
-        let error = if sql.contains("billing_inputs") {
+        let error = if sql.contains("billing_facts") {
             store.usage_snapshot().unwrap_err()
         } else {
             store.source_states(&"pi".into()).unwrap_err()

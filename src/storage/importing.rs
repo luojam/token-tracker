@@ -1,6 +1,6 @@
 use super::{
-    SqliteStoreError, attribution_parts, billing, completion_to_str, encode_parent, encode_path,
-    encode_u64, parse_notices, usage_kind_to_str,
+    SqliteStoreError, attribution_parts, completion_to_str, encode_parent, encode_path, encode_u64,
+    parse_notices, usage_kind_to_str,
 };
 use crate::application::SessionImport;
 use crate::domain::{RecordedCost, UsageEvent};
@@ -116,14 +116,15 @@ pub(super) fn insert_observation(
     source_session_id: i64,
     event_id: i64,
     event: &UsageEvent,
+    billing_facts: Option<&str>,
 ) -> Result<bool, SqliteStoreError> {
     let (provider, model) = attribution_parts(event);
     let inserted = transaction
         .prepare_cached(
             "INSERT INTO usage_observations (
             source_id, source_session_id, event_id, timestamp_ms, usage_kind, provider, model,
-            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, recorded_cost_usd
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, recorded_cost_usd, billing_facts
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(source_session_id, event_id) DO NOTHING",
         )?
         .execute(params![
@@ -138,12 +139,10 @@ pub(super) fn insert_observation(
             encode_u64(event.tokens.output)?,
             encode_u64(event.tokens.cache_read)?,
             encode_u64(event.tokens.cache_write)?,
-            event.recorded_cost.map(RecordedCost::as_usd)
+            event.recorded_cost.map(RecordedCost::as_usd),
+            billing_facts
         ])?
         == 1;
-    if inserted {
-        write_billing(transaction, source_session_id, event_id, event)?;
-    }
     Ok(inserted)
 }
 
@@ -153,44 +152,21 @@ pub(super) fn update_observation(
     source_session_id: i64,
     event_id: i64,
     event: &UsageEvent,
+    billing_facts: Option<&str>,
 ) -> Result<usize, SqliteStoreError> {
     let (provider, model) = attribution_parts(event);
-    let changed = transaction.prepare_cached(
+    transaction.prepare_cached(
         "UPDATE usage_observations SET timestamp_ms = ?1, usage_kind = ?2, provider = ?3, model = ?4,
             input_tokens = ?5, output_tokens = ?6, cache_read_tokens = ?7, cache_write_tokens = ?8,
-            recorded_cost_usd = ?9
-         WHERE source_id = ?10 AND source_session_id = ?11 AND event_id = ?12
+            recorded_cost_usd = ?9, billing_facts = ?10
+         WHERE source_id = ?11 AND source_session_id = ?12 AND event_id = ?13
            AND (timestamp_ms IS NOT ?1 OR usage_kind IS NOT ?2 OR provider IS NOT ?3 OR model IS NOT ?4
                 OR input_tokens IS NOT ?5 OR output_tokens IS NOT ?6 OR cache_read_tokens IS NOT ?7
-                OR cache_write_tokens IS NOT ?8 OR recorded_cost_usd IS NOT ?9)",
+                OR cache_write_tokens IS NOT ?8 OR recorded_cost_usd IS NOT ?9 OR billing_facts IS NOT ?10)",
     )?.execute(
         params![event.timestamp.as_unix_milliseconds(), usage_kind_to_str(event.kind), provider, model,
             encode_u64(event.tokens.input)?, encode_u64(event.tokens.output)?, encode_u64(event.tokens.cache_read)?,
-            encode_u64(event.tokens.cache_write)?, event.recorded_cost.map(RecordedCost::as_usd), source_id, source_session_id, event_id],
-    )?;
-    let billing_changed = write_billing(transaction, source_session_id, event_id, event)?;
-    Ok(usize::from(changed > 0 || billing_changed))
-}
-
-fn write_billing(
-    transaction: &Transaction<'_>,
-    session: i64,
-    event: i64,
-    usage: &UsageEvent,
-) -> Result<bool, SqliteStoreError> {
-    let changed = match billing::encode(usage.pricing_context.as_ref())? {
-        Some(facts) => transaction.prepare_cached(
-            "INSERT INTO billing_inputs (source_session_id, event_id, facts) VALUES (?1, ?2, ?3)
-             ON CONFLICT(source_session_id, event_id) DO UPDATE SET facts = excluded.facts
-             WHERE facts IS NOT excluded.facts",
-        )?.execute(
-            params![session, event, facts],
-        )?,
-        None => transaction.prepare_cached(
-            "DELETE FROM billing_inputs WHERE source_session_id = ?1 AND event_id = ?2",
-        )?.execute(
-            params![session, event],
-        )?,
-    };
-    Ok(changed > 0)
+            encode_u64(event.tokens.cache_write)?, event.recorded_cost.map(RecordedCost::as_usd), billing_facts,
+            source_id, source_session_id, event_id],
+    ).map_err(Into::into)
 }

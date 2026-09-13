@@ -44,11 +44,9 @@ pub(super) fn load_stored_observations(
         "SELECT event.agent, event.adapter_key, observation.source_session_id, observation.usage_kind,
                 observation.provider, observation.model, observation.input_tokens, observation.output_tokens,
                 observation.cache_read_tokens, observation.cache_write_tokens, observation.recorded_cost_usd,
-                observation.timestamp_ms, billing.facts
+                observation.timestamp_ms, observation.billing_facts
          FROM usage_observations observation
-         JOIN usage_events event ON event.id = observation.event_id
-         LEFT JOIN billing_inputs billing ON billing.source_session_id = observation.source_session_id
-                                         AND billing.event_id = observation.event_id")?;
+         JOIN usage_events event ON event.id = observation.event_id")?;
     let mut rows = statement.query([])?;
     let mut observations = Vec::new();
     while let Some(row) = rows.next()? {

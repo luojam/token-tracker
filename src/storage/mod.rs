@@ -191,8 +191,15 @@ impl UsageStore for SqliteUsageStore {
                     |row| row.get(0),
                 )?;
 
-            let inserted =
-                insert_observation(&transaction, source_id, source_session_id, event_id, event)?;
+            let billing_facts = billing::encode(event.pricing_context.as_ref())?;
+            let inserted = insert_observation(
+                &transaction,
+                source_id,
+                source_session_id,
+                event_id,
+                event,
+                billing_facts.as_deref(),
+            )?;
             if inserted {
                 stats.observations_inserted += 1;
             } else {
@@ -202,6 +209,7 @@ impl UsageStore for SqliteUsageStore {
                     source_session_id,
                     event_id,
                     event,
+                    billing_facts.as_deref(),
                 )? as u64;
             }
         }

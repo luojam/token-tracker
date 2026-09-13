@@ -58,6 +58,7 @@ CREATE TABLE usage_observations (
     cache_read_tokens INTEGER NOT NULL CHECK (cache_read_tokens >= 0),
     cache_write_tokens INTEGER NOT NULL CHECK (cache_write_tokens >= 0),
     recorded_cost_usd REAL,
+    billing_facts TEXT CHECK (billing_facts IS NULL OR json_valid(billing_facts)),
     PRIMARY KEY (source_session_id, event_id),
     FOREIGN KEY (source_session_id, source_id) REFERENCES sessions(id, source_id),
     CHECK ((provider IS NULL) = (model IS NULL)),
@@ -66,12 +67,3 @@ CREATE TABLE usage_observations (
 
 CREATE INDEX sessions_identity ON sessions(agent, session_id);
 CREATE INDEX usage_observations_event ON usage_observations(event_id);
-
-CREATE TABLE billing_inputs (
-    source_session_id INTEGER NOT NULL,
-    event_id INTEGER NOT NULL,
-    facts TEXT NOT NULL CHECK (json_valid(facts)),
-    PRIMARY KEY (source_session_id, event_id),
-    FOREIGN KEY (source_session_id, event_id)
-        REFERENCES usage_observations(source_session_id, event_id)
-);
