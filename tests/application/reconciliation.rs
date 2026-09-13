@@ -163,6 +163,7 @@ fn summary_reconciles_and_renders_independently_of_observation_order() {
                     message: "discovery warning".into(),
                 },
             ],
+            &[("pi", "Pi")],
         ),
         include_str!("../fixtures/all_time_report.txt")
     );
@@ -236,7 +237,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     assert_eq!(summary.totals.tokens.input, 27);
     assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 0.5);
     assert_eq!(summary.totals.estimates.imported_event_count, 3);
-    let report = render_terminal_report(&build_usage_report(&summary), &[]);
+    let report = render_terminal_report(&build_usage_report(&summary), &[], &[]);
     assert!(report.contains("Total cost: $0.500395 (partial)\n"));
     assert_eq!(estimate.imported_event_count, 2);
     assert_eq!(estimate.priced_event_count, 2);

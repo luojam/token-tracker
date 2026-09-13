@@ -128,7 +128,11 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     for (row, source) in usage_report.rows.iter().zip(&summary.breakdown) {
         assert_eq!(row.estimates, source.estimates);
     }
-    let report = render_terminal_report(&usage_report, &[]);
+    let report = render_terminal_report(
+        &usage_report,
+        &[],
+        &[("claude", "Claude Code"), ("codex", "Codex"), ("pi", "Pi")],
+    );
     assert!(
         report.contains("Total cost: $2.001000 (partial)\n"),
         "{report}"
@@ -186,7 +190,8 @@ fn pricing_follows_billing_provider_for_any_agent_and_retains_all_rate_versions(
             [&token_tracker::domain::EstimateUnavailableReason::UnsupportedProvider],
         1
     );
-    let report = render_terminal_report(&build_usage_report(&summary), &[]);
+    let report = render_terminal_report(&build_usage_report(&summary), &[], &[]);
+    assert!(report.contains("another-agent usage:\n"));
     assert!(report.contains("- Priced events: 2 / 3 without recorded cost\n"));
     assert!(report.contains("- Unpriced (unsupported provider): 1 events\n"));
     for (snapshot, date) in &estimate.rate_snapshots {

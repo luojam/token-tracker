@@ -1,13 +1,16 @@
 use std::fmt::Write;
 
-use crate::adapters::registry::display_label;
 use crate::application::{CostAmount, CostTotal, ImportWarning, UsageReport};
 use crate::domain::{
     EstimateTotals, EstimateUnavailableReason, ModelAttribution, ServiceTier, SummaryGroup,
     UsageKind,
 };
 
-pub fn render_terminal_report(report: &UsageReport, warnings: &[ImportWarning]) -> String {
+pub fn render_terminal_report(
+    report: &UsageReport,
+    warnings: &[ImportWarning],
+    agent_labels: &[(&str, &str)],
+) -> String {
     let mut output = String::new();
     let totals = &report.totals;
 
@@ -98,7 +101,11 @@ pub fn render_terminal_report(report: &UsageReport, warnings: &[ImportWarning]) 
         let mut previous_agent = None;
         for (agent, cells) in &rows {
             if previous_agent != Some(agent) {
-                let label = one_line(display_label(agent.as_str()));
+                let label = agent_labels
+                    .iter()
+                    .find(|(id, _)| *id == agent.as_str())
+                    .map_or(agent.as_str(), |(_, label)| *label);
+                let label = one_line(label);
                 writeln!(output).unwrap();
                 writeln!(output, "{label} usage:").unwrap();
                 render_table_row(&mut output, &headers, &widths);

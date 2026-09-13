@@ -47,6 +47,7 @@ fn cost_states_stay_distinct_without_hiding_import_warnings() {
                 path: None,
                 message: "could not parse".into(),
             }],
+            &[],
         );
         assert!(report.contains(&format!("Total cost: {label}\n")));
         assert!(!report.contains("(partial)"));
@@ -80,7 +81,12 @@ fn estimate_labels_escape_source_control_characters() {
         estimates: summary.totals.estimates.clone(),
         unique_usage_event_count: 1,
     });
-    let report = render_terminal_report(&build_usage_report(&summary), &[]);
+    let report = render_terminal_report(
+        &build_usage_report(&summary),
+        &[],
+        &[("codex", "Custom\nlabel")],
+    );
+    assert!(report.contains("Custom\\nlabel usage:\n"));
     assert!(report.contains("  custom\\nprovider / model\\t "));
     assert!(report.contains("  unavailable\n"));
     assert!(!report.chars().any(|c| c.is_control() && c != '\n'));
