@@ -4,17 +4,25 @@ A local CLI for tracking token usage and recorded/estimated costs.
 
 ## Usage
 
-Requires a Unix system, Rust 1.85+. Install from this checkout:
+Requires a Unix system. Building from source requires Rust 1.85+. Make sure `~/.cargo/bin` is on your `PATH`.
+
+From the repository directory, install the executable into `~/.cargo/bin` and run with:
 
 ```sh
 cargo install --path .
 token-tracker
 ```
 
-Or run without installing:
+Or run from the repository without installing:
 
 ```sh
 cargo run --quiet
+```
+
+To build a release binary at `target/release/token-tracker`:
+
+```sh
+cargo build --release
 ```
 
 ### Pi
