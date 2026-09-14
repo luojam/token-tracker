@@ -3,6 +3,7 @@ mod ports;
 mod reconciliation;
 mod reporting;
 mod synchronization;
+mod tracker;
 mod workflow;
 
 pub use reconciliation::{SummaryError, summarize_usage};
@@ -13,7 +14,11 @@ pub use synchronization::{
     ImportCounts, ImportSynchronizationError, ImportWarning, SynchronizationReport,
     synchronize_sessions, synchronize_sessions_at,
 };
-pub use workflow::{AllTimeReport, AllTimeReportError, ImportAdapter, run_all_time_report};
+pub use tracker::{LocalSourceConfig, ReportResult, TokenTracker, TokenTrackerConfig};
+pub use workflow::{
+    AllTimeReport, AllTimeReportError, ImportAdapter, ReportDiagnostic, ReportError,
+    run_all_time_report,
+};
 
 pub(crate) use importing::validate_notices;
 pub use importing::{InvalidImport, ValidatedSessionImport};
