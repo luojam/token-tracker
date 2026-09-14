@@ -49,6 +49,7 @@ pub enum EstimateUnavailableReason {
 pub struct UsageEstimate {
     pub cost: EstimatedCost,
     pub assumed_cache_writes_as_input: bool,
+    pub assumed_short_context: bool,
 }
 
 /// Available totals cover priced events only.
@@ -73,6 +74,7 @@ pub struct EstimateTotals {
     pub assumed_standard_event_count: u64,
     /// Priced events where missing cache writes may change the cost.
     pub assumed_cache_write_event_count: u64,
+    pub assumed_short_context_event_count: u64,
     /// Each unpriced event contributes to exactly one reason.
     pub unavailable_reasons: BTreeMap<EstimateUnavailableReason, u64>,
     /// Normalized tiers for priced events.

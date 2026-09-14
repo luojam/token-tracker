@@ -248,6 +248,8 @@ pub fn calculate_estimate(
                         .ok_or(Reason::ArithmeticOverflow)?,
                     assumed_cache_writes_as_input: total.assumed_cache_writes_as_input
                         || estimate.assumed_cache_writes_as_input,
+                    assumed_short_context: total.assumed_short_context
+                        || estimate.assumed_short_context,
                 })
             });
     }
@@ -272,10 +274,17 @@ fn price_tokens(
     let request_input =
         u128::from(tokens.input) + u128::from(tokens.cache_read) + u128::from(tokens.cache_write);
     // If the aggregate fits the short band, every request does too.
-    if !exact_request && !schedule.supports_aggregate(request_input) {
+    let assumed_short_context = !exact_request
+        && !schedule.supports_aggregate(request_input)
+        && context.requests == RequestBreakdown::AggregateAssumingShortContext;
+    if !exact_request && !schedule.supports_aggregate(request_input) && !assumed_short_context {
         return Err(Reason::UnknownRequestGranularity);
     }
-    let rates = schedule.for_input(request_input)?;
+    let rates = schedule.for_input(if assumed_short_context {
+        0
+    } else {
+        request_input
+    })?;
     if context.cache_detail != CacheDetail::Complete
         && rates.cache_write != rates.input
         && missing_cache_writes == MissingCacheWritePolicy::Reject
@@ -284,6 +293,7 @@ fn price_tokens(
     }
     Ok(UsageEstimate {
         cost: calculate_cost(tokens, rates)?,
+        assumed_short_context,
         assumed_cache_writes_as_input: context.cache_detail == CacheDetail::Incomplete
             && rates.cache_write != rates.input
             && tokens.input > 0,

@@ -41,8 +41,8 @@ Requires modern SQLite accounting with `sessions` and `session_model_usage`
 tables (version-30 shape). Includes auxiliary tasks; events count accounting
 buckets rather than API calls.
 
-Subscription costs use API-equivalent estimates. Missing pricing details,
-including request sizes for large aggregates, leave costs partial or unavailable.
+Subscription costs use API-equivalent estimates. OpenAI aggregates assume
+short-context rates, which may underestimate long-context usage.
 
 ## Local data
 

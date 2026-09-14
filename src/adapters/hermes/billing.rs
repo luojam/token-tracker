@@ -25,7 +25,11 @@ fn endpoint_provider(endpoint: &str) -> Option<&'static str> {
     }
 }
 
-pub(super) fn pricing_context(provider: &str, endpoint: &str) -> Option<PricingContext> {
+pub(super) fn pricing_context(
+    provider: &str,
+    endpoint: &str,
+    api_call_count: u64,
+) -> Option<PricingContext> {
     if !endpoint.is_empty() && endpoint_provider(endpoint) != Some(provider) {
         return None;
     }
@@ -33,7 +37,11 @@ pub(super) fn pricing_context(provider: &str, endpoint: &str) -> Option<PricingC
         "openai" => Some(PricingContext::OpenAi(OpenAiBilling {
             tier: ServiceTier::Unknown,
             tier_evidence: TierEvidence::Unknown,
-            requests: RequestBreakdown::AggregateOrUnknown,
+            requests: if api_call_count == 1 {
+                RequestBreakdown::SingleRequest
+            } else {
+                RequestBreakdown::AggregateAssumingShortContext
+            },
             // A cumulative zero cannot prove cache-write reporting was complete.
             cache_detail: CacheDetail::Incomplete,
         })),

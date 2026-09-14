@@ -174,6 +174,10 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
             "Assumed cache writes priced as input",
             estimates.assumed_cache_write_event_count,
         ),
+        (
+            "Assumed short-context rates for cumulative usage",
+            estimates.assumed_short_context_event_count,
+        ),
     ] {
         if count > 0 {
             writeln!(output, "- {label}: {} events", format_integer(count)).unwrap();
@@ -183,6 +187,13 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
         writeln!(
             output,
             "- Requested settings do not confirm the served tier."
+        )
+        .unwrap();
+    }
+    if estimates.assumed_short_context_event_count > 0 {
+        writeln!(
+            output,
+            "- Cumulative estimates may undercount requests charged at long-context rates."
         )
         .unwrap();
     }

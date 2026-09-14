@@ -81,7 +81,11 @@ pub(super) fn normalize(
             }),
             tokens,
             recorded_cost,
-            pricing_context: billing::pricing_context(provider, endpoint),
+            pricing_context: billing::pricing_context(
+                provider,
+                endpoint,
+                row.counter("api_call_count")?,
+            ),
         });
     }
 

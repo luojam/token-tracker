@@ -22,6 +22,7 @@ pub enum RequestBreakdown {
     SingleRequest,
     KnownRequests(KnownRequests),
     AggregateOrUnknown,
+    AggregateAssumingShortContext,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -66,7 +67,9 @@ impl RequestBreakdown {
                     })
                     == Some(tokens)
             }
-            Self::SingleRequest | Self::AggregateOrUnknown => true,
+            Self::SingleRequest
+            | Self::AggregateOrUnknown
+            | Self::AggregateAssumingShortContext => true,
         }
     }
 }

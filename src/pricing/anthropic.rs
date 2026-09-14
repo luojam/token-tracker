@@ -118,6 +118,7 @@ pub fn calculate_estimate(event: &UsageEvent) -> Result<UsageEstimate, EstimateU
     Ok(UsageEstimate {
         cost,
         assumed_cache_writes_as_input: false,
+        assumed_short_context: false,
     })
 }
 

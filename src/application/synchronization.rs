@@ -227,6 +227,7 @@ where
             .cmp(&right.path)
             .then_with(|| left.message.cmp(&right.message))
     });
+    report.warnings.dedup();
     Ok(report)
 }
 

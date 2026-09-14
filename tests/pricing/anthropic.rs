@@ -61,6 +61,7 @@ fn expected(cost: u128) -> Result<UsageEstimate, Reason> {
     Ok(UsageEstimate {
         cost: EstimatedCost::from_picodollars(cost),
         assumed_cache_writes_as_input: false,
+        assumed_short_context: false,
     })
 }
 

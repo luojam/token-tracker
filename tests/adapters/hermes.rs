@@ -4,9 +4,7 @@ use token_tracker::application::{
     SessionSource, SnapshotCompletion, SynchronizationReport, UsageReadStore, UsageStore,
     summarize_usage, synchronize_sessions_at,
 };
-use token_tracker::domain::{
-    EstimateUnavailableReason, ParentSession, Timestamp, TokenCounts, UsageKind,
-};
+use token_tracker::domain::{ParentSession, Timestamp, TokenCounts, UsageKind};
 use token_tracker::pricing::calculate_estimate;
 use token_tracker::storage::SqliteUsageStore;
 
@@ -487,9 +485,55 @@ fn actual_cost_requires_complete_evidence_and_subscription_usage_is_estimated() 
         .session
         .events[0];
     assert_eq!(
-        calculate_estimate(event).unwrap().result,
-        Err(EstimateUnavailableReason::UnknownRequestGranularity)
+        calculate_estimate(event)
+            .unwrap()
+            .result
+            .unwrap()
+            .cost
+            .as_picodollars(),
+        6_000_000_000_000
     );
+}
+
+#[test]
+fn cumulative_subscription_usage_is_estimated_with_disclosed_assumptions() {
+    let tree = TempTree::new();
+    let (path, connection) = fixture(&tree);
+    connection
+        .execute_batch(
+            "DELETE FROM session_model_usage;
+         UPDATE sessions SET input_tokens = 300000, output_tokens = 10000,
+             cache_read_tokens = 900000, cache_write_tokens = 0;
+         INSERT INTO session_model_usage (session_id, model, billing_provider,
+             billing_base_url, billing_mode, api_call_count, input_tokens,
+             cache_read_tokens, output_tokens)
+         SELECT id, 'gpt-6-astra', 'openai-codex', 'https://chatgpt.com/backend-api/codex',
+             'subscription_included', 20, 300000, 900000, 10000 FROM sessions;",
+        )
+        .unwrap();
+    let source = HermesSessionSource::new([path]);
+    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    for time in [1, 2] {
+        let report = sync(&source, &mut store, time);
+        assert_eq!(report.warnings.len(), 1);
+        let snapshot = store.usage_snapshot().unwrap();
+        let summary = summarize_usage(&snapshot).unwrap();
+        assert_eq!(summary.totals.estimates.priced_event_count, 2);
+        assert_eq!(
+            summary.totals.estimates.assumed_short_context_event_count,
+            2
+        );
+        let report = token_tracker::application::build_usage_report(&summary);
+        let rendered = token_tracker::cli::render_terminal_report(&report, &[], &[]);
+        assert!(rendered.contains("Assumed short-context rates for cumulative usage: 2 events"));
+        for observation in &snapshot.observations {
+            let estimate = calculate_estimate(&observation.event)
+                .unwrap()
+                .result
+                .unwrap();
+            assert_eq!(estimate.cost.as_picodollars(), 4_400_000_000_000);
+        }
+    }
 }
 
 #[test]

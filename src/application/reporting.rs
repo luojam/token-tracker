@@ -156,6 +156,7 @@ fn add_estimate(totals: &mut EstimateTotals, estimate: &EventEstimate) {
             totals.priced_event_count += 1;
             totals.assumed_cache_write_event_count +=
                 u64::from(value.assumed_cache_writes_as_input);
+            totals.assumed_short_context_event_count += u64::from(value.assumed_short_context);
             match estimate.evidence {
                 TierEvidence::RequestedSetting => totals.requested_setting_event_count += 1,
                 TierEvidence::ServedResponse => totals.served_response_event_count += 1,
