@@ -1,10 +1,8 @@
-use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
-use std::path::PathBuf;
 
 use super::{
-    ImportCounts, ImportSynchronizationError, ImportWarning, ParseNotice, SessionSource,
+    ImportCounts, ImportSynchronizationError, ImportWarning, ReportDiagnostic, SessionSource,
     SummaryError, SynchronizationReport, UsageReadStore, UsageStore, summarize_usage,
     synchronize_sessions,
 };
@@ -107,7 +105,7 @@ impl ImportCounts {
     }
 }
 
-pub(crate) fn read_summary<S: UsageReadStore + UsageStore>(
+pub(crate) fn read_summary<S: UsageReadStore>(
     store: &S,
 ) -> Result<(UsageSummary, Vec<ReportDiagnostic>), ReportError> {
     let snapshot = store
@@ -115,35 +113,7 @@ pub(crate) fn read_summary<S: UsageReadStore + UsageStore>(
         .map_err(|source| ReportError::Storage(Box::new(source)))?;
     let summary = summarize_usage(&snapshot).map_err(ReportError::Summary)?;
 
-    let agents = snapshot
-        .sessions
-        .iter()
-        .map(|session| &session.key.agent)
-        .collect::<BTreeSet<_>>();
-    let mut diagnostics = Vec::new();
-    for agent in agents {
-        let states = store
-            .source_states(agent)
-            .map_err(|source| ReportError::Storage(Box::new(source)))?;
-        for state in states {
-            if let Some(import) = state.last_import {
-                diagnostics.extend(import.notices.into_iter().map(|notice| ReportDiagnostic {
-                    agent: agent.clone(),
-                    path: state.path.clone(),
-                    notice,
-                }));
-            }
-        }
-    }
-
-    Ok((summary, diagnostics))
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ReportDiagnostic {
-    pub agent: AgentId,
-    pub path: Option<PathBuf>,
-    pub notice: ParseNotice,
+    Ok((summary, snapshot.diagnostics))
 }
 
 #[derive(Debug)]

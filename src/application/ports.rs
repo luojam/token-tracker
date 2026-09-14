@@ -183,11 +183,20 @@ pub struct UsageObservation {
 pub struct UsageSnapshot {
     pub sessions: Vec<SessionProvenance>,
     pub observations: Vec<UsageObservation>,
+    /// Stored parse notices, including those from missing sources.
+    pub diagnostics: Vec<ReportDiagnostic>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReportDiagnostic {
+    pub agent: AgentId,
+    pub path: Option<PathBuf>,
+    pub notice: ParseNotice,
 }
 
 pub trait UsageReadStore {
     type Error: Error + Send + Sync + 'static;
 
-    /// Loads unreconciled provenance and observations from one consistent snapshot.
+    /// Loads unreconciled provenance, observations, and diagnostics from one consistent snapshot.
     fn usage_snapshot(&self) -> Result<UsageSnapshot, Self::Error>;
 }

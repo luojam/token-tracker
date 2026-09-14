@@ -5,8 +5,8 @@ use token_tracker::adapters::files::{FileSessionSource, file_source_key};
 
 use token_tracker::application::{
     CommitImportOutcome, DiscoveredSource, DiscoveryReport, ImportStats, ObservationRetention,
-    ParseNotice, SessionData, SessionImport, SnapshotCompletion, SourceRevision, UsageReadStore,
-    UsageStore, ValidatedSessionImport,
+    ParseNotice, ReportDiagnostic, SessionData, SessionImport, SnapshotCompletion, SourceRevision,
+    UsageReadStore, UsageStore, ValidatedSessionImport,
 };
 use token_tracker::domain::{
     AgentId, AnthropicBilling, CacheWriteTokens, KnownRequests, ModelAttribution, ParentSession,
@@ -103,6 +103,14 @@ fn imports_round_trip_and_corrections_replace_usage_and_billing() {
     let states = store.source_states(&"pi".into()).unwrap();
 
     assert_eq!(snapshot.observations[0].event, import.session.events[0]);
+    assert_eq!(
+        snapshot.diagnostics,
+        vec![ReportDiagnostic {
+            agent: import.session.metadata.agent.clone(),
+            path: import.source.path.clone(),
+            notice: import.session.notices[0].clone(),
+        }]
+    );
     let last_import = states[0].last_import.as_ref().unwrap();
     assert_eq!(last_import.revision, import.source.revision);
     assert_eq!(last_import.notices, import.session.notices);
@@ -141,10 +149,9 @@ fn imports_round_trip_and_corrections_replace_usage_and_billing() {
             ..ImportStats::default()
         })
     );
-    assert_eq!(
-        store.usage_snapshot().unwrap().observations[0].event,
-        import.session.events[0]
-    );
+    let corrected = store.usage_snapshot().unwrap();
+    assert_eq!(corrected.observations[0].event, import.session.events[0]);
+    assert!(corrected.diagnostics.is_empty());
     assert!(
         store.source_states(&"pi".into()).unwrap()[0]
             .last_import
@@ -361,7 +368,7 @@ fn corrupt_state_is_rejected_without_exposing_contents() {
         }
         connection.execute(sql, []).unwrap();
 
-        let error = if sql.contains("billing_facts") {
+        let error = if sql.contains("billing_facts") || sql.contains("parse_notices") {
             store.usage_snapshot().unwrap_err()
         } else {
             store.source_states(&"pi".into()).unwrap_err()

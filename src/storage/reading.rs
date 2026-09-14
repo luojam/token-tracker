@@ -1,13 +1,38 @@
 use super::{
-    SqliteStoreError, billing, decode_parent, decode_path, decode_u64, to_sql_conversion_error,
-    usage_kind_from_str,
+    SqliteStoreError, billing, decode_parent, decode_path, decode_u64, parse_notices,
+    to_sql_conversion_error, usage_kind_from_str,
 };
-use crate::application::{SessionProvenance, SourceKey, SourceSessionKey, UsageObservation};
+use crate::application::{
+    ReportDiagnostic, SessionProvenance, SourceKey, SourceSessionKey, UsageObservation,
+};
 use crate::domain::{
     AgentId, ModelAttribution, RecordedCost, Timestamp, TokenCounts, UsageEvent, UsageEventIdentity,
 };
 use rusqlite::Connection;
 use std::collections::HashMap;
+
+pub(super) fn load_stored_diagnostics(
+    connection: &Connection,
+) -> Result<Vec<ReportDiagnostic>, SqliteStoreError> {
+    let mut statement = connection.prepare(
+        "SELECT agent, path, parse_notices FROM import_sources
+         WHERE last_imported_revision IS NOT NULL
+         ORDER BY agent, source_key",
+    )?;
+    let mut rows = statement.query([])?;
+    let mut diagnostics = Vec::new();
+    while let Some(row) = rows.next()? {
+        let agent = AgentId::new(row.get::<_, String>(0)?);
+        let path = row.get::<_, Option<Vec<u8>>>(1)?.map(decode_path);
+        let notices = parse_notices::decode(&row.get::<_, String>(2)?)?;
+        diagnostics.extend(notices.into_iter().map(|notice| ReportDiagnostic {
+            agent: agent.clone(),
+            path: path.clone(),
+            notice,
+        }));
+    }
+    Ok(diagnostics)
+}
 
 pub(super) fn load_stored_sessions(
     connection: &Connection,

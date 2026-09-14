@@ -15,7 +15,7 @@ use importing::{
     import_is_stale, insert_observation, normalization_changed, remove_omitted_observations,
     update_observation, upsert_imported_source, upsert_source_session,
 };
-use reading::{load_stored_observations, load_stored_sessions};
+use reading::{load_stored_diagnostics, load_stored_observations, load_stored_sessions};
 use schema::migrate;
 
 use std::collections::HashSet;
@@ -71,6 +71,7 @@ impl UsageReadStore for SqliteUsageStore {
         let transaction = self.connection.unchecked_transaction()?;
         let sessions = load_stored_sessions(&transaction)?;
         let observations = load_stored_observations(&transaction, &sessions)?;
+        let diagnostics = load_stored_diagnostics(&transaction)?;
         transaction.commit()?;
 
         let mut sessions = sessions.into_values().collect::<Vec<_>>();
@@ -78,6 +79,7 @@ impl UsageReadStore for SqliteUsageStore {
         Ok(UsageSnapshot {
             sessions,
             observations,
+            diagnostics,
         })
     }
 }
