@@ -4,7 +4,10 @@ use token_tracker::application::{
     SessionSource, SnapshotCompletion, SynchronizationReport, UsageReadStore, UsageStore,
     summarize_usage, synchronize_sessions_at,
 };
-use token_tracker::domain::{ParentSession, Timestamp, TokenCounts, UsageKind};
+use token_tracker::domain::{
+    EstimateUnavailableReason, ParentSession, Timestamp, TokenCounts, UsageKind,
+};
+use token_tracker::pricing::calculate_estimate;
 use token_tracker::storage::SqliteUsageStore;
 
 use crate::support::TempTree;
@@ -144,7 +147,11 @@ fn snapshot_normalizes_disjoint_model_task_usage_and_revises_deterministically()
             .iter()
             .map(|notice| notice.code.as_str())
             .collect::<Vec<_>>(),
-        ["hermes_unattributed_residual", "hermes_counter_mismatch"]
+        [
+            "hermes_unattributed_residual",
+            "hermes_counter_mismatch",
+            "hermes_subscription_estimate"
+        ]
     );
     assert!(
         session
@@ -461,4 +468,101 @@ fn duplicate_sessions_defer_conflicts_and_only_covered_absence_changes_presence(
     let failed = source.discover(&known).unwrap();
     assert!(!failed.warnings.is_empty());
     assert!(failed.missing_sources.is_empty());
+}
+
+#[test]
+fn actual_cost_requires_complete_evidence_and_subscription_usage_is_estimated() {
+    let tree = TempTree::new();
+    let (path, connection) = fixture(&tree);
+    connection
+        .execute_batch(
+            "DELETE FROM session_model_usage;
+         INSERT INTO session_model_usage (session_id, model, billing_provider, task, input_tokens)
+         VALUES ('empty', 'gpt-6-astra', 'openai-codex', 'compression', 100);",
+        )
+        .unwrap();
+    for (mode, calls, amount, source, expected) in [
+        ("api", 1, 2.5, "provider_cost_api", Some(2.5)),
+        ("api", 1, 0.0, "provider_generation_api", Some(0.0)),
+        ("subscription_included", 1, 0.0, "provider_cost_api", None),
+        ("api", 2, 0.0001, "provider_cost_api", None),
+        ("api", 1, -1.0, "provider_cost_api", None),
+        ("api", 1, 2.5, "mixed", None),
+    ] {
+        connection
+            .execute(
+                "UPDATE session_model_usage SET billing_mode = ?1, api_call_count = ?2,
+                 actual_cost_usd = ?3, cost_source = ?4, cost_status = 'actual',
+                 estimated_cost_usd = 999",
+                rusqlite::params![mode, calls, amount, source],
+            )
+            .unwrap();
+        let snapshot = read_snapshot(&path).unwrap();
+        let event = &snapshot.sessions[1]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .session
+            .events[0];
+        assert_eq!(event.recorded_cost.map(|cost| cost.as_usd()), expected);
+        if expected.is_none() {
+            let estimate = calculate_estimate(event).unwrap().result.unwrap();
+            assert_eq!(estimate.cost.as_picodollars(), 1_000_000_000);
+        }
+    }
+    connection
+        .execute_batch(
+            "UPDATE session_model_usage SET input_tokens = 300000, cost_status = 'included';",
+        )
+        .unwrap();
+    let snapshot = read_snapshot(&path).unwrap();
+    let event = &snapshot.sessions[1]
+        .snapshot
+        .as_ref()
+        .unwrap()
+        .session
+        .events[0];
+    assert_eq!(
+        calculate_estimate(event).unwrap().result,
+        Err(EstimateUnavailableReason::UnknownRequestGranularity)
+    );
+}
+
+#[test]
+fn pricing_requires_direct_provider_attribution() {
+    let tree = TempTree::new();
+    let (path, connection) = fixture(&tree);
+    connection
+        .execute_batch(
+            "DELETE FROM session_model_usage;
+         INSERT INTO session_model_usage (session_id, model, task, input_tokens)
+         VALUES ('empty', 'gpt-6-astra', 'compression', 100);",
+        )
+        .unwrap();
+    for (provider, endpoint, normalized, priced) in [
+        ("auto", "https://api.openai.com/v1", "openai", true),
+        (
+            "auto",
+            "https://api.openai.com.proxy.test/v1",
+            "auto",
+            false,
+        ),
+        ("openai", "https://proxy.test/v1", "openai", false),
+    ] {
+        connection
+            .execute(
+                "UPDATE session_model_usage SET billing_provider = ?1, billing_base_url = ?2",
+                [provider, endpoint],
+            )
+            .unwrap();
+        let snapshot = read_snapshot(&path).unwrap();
+        let event = &snapshot.sessions[1]
+            .snapshot
+            .as_ref()
+            .unwrap()
+            .session
+            .events[0];
+        assert_eq!(event.attribution.as_ref().unwrap().provider, normalized);
+        assert_eq!(event.pricing_context.is_some(), priced);
+    }
 }

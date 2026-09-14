@@ -38,7 +38,7 @@ impl SessionSource for HermesSessionSource {
     }
 
     fn normalization_version(&self) -> NonZeroU32 {
-        NonZeroU32::MIN
+        NonZeroU32::new(2).unwrap()
     }
 
     fn discover(&self, known: &[SourceState]) -> Result<DiscoveryReport, Self::Error> {

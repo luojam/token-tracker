@@ -198,6 +198,14 @@ impl AccountingRow {
         }
     }
 
+    pub fn number(&self, field: &'static str) -> Option<f64> {
+        match self.0.get(field) {
+            Some(Field::Integer(value)) => Some(*value as f64),
+            Some(Field::Real(bits)) => Some(f64::from_bits(*bits)),
+            _ => None,
+        }
+    }
+
     pub fn timestamp(
         &self,
         field: &'static str,

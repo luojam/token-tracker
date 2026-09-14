@@ -1,6 +1,6 @@
 use std::{collections::HashSet, num::NonZeroU64, path::PathBuf};
 
-use super::{HERMES_AGENT_ID, HermesReadError, reading::AccountingRow};
+use super::{HERMES_AGENT_ID, HermesReadError, billing, reading::AccountingRow};
 use crate::application::{
     ObservationRetention, ParseNotice, SessionData, SessionSnapshot, SnapshotCompletion,
     SourceRevision,
@@ -36,6 +36,8 @@ pub(super) fn normalize(
     let mut events = Vec::new();
     let mut identities = HashSet::new();
     let mut main_tokens = TokenCounts::default();
+    let mut has_subscription = false;
+    let mut invalid_actual_cost = false;
     for row in usage {
         let model = row.text("model")?;
         let provider = row.text("billing_provider")?;
@@ -59,6 +61,12 @@ pub(super) fn normalize(
         }
         let timestamp = row.timestamp("first_seen")?.unwrap_or(started_at);
         row.timestamp("last_seen")?;
+        let provider = billing::provider(provider, endpoint);
+        has_subscription |= billing::subscription(row);
+        let recorded_cost = billing::recorded_cost(row).unwrap_or_else(|()| {
+            invalid_actual_cost = true;
+            None
+        });
         events.push(UsageEvent {
             identity,
             timestamp,
@@ -72,8 +80,8 @@ pub(super) fn normalize(
                 model: model.to_owned(),
             }),
             tokens,
-            recorded_cost: None,
-            pricing_context: None,
+            recorded_cost,
+            pricing_context: billing::pricing_context(provider, endpoint),
         });
     }
 
@@ -108,6 +116,18 @@ pub(super) fn normalize(
         notices.push(notice(
             "hermes_counter_mismatch",
             "Main-loop model usage exceeds session counters; model usage was retained.",
+        ));
+    }
+    if has_subscription {
+        notices.push(notice(
+            "hermes_subscription_estimate",
+            "Subscription usage uses API-equivalent estimates where available; these are not invoice amounts.",
+        ));
+    }
+    if invalid_actual_cost {
+        notices.push(notice(
+            "hermes_invalid_actual_cost",
+            "Actual cost lacks valid amounts or complete provider billing evidence; tokens were retained and estimates used where available.",
         ));
     }
 
