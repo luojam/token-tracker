@@ -17,6 +17,7 @@ fn command(home: &Path) -> Command {
         .env_remove("PI_CODING_AGENT_DIR")
         .env_remove("CODEX_HOME")
         .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("HERMES_HOME")
         .env_remove("XDG_DATA_HOME");
     command
 }
@@ -265,4 +266,70 @@ fn adapter_setup_failure_still_reports_stored_usage() {
     assert!(report.contains("pi: could not configure adapter:"));
     assert!(report.contains("codex: could not configure adapter:"));
     assert!(report.contains("claude: could not configure adapter:"));
+}
+
+#[test]
+fn hermes_discovers_default_and_profile_databases_and_respects_hermes_home() {
+    let tree = TempTree::new();
+    let home = tree.root.join("home");
+    for (relative, id) in [
+        (".hermes/state.db", "default"),
+        (".hermes/profiles/work/state.db", "profile"),
+        (".hermes/backups/state.db", "backup"),
+        (".hermes/profiles/work/nested/state.db", "nested"),
+        ("custom/state.db", "custom"),
+        ("custom/profiles/ignored/state.db", "ignored"),
+    ] {
+        let path = home.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        crate::support::hermes::database(&path)
+            .execute_batch(&format!(
+                "DELETE FROM session_model_usage; DELETE FROM sessions;
+                 INSERT INTO sessions (id, started_at) VALUES ('{id}', 1700000000);"
+            ))
+            .unwrap();
+    }
+    let run = |name: &str, hermes_home: &str| {
+        successful_report(
+            command(&home)
+                .current_dir(&home)
+                .env("XDG_DATA_HOME", tree.root.join(name))
+                .env("HERMES_HOME", hermes_home)
+                .output()
+                .unwrap(),
+        )
+    };
+    let default = run("default-data", "");
+    assert!(default.contains("Sessions: 2\n"), "{default}");
+    assert!(!default.contains("Warnings"), "{default}");
+    let custom = run("custom-data", "custom");
+    assert!(custom.contains("Sessions: 1\n"), "{custom}");
+}
+
+#[test]
+fn imports_hermes_and_keeps_other_agents_working_with_a_broken_source() {
+    let tree = TempTree::new();
+    let home = tree.root.join("home");
+    tree.write("home/.pi/agent/sessions/history.jsonl", ALL_USAGE);
+    let path = home.join(".hermes/state.db");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let connection = crate::support::hermes::database(&path);
+    let report = successful_report(command(&home).output().unwrap());
+    assert_totals(&report.replace(',', ""), [197, 98, 761, 96], 3, 9);
+    for expected in ["Hermes usage:", "Pi usage:", "openai / model-a"] {
+        assert!(report.contains(expected), "{report}");
+    }
+
+    connection
+        .execute_batch("ALTER TABLE session_model_usage RENAME COLUMN task TO legacy_task;")
+        .unwrap();
+    let fresh = successful_report(
+        command(&home)
+            .env("XDG_DATA_HOME", tree.root.join("fresh-data"))
+            .output()
+            .unwrap(),
+    );
+    assert_totals(&fresh, [25, 38, 51, 64], 1, 4);
+    assert!(fresh.contains("Pi usage:"), "{fresh}");
+    assert!(fresh.contains("unsupported Hermes schema"), "{fresh}");
 }

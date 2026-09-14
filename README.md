@@ -35,22 +35,33 @@ Claude Code estimates use bundled API prices.
 Supported models are `claude-opus-5` (Standard and Fast), plus `claude-fable-5`,
 `claude-fable-5-1`, `claude-sonnet-5`, and `claude-haiku-4-5-20251001` (Standard).
 
+### Hermes
+
+Requires modern SQLite accounting with `sessions` and `session_model_usage`
+tables (version-30 shape). Includes auxiliary tasks; events count accounting
+buckets rather than API calls.
+
+Subscription costs use API-equivalent estimates. Missing pricing details,
+including request sizes for large aggregates, leave costs partial or unavailable.
+
 ## Local data
 
-Each run imports new or changed Pi, Codex, and Claude Code sessions. Tracks input,
-output, and cache tokens, counting shared fork history only once.
+Each run imports new or changed Pi, Codex, Claude Code, and Hermes sessions.
+Tracks input, output, and cache tokens, counting shared fork history only once.
 
 Sessions are read from:
 
 - `~/.pi/agent/sessions`, respecting Pi's directory overrides.
 - `~/.codex/sessions` and `~/.codex/archived_sessions`, respecting `CODEX_HOME`.
 - `~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`.
+- `~/.hermes/state.db` and `~/.hermes/profiles/*/state.db`, or
+  `$HERMES_HOME/state.db` when set.
 
 Usage is stored in SQLite at `~/.local/share/token-tracker/usage.db` (or under
 `XDG_DATA_HOME` when set to an absolute path).
 
 Only usage and session metadata are stored. Imported usage is kept even after
-session files are deleted.
+session files or Hermes sessions/databases are deleted.
 
 ## Development
 

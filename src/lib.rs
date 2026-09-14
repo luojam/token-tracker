@@ -4,6 +4,7 @@ use std::fmt;
 use adapters::claude::{CLAUDE_AGENT_ID, ClaudeSessionDiscovery, ClaudeSessionParser};
 use adapters::codex::{CODEX_AGENT_ID, CodexSessionDiscovery, CodexSessionParser};
 use adapters::files::FileSessionSource;
+use adapters::hermes::{HERMES_AGENT_ID, HermesSessionSource};
 use adapters::pi::{PI_AGENT_ID, PiSessionDiscovery, PiSessionParser};
 use application::{
     AllTimeReportError, ImportAdapter, ImportWarning, build_usage_report, run_all_time_report,
@@ -27,6 +28,11 @@ struct AdapterRegistration {
 }
 
 const ADAPTERS: &[AdapterRegistration] = &[
+    AdapterRegistration {
+        id: HERMES_AGENT_ID,
+        label: "Hermes",
+        factory: || Ok(Box::new(HermesSessionSource::for_default_roots()?)),
+    },
     AdapterRegistration {
         id: PI_AGENT_ID,
         label: "Pi",

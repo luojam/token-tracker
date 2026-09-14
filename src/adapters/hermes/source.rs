@@ -5,7 +5,7 @@ use std::{
     path::PathBuf,
 };
 
-use super::{HERMES_AGENT_ID, HermesReadError, read_snapshot};
+use super::{HERMES_AGENT_ID, HermesReadError, discovery::DatabaseLocations, read_snapshot};
 use crate::application::{
     DiscoveredSource, DiscoveryReport, DiscoveryWarning, SessionSnapshot, SessionSource, SourceKey,
     SourceState,
@@ -13,7 +13,7 @@ use crate::application::{
 use crate::domain::AgentId;
 
 pub struct HermesSessionSource {
-    databases: Vec<PathBuf>,
+    locations: DatabaseLocations,
     snapshots: RefCell<BTreeMap<SourceKey, (DiscoveredSource, SessionSnapshot)>>,
 }
 
@@ -24,9 +24,16 @@ impl HermesSessionSource {
         databases.sort();
         databases.dedup();
         Self {
-            databases,
+            locations: DatabaseLocations::Explicit(databases),
             snapshots: RefCell::default(),
         }
+    }
+
+    pub fn for_default_roots() -> std::io::Result<Self> {
+        Ok(Self {
+            locations: DatabaseLocations::from_environment()?,
+            snapshots: RefCell::default(),
+        })
     }
 }
 
@@ -44,11 +51,14 @@ impl SessionSource for HermesSessionSource {
     fn discover(&self, known: &[SourceState]) -> Result<DiscoveryReport, Self::Error> {
         let mut snapshots = self.snapshots.borrow_mut();
         snapshots.clear();
-        let mut report = DiscoveryReport::default();
+        let (databases, warnings, mut complete) = self.locations.discover();
+        let mut report = DiscoveryReport {
+            warnings,
+            ..DiscoveryReport::default()
+        };
         let mut deferred = HashSet::new();
-        let mut complete = true;
 
-        for path in &self.databases {
+        for path in &databases {
             let database = match read_snapshot(path) {
                 Ok(database) => database,
                 Err(error) => {
@@ -110,7 +120,7 @@ impl SessionSource for HermesSessionSource {
                         && state
                             .path
                             .as_ref()
-                            .is_some_and(|path| self.databases.contains(path))
+                            .is_some_and(|path| databases.contains(path))
                 })
                 .map(|state| state.key.clone())
                 .collect();

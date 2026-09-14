@@ -1,4 +1,5 @@
 mod billing;
+mod discovery;
 mod parsing;
 mod reading;
 mod source;
@@ -10,7 +11,7 @@ use crate::application::{SessionSnapshot, SourceKey};
 pub use reading::read_snapshot;
 pub use source::HermesSessionSource;
 
-const HERMES_AGENT_ID: &str = "hermes";
+pub const HERMES_AGENT_ID: &str = "hermes";
 
 /// One complete database read. Rejected sessions must retain their last good import.
 #[derive(Debug)]
