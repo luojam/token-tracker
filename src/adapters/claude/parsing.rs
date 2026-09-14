@@ -55,11 +55,13 @@ impl SessionParser for ClaudeSessionParser {
                 }
                 JsonlLine::Eof => break,
             };
+
             let record: Record = serde_json::from_str(text).map_err(|_| invalid(line, "record"))?;
             let timestamp = metadata.observe(&record, line)?;
             if record.entry_type.as_str() != Some("assistant") {
                 continue;
             }
+
             let assistant: Assistant =
                 serde_json::from_str(text).map_err(|_| invalid(line, "assistant message"))?;
             observe_response(assistant, timestamp, line, &mut responses)?;
@@ -101,6 +103,7 @@ impl SessionParser for ClaudeSessionParser {
                 )?,
             }
         }
+
         Ok(SessionData {
             observation_retention: ObservationRetention::RetainOmitted,
             metadata: metadata.finish()?,
@@ -156,6 +159,7 @@ impl Metadata {
         if !path.is_absolute() || path.extension() != Some(OsStr::new("jsonl")) {
             return Err(ClaudeParseError::InvalidSourcePath);
         }
+
         let stem = path
             .file_stem()
             .ok_or(ClaudeParseError::InvalidSourcePath)?;
@@ -176,6 +180,7 @@ impl Metadata {
                 .ok_or(ClaudeParseError::InvalidSourcePath)?;
             (session.to_str().unwrap().to_owned(), Some(agent.to_owned()))
         };
+
         Ok(Self {
             session_id,
             agent_id,
@@ -197,6 +202,7 @@ impl Metadata {
             }
             self.seen_session = true;
         }
+
         if !record.agent_id.is_null() {
             if record.agent_id.as_str().is_none()
                 || record.agent_id.as_str() != self.agent_id.as_deref()
@@ -205,6 +211,7 @@ impl Metadata {
             }
             self.seen_agent = true;
         }
+
         let timestamp = record
             .timestamp
             .as_str()
@@ -236,6 +243,7 @@ impl Metadata {
         if self.agent_id.is_some() && !self.seen_agent {
             return Err(ClaudeParseError::MissingMetadata { field: "agentId" });
         }
+
         let started_at = self
             .started_at
             .ok_or(ClaudeParseError::MissingMetadata { field: "timestamp" })?;
@@ -246,6 +254,7 @@ impl Metadata {
             ),
             None => (self.session_id, None),
         };
+
         Ok(SessionMetadata {
             agent: AgentId::from(CLAUDE_AGENT_ID),
             session_id,
@@ -277,6 +286,7 @@ fn observe_response(
     if message.id.trim().is_empty() {
         return Err(invalid(line, "response id"));
     }
+
     let model = optional_string(&message.model, line, "model")?;
     let request_id = optional_string(&assistant.request_id, line, "request id")?;
     let final_snapshot = optional_string(&message.stop_reason, line, "stop reason")?.is_some();
@@ -293,6 +303,7 @@ fn observe_response(
     {
         return Ok(());
     }
+
     let response = responses.entry(message.id).or_insert_with(|| Response {
         model: None,
         request_id: None,
@@ -316,6 +327,7 @@ fn observe_response(
             *old = Some(new.to_owned());
         }
     }
+
     if final_snapshot {
         let timestamp = timestamp.ok_or_else(|| invalid(line, "response timestamp"))?;
         if response.first_final.is_none() || response.snapshot.is_some() {
@@ -360,6 +372,7 @@ fn parse_usage(
             let Some(iterations) = value.as_array().filter(|items| !items.is_empty()) else {
                 return Ok(None);
             };
+
             let mut supported = true;
             let mut components = Vec::new();
             let mut total = TokenCounts::default();
@@ -373,6 +386,7 @@ fn parse_usage(
                         continue;
                     }
                 };
+
                 let component = component(iteration, line)?;
                 if iteration
                     .get("model")
@@ -380,6 +394,7 @@ fn parse_usage(
                 {
                     supported = false;
                 }
+
                 total = total
                     .checked_add(component.tokens)
                     .ok_or_else(|| invalid(line, "counter overflow"))?;
@@ -390,6 +405,7 @@ fn parse_usage(
                 }
                 components.push(component);
             }
+
             if !supported {
                 return Ok(None);
             }
@@ -399,6 +415,7 @@ fn parse_usage(
             (total, components)
         }
     };
+
     let mut writes = BTreeMap::<u32, u64>::new();
     let mut complete_durations = true;
     for component in &components {
@@ -415,6 +432,7 @@ fn parse_usage(
             None => {}
         }
     }
+
     let pricing = PricingContext::Anthropic(AnthropicBilling {
         tier: served_tier(usage.get("service_tier"), line)?,
         speed: served_speed(usage.get("speed"), line)?,
@@ -448,6 +466,7 @@ fn component(usage: &Value, line: usize) -> Result<UsageComponent, ClaudeParseEr
         cache_read: counter(usage, "cache_read_input_tokens", line)?,
         cache_write: counter(usage, "cache_creation_input_tokens", line)?,
     };
+
     let cache_creation = usage
         .get("cache_creation")
         .filter(|value| !value.is_null())
@@ -457,6 +476,7 @@ fn component(usage: &Value, line: usize) -> Result<UsageComponent, ClaudeParseEr
             if ephemeral_5m.checked_add(ephemeral_1h) != Some(tokens.cache_write) {
                 return Err(invalid(line, "cache duration sum mismatch"));
             }
+
             Ok(vec![
                 CacheWriteTokens {
                     duration_seconds: 300,

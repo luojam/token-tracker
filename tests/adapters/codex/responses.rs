@@ -28,6 +28,7 @@ fn repeated_responses_and_corrections_keep_original_identity_and_time() {
     let mut correction: Value = serde_json::from_str(CORRECTION.lines().last().unwrap()).unwrap();
     correction["timestamp"] = json!("2026-02-01T00:00:00Z");
     let source = format!("{}\n{correction}", prefix(CORRECTION, 7));
+
     let corrected = parse(&source).unwrap();
     let mut expected = original.events[0].clone();
     expected.tokens = TokenCounts {
@@ -45,6 +46,7 @@ fn repeated_responses_and_corrections_keep_original_identity_and_time() {
             *counter = json!(0);
         }
     }
+
     let zero_correction = parse(&format!("{source}\n{zero}")).unwrap();
     let mut expected = original.events[0].clone();
     expected.tokens = TokenCounts::default();
@@ -72,6 +74,7 @@ fn rejects_conflicting_response_identity_without_exposing_ids() {
         ));
         assert!(!format!("{error:?} {error}").contains("SECRET"));
     }
+
     let mut unrelated = response();
     unrelated["payload"]["thread_id"] = json!("unrelated-thread");
     assert!(parse_response(&unrelated).is_err());
@@ -93,6 +96,7 @@ fn validates_response_and_cumulative_counter_relationships_with_checked_math() {
                 changed["payload"][vector][counter] = value.clone();
             }
             changed["payload"]["content"] = json!("SECRET_IGNORED_CONTENT");
+
             let error = parse_response(&changed).unwrap_err();
             match error {
                 CodexParseError::InvalidField { line, field } => {
@@ -125,6 +129,7 @@ fn validates_response_and_cumulative_counter_relationships_with_checked_math() {
             if vector == "turn_token_usage" {
                 changed["payload"]["thread_token_usage"] = changed["payload"][vector].clone();
             }
+
             assert!(parse_response(&changed).is_err(), "{vector}: {changes}");
         }
     }
@@ -140,6 +145,7 @@ fn validates_response_and_cumulative_counter_relationships_with_checked_math() {
             "total_tokens": u64::MAX,
         });
     }
+
     let parsed = parse_response(&largest).unwrap();
     assert_eq!(
         parsed.events[0].tokens,
@@ -179,6 +185,7 @@ fn only_cache_write_subdivision_is_optional() {
             .unwrap()
             .remove("cache_write_input_tokens");
     }
+
     let parsed = parse_response(&missing).unwrap();
     assert_eq!(tokens(parsed.events[0].tokens), json!([60, 40, 0, 10]));
     assert_eq!(parsed.events[0].tokens.total(), 110);

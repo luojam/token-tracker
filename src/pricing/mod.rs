@@ -17,6 +17,7 @@ pub fn calculate_estimate(event: &UsageEvent) -> Option<EventEstimate> {
     if event.recorded_cost.is_some() {
         return None;
     }
+
     let (estimate, tier, evidence, snapshot) = match event.pricing_context.as_ref() {
         Some(PricingContext::OpenAi(context)) => {
             let (tier, evidence) = openai::estimate_tier(context);

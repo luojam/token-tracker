@@ -118,6 +118,7 @@ impl<D: SessionFileDiscovery, P: SessionParser> SessionSource for FileSessionSou
                 revision: file.revision.into(),
             })
             .collect();
+
         let present: HashSet<_> = sources.iter().map(|source| &source.key).collect();
         let missing_sources = known
             .iter()
@@ -149,6 +150,7 @@ impl<D: SessionFileDiscovery, P: SessionParser> SessionSource for FileSessionSou
 /// Normalizes path components without losing non-UTF-8 bytes.
 pub fn file_source_key(path: &Path) -> SourceKey {
     use std::os::unix::ffi::OsStrExt;
+
     let normalized: PathBuf = path.components().collect();
     SourceKey(normalized.as_os_str().as_bytes().to_vec())
 }
@@ -165,9 +167,11 @@ impl From<FileRevision> for SourceRevision {
 
 impl<D: SessionFileDiscovery + ?Sized> SessionFileDiscovery for &D {
     type Error = D::Error;
+
     fn agent_id(&self) -> AgentId {
         (**self).agent_id()
     }
+
     fn discover(&self) -> Result<FileDiscoveryReport, Self::Error> {
         (**self).discover()
     }
@@ -175,9 +179,11 @@ impl<D: SessionFileDiscovery + ?Sized> SessionFileDiscovery for &D {
 
 impl<P: SessionParser + ?Sized> SessionParser for &P {
     type Error = P::Error;
+
     fn normalization_version(&self) -> NonZeroU32 {
         (**self).normalization_version()
     }
+
     fn parse(
         &self,
         input: &mut dyn BufRead,
@@ -241,6 +247,7 @@ fn load_session_once<P: SessionParser>(
 
 fn same_file_and_revision(left: &Metadata, right: &Metadata) -> bool {
     use std::os::unix::fs::MetadataExt;
+
     left.len() == right.len()
         && left.modified().ok() == right.modified().ok()
         && left.dev() == right.dev()

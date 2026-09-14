@@ -33,6 +33,7 @@ pub(super) fn normalize(
             .optional_text("parent_session_id")
             .map(|id| ParentSession::SessionId(id.to_owned())),
     };
+
     let mut events = Vec::new();
     let mut identities = HashSet::new();
     let mut main_tokens = TokenCounts::default();
@@ -50,6 +51,7 @@ pub(super) fn normalize(
                 "duplicate model/task identity",
             ));
         }
+
         let tokens = tokens(row)?;
         if task.is_empty() {
             main_tokens =
@@ -59,6 +61,7 @@ pub(super) fn normalize(
                         "main-loop counter sum overflow",
                     ))?;
         }
+
         let timestamp = row.timestamp("first_seen")?.unwrap_or(started_at);
         row.timestamp("last_seen")?;
         let provider = billing::provider(provider, endpoint);
@@ -99,6 +102,7 @@ pub(super) fn normalize(
             .cache_write
             .saturating_sub(main_tokens.cache_write),
     };
+
     let mut notices = Vec::new();
     if residual.total() > 0 {
         events.push(UsageEvent {
@@ -112,6 +116,7 @@ pub(super) fn normalize(
         });
         notices.push(notice("hermes_unattributed_residual", "Session counters contain main-loop usage not attributed to a model; residual cost is unavailable."));
     }
+
     if main_tokens.input > session_tokens.input
         || main_tokens.output > session_tokens.output
         || main_tokens.cache_read > session_tokens.cache_read

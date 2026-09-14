@@ -36,6 +36,7 @@ pub(super) fn source_state_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result
         .transpose()?;
     let notices =
         parse_notices::decode(&row.get::<_, String>(7)?).map_err(to_sql_conversion_error)?;
+
     let last_import = match (
         last_imported_revision,
         last_successful_scan,
@@ -73,12 +74,14 @@ pub(super) fn decode_u64(value: i64) -> Result<u64, SqliteStoreError> {
 
 pub(super) fn encode_path(path: &Path) -> Vec<u8> {
     use std::os::unix::ffi::OsStrExt;
+
     let normalized: PathBuf = path.components().collect();
     normalized.as_os_str().as_bytes().to_vec()
 }
 
 pub(super) fn decode_path(value: Vec<u8>) -> PathBuf {
     use std::os::unix::ffi::OsStringExt;
+
     PathBuf::from(OsString::from_vec(value))
 }
 

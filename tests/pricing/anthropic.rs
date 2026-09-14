@@ -75,6 +75,7 @@ fn fixture_costs_include_cache_durations_and_compaction_once() {
             },
         )
         .unwrap();
+
     let cases = [
         ("msg_oracle", expected(887_500_000)),
         ("msg_5m", expected(106_000_000)),
@@ -147,6 +148,7 @@ fn bundled_models_use_exact_flat_rates() {
             expected(oracle),
             "{model}/{speed:?}"
         );
+
         for (input, cost) in [(0, 0), (900_000, long_input)] {
             event.tokens = TokenCounts {
                 input,
@@ -155,6 +157,7 @@ fn bundled_models_use_exact_flat_rates() {
             facts(&mut event).requests =
                 RequestBreakdown::KnownRequests(KnownRequests::new(event.tokens));
             facts(&mut event).cache_writes = None;
+
             assert_eq!(
                 calculate_estimate(&event),
                 expected(cost),
@@ -162,6 +165,7 @@ fn bundled_models_use_exact_flat_rates() {
             );
         }
     }
+
     let mut event = event();
     event.tokens = TokenCounts {
         input: u64::MAX,
@@ -174,6 +178,7 @@ fn bundled_models_use_exact_flat_rates() {
         duration_seconds: 3600,
         tokens: u64::MAX,
     }]);
+
     assert_eq!(
         calculate_estimate(&event),
         expected(u128::from(u64::MAX) * 40_500_000)
@@ -224,6 +229,7 @@ fn unsupported_facts_report_the_most_specific_reason() {
         context.speed = speed;
         assert_eq!(calculate_estimate(&event), Err(reason));
     }
+
     for model in [
         "claude-fable-5",
         "claude-fable-5-1",
@@ -235,12 +241,14 @@ fn unsupported_facts_report_the_most_specific_reason() {
         facts(&mut event).speed = ServiceSpeed::Fast;
         assert_eq!(calculate_estimate(&event), Err(Reason::UnsupportedSpeed));
     }
+
     for model in ["claude-opus-5[1m]", "claude-haiku-4-5"] {
         let mut event = event();
         event.attribution.as_mut().unwrap().model = model.into();
         facts(&mut event).speed = ServiceSpeed::Unknown;
         assert_eq!(calculate_estimate(&event), Err(Reason::UnsupportedModel));
     }
+
     let mut event = event();
     event.pricing_context = None;
     assert_eq!(
@@ -257,6 +265,7 @@ fn invalid_usage_and_missing_iteration_durations_never_produce_partial_costs() {
     facts(&mut event).requests =
         RequestBreakdown::KnownRequests(KnownRequests::from_vec(vec![original, original]).unwrap());
     facts(&mut event).cache_writes = None;
+
     assert_eq!(
         calculate_estimate(&event),
         Err(Reason::IncompleteCacheDetail)

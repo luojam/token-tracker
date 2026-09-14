@@ -26,7 +26,6 @@ fn event() -> UsageEvent {
         recorded_cost: None,
         pricing_context: Some(PricingContext::OpenAi(OpenAiBilling {
             tier: ServiceTier::Standard,
-
             tier_evidence: TierEvidence::RequestedSetting,
             requests: RequestBreakdown::SingleRequest,
             cache_detail: CacheDetail::Complete,
@@ -58,6 +57,7 @@ fn exact_costs_use_disjoint_tokens_and_the_whole_request_band() {
             cache_write: counts[2],
             output: counts[3],
         };
+
         assert_eq!(
             calculate_estimate(&event),
             Ok(EstimatedCost::from_picodollars(expected)),
@@ -79,6 +79,7 @@ fn unknown_tiers_use_standard_rates() {
                 output: 25,
             };
             let standard = calculate_estimate(&event).unwrap();
+
             for tier_evidence in [TierEvidence::Unknown, TierEvidence::RequestedSetting] {
                 let context = facts(&mut event);
                 context.tier = ServiceTier::Unknown;
@@ -131,6 +132,7 @@ fn aggregates_are_priced_only_when_request_partition_cannot_change_the_cost() {
                 cache_write: 1,
                 output: 400_000,
             };
+
             let expected = calculate_estimate(&event).unwrap();
             facts(&mut event).requests = RequestBreakdown::AggregateOrUnknown;
             assert_eq!(calculate_estimate(&event), Ok(expected));
@@ -141,6 +143,7 @@ fn aggregates_are_priced_only_when_request_partition_cannot_change_the_cost() {
                 ..TokenCounts::default()
             };
             event.tokens.input = 0;
+
             assert_eq!(
                 calculate_estimate(&event)
                     .unwrap()
@@ -175,6 +178,7 @@ fn missing_cache_write_detail_is_usable_only_without_a_write_premium() {
             ..TokenCounts::default()
         };
         facts(&mut event).cache_detail = CacheDetail::Incomplete;
+
         let result = calculate_estimate(&event);
         if model == "gpt-6-astra" {
             assert_eq!(
@@ -188,6 +192,7 @@ fn missing_cache_write_detail_is_usable_only_without_a_write_premium() {
             assert_eq!(result, calculate_estimate(&event));
             assert!(result.is_ok());
         }
+
         facts(&mut event).tier = ServiceTier::Unknown;
         assert_eq!(calculate_estimate(&event), result);
     }
@@ -218,16 +223,19 @@ fn request_breakdowns_apply_context_bands_per_request_and_require_complete_total
         let context = facts(&mut event);
         context.requests = RequestBreakdown::AggregateOrUnknown;
         context.cache_detail = CacheDetail::Incomplete;
+
         assert_eq!(
             calculate_estimate(&event),
             Err(EstimateUnavailableReason::UnknownRequestGranularity)
         );
+
         facts(&mut event).requests =
             RequestBreakdown::KnownRequests(KnownRequests::from_vec(requests).unwrap());
         assert_eq!(
             calculate_estimate(&event),
             Ok(EstimatedCost::from_picodollars(expected))
         );
+
         event.tokens.input += 1;
         assert_eq!(
             calculate_estimate(&event),
@@ -263,6 +271,7 @@ fn explicit_cache_policy_prices_unresolved_input_without_reclassifying_known_wri
         calculate_estimate(&event),
         Err(EstimateUnavailableReason::IncompleteCacheDetail)
     );
+
     let estimate =
         pricing::calculate_estimate(&event, MissingCacheWritePolicy::TreatAsInput).unwrap();
     assert_eq!(estimate.cost.as_picodollars(), 2_452_600_000_000);

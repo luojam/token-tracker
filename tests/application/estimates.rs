@@ -67,9 +67,11 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     let mut missing_speed = oracle.clone();
     missing_speed.identity.adapter_key = "missing-speed".into();
     facts(&mut missing_speed).speed = ServiceSpeed::Unknown;
+
     let mut recorded = oracle.clone();
     recorded.identity.adapter_key = "recorded".into();
     recorded.recorded_cost = Some(RecordedCost::from_usd(1.0).unwrap());
+
     let mut snapshot = UsageSnapshot::default();
     add_session(
         &mut snapshot,
@@ -77,6 +79,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
         "main",
         vec![oracle.clone(), missing_speed, recorded],
     );
+
     let mut conflicting = oracle.clone();
     facts(&mut conflicting).speed = ServiceSpeed::Fast;
     add_session(&mut snapshot, "claude", "copy", vec![conflicting]);
@@ -85,10 +88,10 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     pi.pricing_context = None;
     pi.recorded_cost = Some(RecordedCost::from_usd(1.0).unwrap());
     add_session(&mut snapshot, "pi", "main", vec![pi]);
+
     let mut codex = oracle.clone();
     codex.pricing_context = Some(PricingContext::OpenAi(OpenAiBilling {
         tier: ServiceTier::Standard,
-
         tier_evidence: TierEvidence::ServedResponse,
         requests: RequestBreakdown::SingleRequest,
         cache_detail: CacheDetail::Complete,
@@ -109,6 +112,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     let summary = summarize_usage(&snapshot).unwrap();
     assert_eq!(summary.totals.estimates.imported_event_count, 4);
     assert_eq!(summary.totals.estimates.priced_event_count, 2);
+
     let usage_report = build_usage_report(&summary);
     assert_eq!(usage_report.totals.estimates, summary.totals.estimates);
     for (row, source) in usage_report.rows.iter().zip(&summary.breakdown) {
@@ -121,6 +125,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
             partial: true,
         }
     );
+
     for (agent, model, expected) in [
         (
             "claude",
@@ -180,10 +185,12 @@ fn pricing_follows_billing_provider_for_any_agent_and_retains_all_rate_versions(
         requests: original.requests,
         cache_detail: CacheDetail::Complete,
     }));
+
     let mut unknown = anthropic.clone();
     unknown.identity.adapter_key = "unknown".into();
     unknown.pricing_context = None;
     unknown.attribution.as_mut().unwrap().provider = "unknown-provider".into();
+
     let mut snapshot = UsageSnapshot::default();
     add_session(
         &mut snapshot,
@@ -191,6 +198,7 @@ fn pricing_follows_billing_provider_for_any_agent_and_retains_all_rate_versions(
         "main",
         vec![anthropic, openai, unknown],
     );
+
     let summary = summarize_usage(&snapshot).unwrap();
     let estimate = &summary.totals.estimates;
     assert_eq!(estimate.imported_event_count, 3);
@@ -220,13 +228,16 @@ fn pricing_follows_billing_provider_for_any_agent_and_retains_all_rate_versions(
 #[test]
 fn missing_pricing_facts_still_count_toward_coverage() {
     use token_tracker::domain::EstimateUnavailableReason as Reason;
+
     let priced = oracle_event();
     let mut missing = priced.clone();
     missing.identity.adapter_key = "missing".into();
     missing.pricing_context = None;
     missing.attribution = None;
+
     let mut snapshot = UsageSnapshot::default();
     add_session(&mut snapshot, "claude", "main", vec![priced, missing]);
+
     let summary = summarize_usage(&snapshot).unwrap();
     let totals = &summary.totals.estimates;
     assert_eq!(

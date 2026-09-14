@@ -35,6 +35,7 @@ fn report_reads_stored_usage_and_notices_without_refreshing_or_changing_state() 
     assert_eq!(imported.counts.sources_imported, 2);
     assert_eq!(imported.counts.event_identities_inserted, 2);
     assert_eq!(imported.warnings.len(), 1);
+
     let expected = tracker.report().unwrap();
     assert_eq!(expected.report.totals.tokens.input, 9);
     assert_eq!(expected.diagnostics.len(), 1);
@@ -83,6 +84,7 @@ fn refresh_recovers_from_source_failures_but_storage_failures_are_fatal() {
         ],
     })
     .unwrap();
+
     let imported = tracker.refresh().unwrap();
     assert_eq!(imported.counts.sources_imported, 1);
     assert_eq!(imported.counts.sources_failed, 1);
@@ -98,6 +100,7 @@ fn refresh_recovers_from_source_failures_but_storage_failures_are_fatal() {
         .unwrap()
         .execute_batch("PRAGMA foreign_keys = OFF; DROP TABLE import_sources;")
         .unwrap();
+
     assert!(matches!(
         tracker.refresh(),
         Err(ImportSynchronizationError::Storage { .. })

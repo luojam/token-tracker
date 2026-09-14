@@ -111,6 +111,7 @@ pub(super) fn summarize_canonical_usage<'a>(
             .ok_or(SummaryError::Overflow("event count"))?;
         totals.tokens = add_tokens(totals.tokens, event.tokens)?;
         add_cost(&mut totals.recorded_cost, event.recorded_cost)?;
+
         let group = match &event.attribution {
             Some(attribution) => SummaryGroup::ProviderModel(attribution.clone()),
             None => SummaryGroup::Unattributed(event.kind),
@@ -131,11 +132,13 @@ pub(super) fn summarize_canonical_usage<'a>(
             .unique_usage_event_count
             .checked_add(1)
             .ok_or(SummaryError::Overflow("event count"))?;
+
         if let Some(estimate) = crate::pricing::calculate_estimate(event) {
             add_estimate(&mut totals.estimates, &estimate);
             add_estimate(&mut row.estimates, &estimate);
         }
     }
+
     Ok(UsageSummary {
         totals,
         breakdown: breakdown.into_values().collect(),
@@ -147,6 +150,7 @@ fn add_estimate(totals: &mut EstimateTotals, estimate: &EventEstimate) {
         totals.rate_snapshots.insert(snapshot.into(), date.into());
     }
     totals.imported_event_count += 1;
+
     match estimate.result {
         Ok(value) => {
             *totals
@@ -217,8 +221,10 @@ mod tests {
             });
             add_estimate(&mut totals, &estimate);
         }
+
         estimate.result = Err(EstimateUnavailableReason::ArithmeticOverflow);
         add_estimate(&mut totals, &estimate);
+
         assert_eq!(totals.cost, EstimateTotal::Overflow);
         assert_eq!(totals.imported_event_count, 4);
         assert_eq!(totals.priced_event_count, 3);

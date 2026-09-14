@@ -128,6 +128,7 @@ mod tests {
                 "{tail}"
             );
         }
+
         for tail in [
             r#"{"n":1e++"#,
             r#"{"n":01."#,
@@ -144,6 +145,7 @@ mod tests {
                 "{tail}"
             );
         }
+
         for ending in ["", "\n", "\r\n"] {
             let line = format!("{{}}{ending}");
             assert_eq!(
@@ -158,11 +160,13 @@ mod tests {
         let mut bytes = b"{\"text\":\"".to_vec();
         bytes.extend_from_slice(&[0xf0, 0x9f]);
         assert_eq!(complete_line(&bytes, 2).unwrap(), None);
+
         bytes.push(b'\n');
         assert!(matches!(
             complete_line(&bytes, 2),
             Err(JsonlError::InvalidUtf8 { line: 2 })
         ));
+
         for prefix in ["{}", r#"{"text": "#, r#"{"text":"\u"#] {
             let mut bytes = prefix.as_bytes().to_vec();
             bytes.extend_from_slice(&[0xf0, 0x9f]);
@@ -174,6 +178,7 @@ mod tests {
                 "{prefix}"
             );
         }
+
         assert!(matches!(
             complete_line(b"\xff", 2),
             Err(JsonlError::InvalidUtf8 { line: 2 })

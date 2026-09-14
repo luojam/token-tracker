@@ -41,6 +41,7 @@ fn snapshot_normalizes_disjoint_model_task_usage_and_revises_deterministically()
         Some(ParentSession::SessionId("parent".into()))
     );
     assert_eq!(session.events.len(), 5);
+
     let total = session
         .events
         .iter()
@@ -56,6 +57,7 @@ fn snapshot_normalizes_disjoint_model_task_usage_and_revises_deterministically()
             cache_write: 32
         }
     );
+
     let main_a = session
         .events
         .iter()
@@ -68,6 +70,7 @@ fn snapshot_normalizes_disjoint_model_task_usage_and_revises_deterministically()
         })
         .unwrap();
     assert_eq!(main_a.timestamp, session.metadata.started_at);
+
     let main_b = session
         .events
         .iter()
@@ -79,12 +82,14 @@ fn snapshot_normalizes_disjoint_model_task_usage_and_revises_deterministically()
         })
         .unwrap();
     assert_eq!(main_b.timestamp.as_unix_milliseconds(), 1700000002500);
+
     let compression = session
         .events
         .iter()
         .find(|event| event.kind == UsageKind::Compaction)
         .unwrap();
     assert_eq!(compression.attribution.as_ref().unwrap().provider, "auto");
+
     assert!(
         session
             .events
@@ -103,6 +108,7 @@ fn snapshot_normalizes_disjoint_model_task_usage_and_revises_deterministically()
             ..TokenCounts::default()
         }
     );
+
     assert_eq!(
         session
             .notices
@@ -115,12 +121,14 @@ fn snapshot_normalizes_disjoint_model_task_usage_and_revises_deterministically()
             "hermes_subscription_estimate"
         ]
     );
+
     assert!(
         session
             .events
             .iter()
             .all(|event| event.recorded_cost.is_none())
     );
+
     let empty = &first.sessions[1].snapshot.as_ref().unwrap().session;
     assert!(empty.events.is_empty());
     assert!(empty.metadata.working_directory.is_none());
@@ -136,6 +144,7 @@ fn snapshot_normalizes_disjoint_model_task_usage_and_revises_deterministically()
         .unwrap();
     let copy = tree.root.join("copy.db");
     std::fs::copy(&path, &copy).unwrap();
+
     let copied = read_snapshot(&copy).unwrap();
     assert_eq!(copied.sessions[0].key, first.sessions[0].key);
     assert_eq!(copied.sessions[0].snapshot.as_ref().unwrap(), child);
@@ -151,9 +160,11 @@ fn snapshot_normalizes_disjoint_model_task_usage_and_revises_deterministically()
         .find(|event| event.identity == main_a.identity)
         .unwrap();
     assert_eq!(corrected_main.tokens.input, 110);
+
     connection
         .execute_batch("UPDATE session_model_usage SET cost_status = 'included';")
         .unwrap();
+
     let cost_changed = read_snapshot(&path).unwrap();
     assert_ne!(
         cost_changed.sessions[0].snapshot.as_ref().unwrap().revision,
@@ -168,17 +179,20 @@ fn unsupported_schema_and_invalid_accounting_cannot_become_empty_usage() {
     connection
         .execute_batch("ALTER TABLE session_model_usage RENAME COLUMN task TO legacy_task;")
         .unwrap();
+
     let error = read_snapshot(&path).unwrap_err();
     assert!(
         matches!(&error, HermesReadError::UnsupportedSchema { table: "session_model_usage", missing } if missing == &["task"])
     );
     assert!(error.to_string().contains("per-model/task accounting"));
+
     connection
         .execute_batch(
             "ALTER TABLE session_model_usage RENAME COLUMN legacy_task TO task;
         UPDATE session_model_usage SET input_tokens = -1 WHERE task = 'compression';",
         )
         .unwrap();
+
     let rejected = read_snapshot(&path).unwrap();
     assert!(matches!(
         &rejected.sessions[0].snapshot,
@@ -192,16 +206,19 @@ fn unsupported_schema_and_invalid_accounting_cannot_become_empty_usage() {
         UPDATE sessions SET started_at = 1e300 WHERE id = 'child';",
         )
         .unwrap();
+
     assert!(matches!(
         &read_snapshot(&path).unwrap().sessions[0].snapshot,
         Err(HermesReadError::InvalidField("started_at"))
     ));
+
     connection
         .execute_batch(
             "UPDATE sessions SET started_at = 1700000000 WHERE id = 'child';
         UPDATE session_model_usage SET cache_read_tokens = 'invalid' WHERE task = 'compression';",
         )
         .unwrap();
+
     assert!(matches!(
         &read_snapshot(&path).unwrap().sessions[0].snapshot,
         Err(HermesReadError::InvalidField("cache_read_tokens"))
@@ -232,6 +249,7 @@ fn cumulative_sessions_replace_buckets_across_scans_restart_and_pruning() {
     let tracker = tree.root.join("tracker.db");
     let source = HermesSessionSource::new([path.clone()]);
     let mut store = SqliteUsageStore::open(&tracker).unwrap();
+
     assert_eq!(sync(&source, &mut store, 1).counts.sources_imported, 2);
     let mut expected = TokenCounts {
         input: 172,
@@ -250,6 +268,7 @@ fn cumulative_sessions_replace_buckets_across_scans_restart_and_pruning() {
          WHERE model = 'model-a' AND task = '';",
         )
         .unwrap();
+
     assert_eq!(sync(&source, &mut store, 3).counts.observations_updated, 1);
     expected.input += 50;
     assert_eq!(totals(&store), expected);
@@ -262,6 +281,7 @@ fn cumulative_sessions_replace_buckets_across_scans_restart_and_pruning() {
          VALUES ('child', 'redistributed', 'proxy', 'https://example.test', 210, 55, 650, 30);",
         )
         .unwrap();
+
     assert_eq!(sync(&source, &mut store, 4).counts.sources_imported, 1);
     assert_eq!(totals(&store), expected);
     let snapshot = store.usage_snapshot().unwrap();
@@ -272,6 +292,7 @@ fn cumulative_sessions_replace_buckets_across_scans_restart_and_pruning() {
     let restarted = HermesSessionSource::new([path]);
     assert_eq!(sync(&restarted, &mut store, 5).counts.sources_unchanged, 2);
     assert_eq!(totals(&store), expected);
+
     connection
         .execute_batch(
             "UPDATE sessions SET input_tokens = 200 WHERE id = 'child';
@@ -285,6 +306,7 @@ fn cumulative_sessions_replace_buckets_across_scans_restart_and_pruning() {
     connection
         .execute_batch("DELETE FROM session_model_usage; DELETE FROM sessions;")
         .unwrap();
+
     assert_eq!(sync(&source, &mut store, 7).counts.sources_discovered, 0);
     assert!(
         store
@@ -314,10 +336,12 @@ fn wal_snapshots_are_cached_read_only_and_failures_preserve_imports() {
          UPDATE session_model_usage SET input_tokens = 15 WHERE task = 'compression';",
         )
         .unwrap();
+
     let wal = path.with_extension("db-wal");
     let contents = || (std::fs::read(&path).unwrap(), std::fs::read(&wal).unwrap());
     let before = contents();
     assert!(!before.1.is_empty());
+
     let source = HermesSessionSource::new([path.clone()]);
     let discovered = source.discover(&[]).unwrap();
     let child = discovered
@@ -326,6 +350,7 @@ fn wal_snapshots_are_cached_read_only_and_failures_preserve_imports() {
         .find(|discovered| source.load(discovered).unwrap().session.metadata.session_id == "child")
         .unwrap();
     let cached = source.load(child).unwrap();
+
     assert_eq!(contents(), before);
 
     connection
@@ -333,7 +358,9 @@ fn wal_snapshots_are_cached_read_only_and_failures_preserve_imports() {
             "UPDATE session_model_usage SET output_tokens = 13 WHERE task = 'compression';",
         )
         .unwrap();
+
     assert_eq!(source.load(child).unwrap(), cached);
+
     let before = contents();
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     sync(&source, &mut store, 1);
@@ -347,6 +374,7 @@ fn wal_snapshots_are_cached_read_only_and_failures_preserve_imports() {
         }
     );
     assert_eq!(contents(), before);
+
     let stored = store.usage_snapshot().unwrap();
     let states = store.source_states(&"hermes".into()).unwrap();
 
@@ -356,6 +384,7 @@ fn wal_snapshots_are_cached_read_only_and_failures_preserve_imports() {
     ] {
         connection.execute_batch(sql).unwrap();
         let before = contents();
+
         let report = sync(&source, &mut store, 2);
         assert!(
             report
@@ -377,11 +406,14 @@ fn duplicate_sessions_defer_conflicts_and_only_covered_absence_changes_presence(
     std::fs::copy(&path, &copy).unwrap();
     let source = HermesSessionSource::new([path.clone(), copy.clone()]);
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
+
     assert_eq!(sync(&source, &mut store, 1).counts.sources_imported, 2);
+
     let stored = store.usage_snapshot().unwrap();
     connection
         .execute_batch("UPDATE sessions SET input_tokens = 999 WHERE id = 'child';")
         .unwrap();
+
     let conflict = sync(&source, &mut store, 2);
     assert!(
         conflict
@@ -404,6 +436,7 @@ fn duplicate_sessions_defer_conflicts_and_only_covered_absence_changes_presence(
         1
     );
     assert_eq!(totals(&store).input, 1011);
+
     let known = store.source_states(&"hermes".into()).unwrap();
     connection
         .execute_batch("UPDATE sessions SET input_tokens = -1 WHERE id = 'child';")
@@ -419,6 +452,7 @@ fn duplicate_sessions_defer_conflicts_and_only_covered_absence_changes_presence(
         .unwrap()
         .execute_batch("DELETE FROM session_model_usage; DELETE FROM sessions;")
         .unwrap();
+
     assert!(
         HermesSessionSource::new([copy.clone()])
             .discover(&known)
@@ -426,6 +460,7 @@ fn duplicate_sessions_defer_conflicts_and_only_covered_absence_changes_presence(
             .missing_sources
             .is_empty()
     );
+
     std::fs::remove_file(&copy).unwrap();
     let failed = source.discover(&known).unwrap();
     assert!(!failed.warnings.is_empty());
@@ -443,6 +478,7 @@ fn actual_cost_requires_complete_evidence_and_subscription_usage_is_estimated() 
          VALUES ('empty', 'gpt-6-astra', 'openai-codex', 'compression', 100);",
         )
         .unwrap();
+
     for (mode, calls, amount, source, expected) in [
         ("api", 1, 2.5, "provider_cost_api", Some(2.5)),
         ("api", 1, 0.0, "provider_generation_api", Some(0.0)),
@@ -459,6 +495,7 @@ fn actual_cost_requires_complete_evidence_and_subscription_usage_is_estimated() 
                 rusqlite::params![mode, calls, amount, source],
             )
             .unwrap();
+
         let snapshot = read_snapshot(&path).unwrap();
         let event = &snapshot.sessions[1]
             .snapshot
@@ -472,11 +509,13 @@ fn actual_cost_requires_complete_evidence_and_subscription_usage_is_estimated() 
             assert_eq!(estimate.cost.as_picodollars(), 1_000_000_000);
         }
     }
+
     connection
         .execute_batch(
             "UPDATE session_model_usage SET input_tokens = 300000, cost_status = 'included';",
         )
         .unwrap();
+
     let snapshot = read_snapshot(&path).unwrap();
     let event = &snapshot.sessions[1]
         .snapshot
@@ -511,6 +550,7 @@ fn cumulative_subscription_usage_is_estimated_with_disclosed_assumptions() {
              'subscription_included', 20, 300000, 900000, 10000 FROM sessions;",
         )
         .unwrap();
+
     let source = HermesSessionSource::new([path]);
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     for time in [1, 2] {
@@ -544,6 +584,7 @@ fn pricing_requires_direct_provider_attribution() {
          VALUES ('empty', 'gpt-6-astra', 'compression', 100);",
         )
         .unwrap();
+
     for (provider, endpoint, normalized, priced) in [
         ("auto", "https://api.openai.com/v1", "openai", true),
         (
@@ -560,6 +601,7 @@ fn pricing_requires_direct_provider_attribution() {
                 [provider, endpoint],
             )
             .unwrap();
+
         let snapshot = read_snapshot(&path).unwrap();
         let event = &snapshot.sessions[1]
             .snapshot

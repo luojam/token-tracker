@@ -75,6 +75,7 @@ impl ContextState {
         let thread = self.threads.entry(id.to_owned()).or_default();
         thread.provider = provider.clone();
         self.scope = scoped.then(|| id.to_owned());
+
         if let Some(turn) = &mut self.active
             && (turn.owner != self.scope || turn.provider != provider)
         {
@@ -147,10 +148,12 @@ impl ContextState {
             turn.id == turn_id
                 && thread_id.is_none_or(|id| turn.owner.as_deref().is_none_or(|owner| owner == id))
         });
+
         let attribution = turn.and_then(|turn| {
             if turn.model_conflict {
                 return None;
             }
+
             let provider = match (turn.owner.as_deref(), thread_id) {
                 (None, Some(id)) => self
                     .threads
@@ -163,6 +166,7 @@ impl ContextState {
                 model: turn.model.clone()?,
             })
         });
+
         let tier = turn
             .filter(|turn| thread_id.is_none_or(|id| turn.owner.as_deref() == Some(id)))
             .map(|turn| turn.tier.clone())

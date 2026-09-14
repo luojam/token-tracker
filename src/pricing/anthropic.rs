@@ -114,6 +114,7 @@ pub fn calculate_estimate(event: &UsageEvent) -> Result<UsageEstimate, EstimateU
     if !context.usage_matches(event.tokens) {
         return Err(Reason::InvalidUsageBreakdown);
     }
+
     let cost = price_tokens(event.tokens, facts.cache_writes.as_deref(), rates)?;
     Ok(UsageEstimate {
         cost,

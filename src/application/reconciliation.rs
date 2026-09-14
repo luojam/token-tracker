@@ -30,12 +30,14 @@ fn select_canonical_usage(snapshot: &UsageSnapshot) -> Result<CanonicalUsage<'_>
             return Err(SummaryError::InvalidData("duplicate session provenance"));
         }
     }
+
     let session_count = sessions
         .keys()
         .map(|key| (&key.agent, &key.session_id))
         .collect::<HashSet<_>>()
         .len();
     let parents = resolve_session_parents(&sessions);
+
     let mut by_event = BTreeMap::<&UsageEventIdentity, Vec<&UsageObservation>>::new();
     for observation in &snapshot.observations {
         if !sessions.contains_key(&observation.session)
@@ -48,6 +50,7 @@ fn select_canonical_usage(snapshot: &UsageSnapshot) -> Result<CanonicalUsage<'_>
             .or_default()
             .push(observation);
     }
+
     // Stable event order also makes floating-point cost accumulation deterministic.
     let observations = by_event
         .values()
@@ -76,6 +79,7 @@ fn resolve_session_parents(
             .or_insert_with(Vec::new)
             .push(key);
     }
+
     sessions
         .values()
         .filter_map(|session| {
@@ -112,6 +116,7 @@ fn select_canonical_observation<'a>(
     if candidates.is_empty() {
         candidates.extend_from_slice(observations);
     }
+
     candidates
         .into_iter()
         .min_by_key(|observation| fallback_key(sessions[&observation.session]))

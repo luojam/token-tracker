@@ -72,6 +72,7 @@ impl UsageReadStore for SqliteUsageStore {
         let sessions = load_stored_sessions(&transaction)?;
         let observations = load_stored_observations(&transaction, &sessions)?;
         transaction.commit()?;
+
         let mut sessions = sessions.into_values().collect::<Vec<_>>();
         sessions.sort_by(|left, right| left.key.cmp(&right.key));
         Ok(UsageSnapshot {
@@ -127,6 +128,7 @@ impl UsageStore for SqliteUsageStore {
                     observed_at.as_unix_milliseconds()
                 ])?;
         }
+
         for key in &report.missing_sources {
             if discovered_keys.contains(key) {
                 continue;

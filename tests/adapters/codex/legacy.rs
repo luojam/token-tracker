@@ -43,6 +43,7 @@ fn open_turn_prefixes_keep_identity_and_timestamp_through_noops_and_partial_tail
     next["timestamp"] = json!("2026-02-01T00:00:00Z");
     let missing = r#"{"timestamp":"2026-01-01T00:00:00Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{}}}"#;
     let source = format!("{}\n{missing}\n{next}", prefix(FRESH, 6));
+
     let extended = parse(&source).unwrap();
     assert_eq!(extended.events[0].identity, original.events[0].identity);
     assert_eq!(extended.events[0].timestamp, original.events[0].timestamp);
@@ -71,6 +72,7 @@ fn explicit_zero_usage_keeps_turn_keys_without_inventing_events_for_repeats() {
             .collect::<Vec<_>>()
             .join("\n"),
     );
+
     let repeated = parse(&source).unwrap();
     assert_eq!(repeated.events.len(), 1);
 
@@ -82,6 +84,7 @@ fn explicit_zero_usage_keeps_turn_keys_without_inventing_events_for_repeats() {
     {
         *counter = json!(0);
     }
+
     let with_zero = parse(&format!("{source}\n{zero}")).unwrap();
     assert_eq!(with_zero.events.len(), 2);
     assert_eq!(
@@ -115,6 +118,7 @@ fn rejects_unsupported_baselines_resets_and_turn_lifecycles_without_content() {
             .join("\n");
         assert!(parse(&source).is_err(), "missing lifecycle line {omitted}");
     }
+
     let detached_fork = fixture("codex", "legacy-fork.jsonl")
         .lines()
         .enumerate()
@@ -127,6 +131,7 @@ fn rejects_unsupported_baselines_resets_and_turn_lifecycles_without_content() {
     for boundary in ["task_complete", "turn_aborted", "task_started"] {
         let conflict = json!({"timestamp": "2026-01-01T00:00:00Z", "type": "event_msg",
             "payload": {"type": boundary, "turn_id": "SECRET_CONFLICT", "content": "SECRET_CONTENT"}});
+
         let error = parse(&format!("{}\n{conflict}", prefix(FRESH, 5))).unwrap_err();
         assert!(matches!(
             error,
@@ -152,6 +157,7 @@ fn validates_raw_deltas_and_last_usage_with_checked_arithmetic() {
                 changed["payload"]["info"][vector][counter] = value.clone();
             }
         }
+
         assert!(
             parse(&format!("{}\n{changed}", prefix(FRESH, 5))).is_err(),
             "{changes}"
@@ -172,12 +178,14 @@ fn validates_raw_deltas_and_last_usage_with_checked_arithmetic() {
     for vector in ["total_token_usage", "last_token_usage"] {
         cache_first["payload"]["info"][vector]["cache_write_input_tokens"] = json!(10);
     }
+
     let mut cache_next = cache_first.clone();
     cache_next["payload"]["info"]["total_token_usage"] = json!({
         "input_tokens": 200, "cached_input_tokens": 80, "cache_write_input_tokens": 30,
         "output_tokens": 20, "reasoning_output_tokens": 4, "total_tokens": 220,
     });
     cache_next["payload"]["info"]["last_token_usage"]["cache_write_input_tokens"] = json!(20);
+
     let parsed = parse(&format!(
         "{}\n{cache_first}\n{cache_next}",
         prefix(FRESH, 3)
@@ -193,6 +201,7 @@ fn validates_raw_deltas_and_last_usage_with_checked_arithmetic() {
             "reasoning_output_tokens": 1, "total_tokens": u64::MAX,
         });
     }
+
     let parsed = parse(&format!("{}\n{largest}", prefix(FRESH, 3))).unwrap();
     assert_eq!(
         tokens(parsed.events[0].tokens),

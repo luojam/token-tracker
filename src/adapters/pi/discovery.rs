@@ -32,6 +32,7 @@ fn default_session_root_from(
             .filter(|home| home.is_absolute())
             .ok_or(PiDiscoveryError::HomeDirectoryUnavailable)
     };
+
     let resolve_override = |directory: &OsStr| {
         let directory = PathBuf::from(directory);
         match directory.strip_prefix("~") {
@@ -84,6 +85,7 @@ impl SessionFileDiscovery for PiSessionDiscovery {
         if self.root.as_os_str().is_empty() {
             return Err(PiDiscoveryError::EmptySessionRoot);
         }
+
         let root = std::path::absolute(&self.root)
             .map_err(|source| PiDiscoveryError::SessionRootResolution { source })?;
 

@@ -139,6 +139,7 @@ impl TokenTracker {
                 }),
             }
         }
+
         let adapters = adapters.iter().map(Box::as_ref).collect::<Vec<_>>();
         import_adapters(&adapters, &mut self.store, warnings)
     }

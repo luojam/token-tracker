@@ -44,6 +44,7 @@ fn parses_every_usage_location_without_exposing_session_content() {
         }
     );
     assert_eq!(parsed.completion, SnapshotCompletion::Complete);
+
     let expected = [
         (
             "v1:assistant:1735787100100:a1a1a1a1",
@@ -116,6 +117,7 @@ fn parses_every_usage_location_without_exposing_session_content() {
             "\"input\":999,\"output\":20",
             1,
         );
+
     let copied = parse(&copied).unwrap();
     assert_eq!(copied.events[0].tokens.input, 999);
     assert_eq!(

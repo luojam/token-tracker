@@ -92,12 +92,14 @@ pub(super) fn render_terminal_report(
                 )
             })
             .collect::<Vec<_>>();
+
         let mut widths = headers.each_ref().map(|header| header.chars().count());
         for (_, cells) in &rows {
             for (width, cell) in widths.iter_mut().zip(cells) {
                 *width = (*width).max(cell.chars().count());
             }
         }
+
         let mut previous_agent = None;
         for (agent, cells) in &rows {
             if previous_agent != Some(agent) {
@@ -148,6 +150,7 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
     if estimates.imported_event_count == 0 {
         return;
     }
+
     writeln!(output).unwrap();
     writeln!(output, "Cost estimates:").unwrap();
     writeln!(
@@ -157,6 +160,7 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
         format_integer(estimates.imported_event_count)
     )
     .unwrap();
+
     for (label, count) in [
         (
             "Tier from requested settings",
@@ -197,6 +201,7 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
         )
         .unwrap();
     }
+
     for (tier, count) in &estimates.tier_event_counts {
         let tier = match tier {
             ServiceTier::Standard => "standard".into(),
@@ -211,6 +216,7 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
         )
         .unwrap();
     }
+
     for (reason, count) in &estimates.unavailable_reasons {
         let label = match reason {
             EstimateUnavailableReason::MissingPricingContext => "missing pricing context",
@@ -234,6 +240,7 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
         )
         .unwrap();
     }
+
     for (snapshot, date) in &estimates.rate_snapshots {
         writeln!(
             output,

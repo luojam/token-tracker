@@ -51,6 +51,7 @@ impl LegacyUsageState {
     ) -> Result<(), CodexParseError> {
         const TOTAL: &str = "event_msg.payload.info.total_token_usage";
         const LAST: &str = "event_msg.payload.info.last_token_usage";
+
         let invalid = || CodexParseError::InvalidField { line, field: TOTAL };
         let total = info.total_token_usage.0;
         let last = info.last_token_usage.0;
@@ -68,6 +69,7 @@ impl LegacyUsageState {
         if self.checkpoint_before_usage {
             return Err(invalid());
         }
+
         let turn = match turn {
             Some(turn) => turn,
             None if unchanged => return Ok(()),
@@ -80,6 +82,7 @@ impl LegacyUsageState {
         if unchanged && self.events.contains_key(&turn.id) {
             return Ok(());
         }
+
         let cache_detail = if total.cache_detail() == CacheDetail::Complete
             && self
                 .previous_total
@@ -117,6 +120,7 @@ impl LegacyUsageState {
         if event.attribution != attribution {
             event.attribution = None;
         }
+
         if let Some(PricingContext::OpenAi(existing)) = &mut event.pricing_context {
             match &mut existing.requests {
                 RequestBreakdown::KnownRequests(requests) => requests.push(tokens),
@@ -124,6 +128,7 @@ impl LegacyUsageState {
                     existing.requests = RequestBreakdown::KnownRequests(KnownRequests::new(tokens))
                 }
             }
+
             if existing.tier != pricing_context.tier
                 || *original_tier != raw_tier
                 || existing.tier_evidence != pricing_context.tier_evidence
@@ -135,6 +140,7 @@ impl LegacyUsageState {
                 existing.cache_detail = CacheDetail::Incomplete;
             }
         }
+
         event.tokens = event.tokens.checked_add(tokens).ok_or_else(invalid)?;
         self.previous_total = Some(total);
         Ok(())

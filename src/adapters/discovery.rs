@@ -8,6 +8,7 @@ use std::{ffi::OsStr, fs, io};
 pub(super) trait DirectoryLayout: Sized {
     /// None excludes this directory from the adapter's layout.
     fn child_directory(&self, name: &OsStr) -> Option<Self>;
+
     fn is_session_file(&self, path: &Path) -> bool;
 }
 
@@ -52,6 +53,7 @@ pub(super) fn discover<L: DirectoryLayout + Clone>(
         .sort_by(|left, right| left.path.cmp(&right.path));
     report.coverage.inaccessible_paths.sort_unstable();
     report.coverage.inaccessible_paths.dedup();
+
     report.warnings.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
@@ -87,6 +89,7 @@ fn scan_directory<L: DirectoryLayout>(
             return false;
         }
     }
+
     let entries = match fs::read_dir(directory) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return true,
@@ -120,6 +123,7 @@ fn scan_directory<L: DirectoryLayout>(
                 continue;
             }
         };
+
         let child_layout = layout.child_directory(&entry.file_name());
         if file_type.is_dir() {
             if let Some(child_layout) = child_layout {
@@ -131,6 +135,7 @@ fn scan_directory<L: DirectoryLayout>(
         if !candidate && !(file_type.is_symlink() && child_layout.is_some()) {
             continue;
         }
+
         let metadata = match fs::metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) => {
@@ -158,6 +163,7 @@ fn scan_directory<L: DirectoryLayout>(
         if !candidate || !metadata.is_file() {
             continue;
         }
+
         let modified_at = match metadata.modified() {
             Ok(modified_at) => modified_at,
             Err(error) => {

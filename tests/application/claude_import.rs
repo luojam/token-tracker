@@ -108,9 +108,11 @@ fn final_responses_and_billing_corrections_survive_reopen() {
     let source = fixture("claude", "snapshots.jsonl");
     let path = fixture_path("snapshots.jsonl");
     ledger.write(&path, &prefix(&source, 3));
+
     let partial = ledger.sync();
     assert_eq!(partial.warnings.len(), 1);
     totals(&ledger, 1, 0, 0);
+
     let unchanged = ledger.sync();
     assert_eq!(unchanged.counts.sources_unchanged, 1);
     assert_eq!(unchanged.warnings, partial.warnings);
@@ -131,9 +133,11 @@ fn final_responses_and_billing_corrections_survive_reopen() {
         &path,
         &format!("{}\n{correction}\n{placeholder}\n", prefix(&source, 6)),
     );
+
     let report = ledger.sync();
     assert!(report.warnings.is_empty());
     assert_eq!(report.counts.observations_updated, 1);
+
     expected.tokens.input = 8;
     expected.tokens.cache_read = 90;
     expected.tokens.output = 25;
@@ -158,6 +162,7 @@ fn final_responses_and_billing_corrections_survive_reopen() {
     );
     assert_eq!(event(&ledger.snapshot(), "response-v1:msg_equal"), equal);
     totals(&ledger, 1, 2, 333);
+
     let snapshot = ledger.snapshot();
     assert_eq!(ledger.sync().counts.sources_unchanged, 1);
     assert_eq!(ledger.snapshot(), snapshot);
@@ -187,9 +192,11 @@ fn shared_history_and_children_are_counted_once() {
                 );
             }
         }
+
         let snapshot = ledger.snapshot();
         assert_eq!(snapshot.observations.len(), 6);
         totals(&ledger, 4, 5, 348);
+
         let summary = summarize_usage(&snapshot).unwrap();
         assert_eq!(&summary, expected_summary.get_or_insert(summary.clone()));
         assert_eq!(ledger.sync().counts.sources_unchanged, 4);
@@ -202,6 +209,7 @@ fn shared_history_and_children_are_counted_once() {
             fixture_path("child-b2c3d4e.jsonl"),
             &format!("{child}{correction}\n"),
         );
+
         let changed = ledger.sync();
         assert!(changed.warnings.is_empty());
         assert_eq!(changed.counts.sources_imported, 1);
@@ -220,12 +228,15 @@ fn placeholders_do_not_suppress_complete_copies() {
         &prefix(&fixture("claude", "snapshots.jsonl"), 3),
     );
     ledger.write_fixture("shared-history.jsonl");
+
     assert_eq!(ledger.sync().counts.sources_failed, 0);
     totals(&ledger, 2, 2, 168);
+
     ledger.write(
         &main_path,
         &prefix(&fixture("claude", "snapshots.jsonl"), 4),
     );
+
     assert!(ledger.sync().warnings.is_empty());
     totals(&ledger, 2, 2, 175);
 }

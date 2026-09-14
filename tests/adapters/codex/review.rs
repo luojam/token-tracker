@@ -55,16 +55,19 @@ fn review_prefixes_and_terminals_preserve_surrounding_usage() {
         let split = if legacy_usage { 5 } else { 6 };
         let before = parse(&normal[..split]).unwrap();
         let expected = parse(&normal).unwrap();
+
         let mut envelope = review(item_markers);
         envelope[3] = boundary(terminal, "review");
         if !child {
             envelope.remove(1);
         }
+
         let mut lines = normal[..split].to_vec();
         for event in envelope {
             lines.push(event);
             assert_eq!(parse(&lines).unwrap(), before);
         }
+
         lines.extend_from_slice(&normal[split..]);
         assert_eq!(parse(&lines).unwrap(), expected);
     }
@@ -77,8 +80,10 @@ fn review_rejects_mismatched_lifecycle_and_unexpected_accounting() {
         let envelope = review(item_markers);
         let mut wrong_exit = envelope[2].clone();
         wrong_exit["payload"]["turn_id"] = json!("child");
+
         let mut response = normal[9].clone();
         response["payload"]["turn_id"] = json!("child");
+
         let mut invalid_owner = envelope[0].clone();
         invalid_owner["payload"][if item_markers { "thread_id" } else { "turn_id" }] = Value::Null;
         for (prefix, invalid) in [
@@ -102,6 +107,7 @@ fn review_rejects_mismatched_lifecycle_and_unexpected_accounting() {
             let mut lines = normal[..6].to_vec();
             lines.extend_from_slice(&envelope[..prefix]);
             lines.push(invalid);
+
             let result = parse(&lines);
             assert!(
                 matches!(result, Err(CodexParseError::InvalidField { line, .. }) if line == lines.len()),
@@ -118,6 +124,7 @@ fn review_settings_require_parent_ownership_and_preserve_prior_pricing() {
     let mut initial = normal[6].clone();
     initial["payload"]["thread_settings"]["service_tier"] = json!("default");
     before.insert(1, initial);
+
     let prior = parse(&before).unwrap().events.remove(0);
     for (owner, expected) in [
         (json!("thread-main"), ServiceTier::Fast),
@@ -131,10 +138,12 @@ fn review_settings_require_parent_ownership_and_preserve_prior_pricing() {
         let mut lines = before.clone();
         lines.extend(envelope);
         lines.extend_from_slice(&normal[7..]);
+
         let parsed = parse(&lines).unwrap();
         assert_eq!(parsed.events.len(), 2);
         assert_eq!(parsed.events[0], prior);
         assert_eq!(parsed.events[1].attribution, prior.attribution);
+
         let Some(PricingContext::OpenAi(context)) = &parsed.events[1].pricing_context else {
             panic!("expected OpenAI billing");
         };

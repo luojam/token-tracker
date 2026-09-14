@@ -80,6 +80,7 @@ impl MirrorState {
                 line,
                 field: "token_usage_record.payload.thread_token_usage",
             })?;
+
         self.turn_id = response.turn_id.clone();
         self.turn_total = response.turn_token_usage.0;
         self.thread_total = response.thread_token_usage.0;
@@ -119,6 +120,7 @@ impl MirrorState {
     ) -> Result<(), CodexParseError> {
         const TOTAL: &str = "event_msg.payload.info.total_token_usage";
         const LAST: &str = "event_msg.payload.info.last_token_usage";
+
         let invalid = || CodexParseError::InvalidField { line, field: TOTAL };
         let total = info.total_token_usage.0;
         let last = info.last_token_usage.0;
@@ -132,6 +134,7 @@ impl MirrorState {
         {
             return Ok(());
         }
+
         let pending = self.pending.as_ref().ok_or_else(invalid)?;
         let expected = self
             .baseline
@@ -143,6 +146,7 @@ impl MirrorState {
         if !last.same_counters(&pending.usage) {
             return Err(CodexParseError::InvalidField { line, field: LAST });
         }
+
         self.confirmed = total;
         self.pending = None;
         Ok(())

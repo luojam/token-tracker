@@ -80,6 +80,7 @@ fn check_usage(parsed: &SessionData, expected: &Value, name: &str) {
         .collect();
     assert_eq!(actual, events, "{name}");
     assert_eq!(parsed.events.len(), actual.len(), "{name}");
+
     let notices: BTreeMap<_, _> = parsed
         .notices
         .iter()
@@ -112,6 +113,7 @@ fn fixtures_preserve_metadata_usage_and_errors() {
                 .join(name),
         )
         .unwrap();
+
         let result = parse(&source, expected["source_path"].as_str().unwrap());
         if !expected["error"].is_null() {
             let (line, reason) = match result.unwrap_err() {
@@ -133,6 +135,7 @@ fn fixtures_preserve_metadata_usage_and_errors() {
             assert_eq!(json!(reason), expected["error"]["reason"], "{name}");
             continue;
         }
+
         let parsed = result.unwrap_or_else(|error| panic!("{name}: {error}"));
         let metadata = &parsed.metadata;
         assert_eq!(
@@ -188,6 +191,7 @@ fn iteration_models_use_the_model_from_earlier_snapshots() {
     iteration["type"] = json!("message");
     iteration["model"] = original["message"]["model"].clone();
     original["message"]["usage"]["iterations"] = json!([iteration]);
+
     let expected = parse_record(&original).unwrap();
     assert_eq!(expected.events.len(), 1);
 
@@ -205,6 +209,7 @@ fn iteration_models_use_the_model_from_earlier_snapshots() {
 
     final_snapshot["message"]["usage"]["iterations"][0]["model"] = json!("different-model");
     let source = format!("{original}\n{final_snapshot}");
+
     let parsed = parse(source.as_bytes(), SOURCE_PATH).unwrap();
     assert!(parsed.events.is_empty());
     assert_eq!(parsed.notices.len(), 1);
@@ -218,6 +223,7 @@ fn final_usage_is_revalidated_when_a_placeholder_supplies_the_model() {
     iteration["type"] = json!("message");
     iteration["model"] = original["message"]["model"].clone();
     original["message"]["usage"]["iterations"] = json!([iteration]);
+
     let expected = parse_record(&original).unwrap();
     assert_eq!(expected.events.len(), 1);
 
@@ -226,6 +232,7 @@ fn final_usage_is_revalidated_when_a_placeholder_supplies_the_model() {
         .as_object_mut()
         .unwrap()
         .remove("model");
+
     let mut placeholder = original.clone();
     placeholder["timestamp"] = json!("2026-01-01T00:00:06Z");
     placeholder["message"]["stop_reason"] = Value::Null;
@@ -244,6 +251,7 @@ fn final_usage_is_revalidated_when_a_placeholder_supplies_the_model() {
 
     placeholder["message"]["model"] = json!("different-model");
     let source = format!("{final_snapshot}\n{placeholder}");
+
     let parsed = parse(source.as_bytes(), SOURCE_PATH).unwrap();
     assert!(parsed.events.is_empty());
     assert_eq!(parsed.notices.len(), 1);
@@ -264,12 +272,14 @@ fn validates_source_identity_and_requires_record_metadata() {
         let error = parse_record(&record).unwrap_err();
         assert!(!format!("{error:?} {error}").contains("PRIVATE"));
     }
+
     let mut record = final_record();
     record.as_object_mut().unwrap().remove("sessionId");
     assert!(matches!(
         parse_record(&record),
         Err(ClaudeParseError::MissingMetadata { field: "sessionId" })
     ));
+
     record = json!({"sessionId": "11111111-1111-4111-8111-111111111111", "session_id": "ignored"});
     assert!(matches!(
         parse_record(&record),
@@ -279,14 +289,17 @@ fn validates_source_identity_and_requires_record_metadata() {
 
     let child_path = "/invented/project/11111111-1111-4111-8111-111111111111/subagents/nested/agent-a1b2c3d.jsonl";
     assert!(parse(CHILD.as_bytes(), child_path).is_ok());
+
     let mut child: Value = serde_json::from_str(CHILD).unwrap();
     child.as_object_mut().unwrap().remove("agentId");
     assert!(matches!(
         parse(child.to_string().as_bytes(), child_path),
         Err(ClaudeParseError::MissingMetadata { field: "agentId" })
     ));
+
     child["agentId"] = json!("different");
     assert!(parse(child.to_string().as_bytes(), child_path).is_err());
+
     for path in [
         "relative.jsonl",
         "/project/not-a-session.jsonl",
@@ -304,6 +317,7 @@ fn validates_source_identity_and_requires_record_metadata() {
     later["version"] = json!({"unknown": [1, 2]});
     let earlier =
         json!({"type": {"unknown": true}, "timestamp": "2025-01-01T00:00:00Z", "cwd": "/earlier"});
+
     let parsed = parse(format!("{later}\n{earlier}").as_bytes(), SOURCE_PATH).unwrap();
     assert_eq!(time(parsed.metadata.started_at), "2025-01-01T00:00:00Z");
     assert_eq!(
@@ -323,6 +337,7 @@ fn invalid_counters_and_overflow_reject_the_session() {
         let mut record = final_record();
         record["message"]["usage"][field] = invalid;
         record["message"]["stop_reason"] = Value::Null;
+
         let error = parse_record(&record).unwrap_err();
         assert!(matches!(
             error,
@@ -333,11 +348,13 @@ fn invalid_counters_and_overflow_reject_the_session() {
         ));
         assert!(!format!("{error:?} {error}").contains("PRIVATE"));
     }
+
     let mut record = final_record();
     record["message"]["usage"]["cache_creation"] = json!({
         "ephemeral_5m_input_tokens": u64::MAX, "ephemeral_1h_input_tokens": 1,
     });
     assert!(parse_record(&record).is_err());
+
     record["message"]["usage"] = json!({
         "input_tokens": u64::MAX, "output_tokens": 0,
         "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
@@ -346,11 +363,13 @@ fn invalid_counters_and_overflow_reject_the_session() {
         parse_record(&record).unwrap().events[0].tokens.input,
         u64::MAX
     );
+
     let mut message_iteration = record["message"]["usage"].clone();
     message_iteration["type"] = json!("message");
     let compaction = json!({"type": "compaction", "input_tokens": 1, "output_tokens": 0,
         "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0});
     record["message"]["usage"]["iterations"] = json!([message_iteration, compaction]);
+
     assert!(matches!(
         parse_record(&record),
         Err(ClaudeParseError::InvalidField {
@@ -371,6 +390,7 @@ fn invalid_counters_and_overflow_reject_the_session() {
         iteration.as_object_mut().unwrap().remove("cache_creation");
         iteration[field] = json!(iteration[field].as_u64().unwrap() + 1);
         record["message"]["usage"]["iterations"] = json!([iteration]);
+
         assert!(matches!(
             parse_record(&record),
             Err(ClaudeParseError::InvalidField {
@@ -385,6 +405,7 @@ fn invalid_counters_and_overflow_reject_the_session() {
 fn truncated_tails_preserve_finals_and_report_the_omission() {
     let original = final_record();
     let tail = format!("{original}\n{{\"ignored\":\"PRIVATE");
+
     let parsed = parse(tail.as_bytes(), SOURCE_PATH).unwrap();
     assert_eq!(parsed.events, parse_record(&original).unwrap().events);
     assert_eq!(parsed.completion, SnapshotCompletion::Partial);
@@ -403,6 +424,7 @@ fn conversation_and_tool_payloads_do_not_contribute_usage() {
     let mut content = original.clone();
     content["message"]["content"] = json!([{"type": "text", "text": "PRIVATE_CONVERSATION"}]);
     content["toolUseResult"] = json!({"text": "PRIVATE_TOOL", "usage": {"input_tokens": 999999}});
+
     let parsed = parse_record(&content).unwrap();
     assert_eq!(parsed, parse_record(&original).unwrap());
     assert!(!format!("{parsed:?}").contains("PRIVATE"));
@@ -413,6 +435,7 @@ fn unsupported_finals_can_be_corrected_and_synthetic_detection_is_explicit() {
     let original = final_record();
     let mut unsupported = original.clone();
     unsupported["message"]["usage"]["iterations"] = json!([]);
+
     let mut placeholder = original.clone();
     placeholder["message"]["stop_reason"] = Value::Null;
     for (source, first_line) in [
@@ -425,6 +448,7 @@ fn unsupported_finals_can_be_corrected_and_synthetic_detection_is_explicit() {
         assert_eq!(parsed.notices[0].count.get(), 1);
         assert_eq!(parsed.notices[0].line.unwrap().get(), first_line);
     }
+
     assert_eq!(
         parse(format!("{unsupported}\n{original}").as_bytes(), SOURCE_PATH).unwrap(),
         parse_record(&original).unwrap()
@@ -433,9 +457,12 @@ fn unsupported_finals_can_be_corrected_and_synthetic_detection_is_explicit() {
     let mut zero = original.clone();
     zero["message"]["id"] = json!("arbitrary-response-id");
     zero["message"]["usage"] = json!({"input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0});
+
     assert_eq!(parse_record(&zero).unwrap().events.len(), 1);
+
     zero["message"]["model"] = json!("<synthetic>");
     assert!(parse_record(&zero).unwrap().events.is_empty());
+
     zero["message"]["usage"]["input_tokens"] = json!(1);
     assert_eq!(parse_record(&zero).unwrap().events.len(), 1);
 }

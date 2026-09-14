@@ -96,5 +96,6 @@ pub(super) fn load_stored_observations(
             },
         });
     }
+
     Ok(observations)
 }

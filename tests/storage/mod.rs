@@ -101,6 +101,7 @@ fn imports_round_trip_and_corrections_replace_usage_and_billing() {
     store.commit_import(&validated(&import)).unwrap();
     let snapshot = store.usage_snapshot().unwrap();
     let states = store.source_states(&"pi".into()).unwrap();
+
     assert_eq!(snapshot.observations[0].event, import.session.events[0]);
     let last_import = states[0].last_import.as_ref().unwrap();
     assert_eq!(last_import.revision, import.source.revision);
@@ -117,6 +118,7 @@ fn imports_round_trip_and_corrections_replace_usage_and_billing() {
 
     import.session.events[0].tokens.input = 20;
     assert!(import.clone().validate(&"pi".into()).is_err());
+
     import.session.events[0].pricing_context = Some(context(import.session.events[0].tokens));
     assert_eq!(
         store.commit_import(&validated(&import)).unwrap(),
@@ -129,6 +131,7 @@ fn imports_round_trip_and_corrections_replace_usage_and_billing() {
         store.usage_snapshot().unwrap().observations[0].event,
         import.session.events[0]
     );
+
     import.session.events[0].pricing_context = None;
     import.session.notices.clear();
     assert_eq!(
@@ -157,6 +160,7 @@ fn replacing_a_session_preserves_provenance_and_rejects_late_imports() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     let original = session_import("/sessions/a.jsonl", 10);
     store.commit_import(&validated(&original)).unwrap();
+
     let mut replacement = session_import("/sessions/a.jsonl", 99);
     replacement.session.metadata.session_id = "replacement".into();
     replacement.session.metadata.parent_session = Some(ParentSession::SessionId("parent".into()));
@@ -173,6 +177,7 @@ fn replacing_a_session_preserves_provenance_and_rejects_late_imports() {
         new_session.parent_session,
         replacement.session.metadata.parent_session
     );
+
     let mut observations: Vec<_> = snapshot
         .observations
         .iter()
@@ -186,6 +191,7 @@ fn replacing_a_session_preserves_provenance_and_rejects_late_imports() {
             (original.session.metadata.session_id.as_str(), 10)
         ]
     );
+
     let states = store.source_states(&"pi".into()).unwrap();
     assert_eq!(
         store.commit_import(&validated(&original)).unwrap(),
@@ -207,11 +213,13 @@ fn stale_imports_and_discoveries_cannot_regress_source_state() {
     store
         .record_discovery(&"pi".into(), &discovered, now)
         .unwrap();
+
     assert_eq!(
         store.commit_import(&validated(&stale)).unwrap(),
         CommitImportOutcome::IgnoredStale
     );
     assert!(store.usage_snapshot().unwrap().sessions.is_empty());
+
     let mut current = session_import("/sessions/a.jsonl", 99);
     current.scanned_at = now;
     store.commit_import(&validated(&current)).unwrap();
@@ -221,6 +229,7 @@ fn stale_imports_and_discoveries_cannot_regress_source_state() {
         store.commit_import(&validated(&stale)).unwrap(),
         CommitImportOutcome::IgnoredStale
     );
+
     store
         .record_discovery(
             &"pi".into(),
@@ -233,6 +242,7 @@ fn stale_imports_and_discoveries_cannot_regress_source_state() {
         .unwrap();
     let states = store.source_states(&"pi".into()).unwrap();
     assert!(!states[0].present);
+
     store
         .record_discovery(&"pi".into(), &discovered, stale.scanned_at)
         .unwrap();
@@ -249,12 +259,14 @@ fn normalization_failure_rolls_back_usage_billing_and_notices() {
     store.commit_import(&validated(&original)).unwrap();
     let before = store.usage_snapshot().unwrap();
     let states = store.source_states(&"pi".into()).unwrap();
+
     let mut replacement = session_import("/sessions/a.jsonl", 20);
     replacement.normalization_version = 2.try_into().unwrap();
     replacement.session.notices.clear();
     let mut additional = replacement.session.events[0].clone();
     additional.identity.adapter_key = "additional-event".into();
     replacement.session.events.push(additional);
+
     Connection::open(&path)
         .unwrap()
         .execute_batch(
@@ -263,6 +275,7 @@ fn normalization_failure_rolls_back_usage_billing_and_notices() {
          BEGIN SELECT RAISE(ABORT, 'test failure'); END;",
         )
         .unwrap();
+
     assert!(matches!(
         store.commit_import(&validated(&replacement)),
         Err(SqliteStoreError::Sqlite(_))
@@ -300,6 +313,7 @@ fn replacement_requires_complete_data_and_deletes_only_its_sessions_observations
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     let mut import = session_import("/sessions/a.jsonl", 10);
     store.commit_import(&validated(&import)).unwrap();
+
     let other = session_import("/sessions/b.jsonl", 20);
     store.commit_import(&validated(&other)).unwrap();
     let before = store.usage_snapshot().unwrap();
@@ -308,6 +322,7 @@ fn replacement_requires_complete_data_and_deletes_only_its_sessions_observations
     import.session.observation_retention = ObservationRetention::ReplaceSessionObservations;
     import.session.completion = SnapshotCompletion::Partial;
     import.session.events.clear();
+
     assert_eq!(
         store.commit_import(&validated(&import)).unwrap(),
         CommitImportOutcome::DeferredIncomplete
@@ -336,6 +351,7 @@ fn corrupt_state_is_rejected_without_exposing_contents() {
         let mut store = SqliteUsageStore::open(&path).unwrap();
         let import = session_import("/sessions/a.jsonl", 10);
         store.commit_import(&validated(&import)).unwrap();
+
         let connection = Connection::open(&path).unwrap();
         if sql.contains("last_successful_scan_ms") {
             assert!(connection.execute(sql, []).is_err());
@@ -344,6 +360,7 @@ fn corrupt_state_is_rejected_without_exposing_contents() {
                 .unwrap();
         }
         connection.execute(sql, []).unwrap();
+
         let error = if sql.contains("billing_facts") {
             store.usage_snapshot().unwrap_err()
         } else {
@@ -362,6 +379,7 @@ fn unsupported_schema_is_left_untouched() {
         .execute_batch("CREATE TABLE preserved(value); INSERT INTO preserved VALUES (42)")
         .unwrap();
     connection.pragma_update(None, "user_version", 99).unwrap();
+
     assert!(matches!(
         SqliteUsageStore::open(&path),
         Err(SqliteStoreError::UnsupportedSchemaVersion(99))
@@ -381,6 +399,7 @@ fn commit_failure_rolls_back_and_stops_reporting() {
     use token_tracker::application::{
         AllTimeReportError, ImportSynchronizationError, run_all_time_report,
     };
+
     let tree = TempTree::new();
     tree.write(
         "session.jsonl",
@@ -395,6 +414,7 @@ fn commit_failure_rolls_back_and_stops_reporting() {
          BEGIN SELECT RAISE(ABORT, 'storage write failed'); END;",
         )
         .unwrap();
+
     let adapter =
         FileSessionSource::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
     assert!(matches!(
@@ -406,6 +426,7 @@ fn commit_failure_rolls_back_and_stops_reporting() {
             }
         ))
     ));
+
     let snapshot = store.usage_snapshot().unwrap();
     assert!(snapshot.sessions.is_empty());
     assert!(snapshot.observations.is_empty());

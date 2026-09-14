@@ -63,6 +63,7 @@ impl TurnLifecycle {
             if !self.started_turns.insert(turn_id.clone()) {
                 return Err(invalid());
             }
+
             if let Some(ActiveTurn::Review(review)) = &mut self.active {
                 review.phase = ReviewPhase::Forwarding {
                     child_started: true,

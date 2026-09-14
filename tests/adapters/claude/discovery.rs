@@ -44,11 +44,13 @@ fn discovers_main_and_nested_children_only_in_supported_layouts() {
     ] {
         tree.write(artifact, b"ignored");
     }
+
     let discovery = ClaudeSessionDiscovery::new(&root);
     let report = discovery.discover().unwrap();
     assert!(report.warnings.is_empty());
     assert!(report.coverage.inaccessible_paths.is_empty());
     assert_eq!(report.coverage.inspected_roots, vec![root]);
+
     let mut expected = [main, child, nested.clone()];
     expected.sort();
     assert_eq!(
@@ -66,6 +68,7 @@ fn missing_relative_root_has_complete_empty_coverage() {
     let root = PathBuf::from(format!("missing-claude-root-{}", std::process::id()));
     let absolute = std::env::current_dir().unwrap().join(&root);
     assert!(!absolute.exists());
+
     let report = ClaudeSessionDiscovery::new(root).discover().unwrap();
     assert!(report.files.is_empty());
     assert!(report.warnings.is_empty());

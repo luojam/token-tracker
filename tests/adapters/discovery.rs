@@ -43,6 +43,7 @@ fn skipped_links_preserve_presence_while_readable_files_are_discovered() {
     for name in ["broken", "broken.jsonl"] {
         symlink(tree.root.join("missing"), root.join(name)).unwrap();
     }
+
     let valid = root.join("valid.jsonl");
     symlink(target.join("session.jsonl"), &valid).unwrap();
 
@@ -64,6 +65,7 @@ fn skipped_links_preserve_presence_while_readable_files_are_discovered() {
     );
     assert_eq!(report.warnings.len(), 5);
     assert_eq!(report, scan(&root));
+
     record(&mut store, 2);
     let states = store.source_states(&agent).unwrap();
     assert_eq!(states.len(), 2);
@@ -99,6 +101,7 @@ fn symlink_and_unreadable_roots_do_not_establish_absence() {
     fs::remove_file(&root).unwrap();
     // A file makes read_dir fail even for privileged runners.
     fs::write(&root, b"not a directory").unwrap();
+
     let report = scan(&root);
     assert!(report.coverage.inspected_roots.is_empty());
     assert_eq!(report.coverage.inaccessible_paths, vec![root.clone()]);

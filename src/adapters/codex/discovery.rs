@@ -64,6 +64,7 @@ impl SessionFileDiscovery for CodexSessionDiscovery {
             .map(|root| absolute_root(root))
             .collect::<Result<Vec<_>, _>>()?;
         roots.sort_unstable();
+
         let mut distinct_roots: Vec<PathBuf> = Vec::new();
         for root in roots {
             if !distinct_roots.iter().any(|ancestor| {
@@ -145,10 +146,12 @@ mod tests {
                 expected
             );
         }
+
         assert_eq!(
             default_session_roots_from(Some(home.as_os_str()), None).unwrap(),
             vec![home.join("sessions"), home.join("archived_sessions")]
         );
+
         let relative = env::current_dir().unwrap().join("custom-codex");
         assert_eq!(
             default_session_roots_from(
@@ -161,6 +164,7 @@ mod tests {
                 relative.join("archived_sessions")
             ]
         );
+
         for home in [
             None,
             Some(OsStr::new("")),
@@ -171,6 +175,7 @@ mod tests {
                 Err(CodexDiscoveryError::HomeDirectoryUnavailable)
             ));
         }
+
         assert!(matches!(
             CodexSessionDiscovery::new([""]).discover(),
             Err(CodexDiscoveryError::EmptySessionRoot)

@@ -37,6 +37,7 @@ fn validates_raw_mirror_offset_last_usage_and_unmatched_progression() {
                 );
             }
         }
+
         let mut unmatched = original[..=mirror].to_vec();
         let mut notification = unmatched[mirror].clone();
         multiply(&mut notification["payload"]["info"]["total_token_usage"], 2);
@@ -55,6 +56,7 @@ fn response_accumulators_must_match_original_progression_and_turn_boundaries() {
             assert!(parse(&changed[..=index]).is_err(), "{index}: {field}");
         }
     }
+
     let mut wrong_turn = original.clone();
     wrong_turn[9]["payload"]["turn_id"] = json!("turn-main");
     assert!(parse(&wrong_turn).is_err());
@@ -73,6 +75,7 @@ fn response_accumulators_must_match_original_progression_and_turn_boundaries() {
         1,
         json!({"timestamp":"2026-01-01T00:00:00Z","type":"compacted","payload":{}}),
     );
+
     assert!(parse(&checkpoint).is_err());
 }
 
@@ -85,6 +88,7 @@ fn pending_response_allows_identical_repeats_but_not_corrections_or_unproven_bou
         parse(&pending).unwrap().events,
         parse(&original[..4]).unwrap().events
     );
+
     pending.push(original[4].clone());
     pending.extend_from_slice(&original[5..]);
     assert_eq!(
@@ -103,6 +107,7 @@ fn pending_response_allows_identical_repeats_but_not_corrections_or_unproven_bou
         changed.push(correction);
         assert!(parse(&changed).is_err());
     }
+
     for next in [&original[5], &original[7], &original[9]] {
         let mut changed = original[..4].to_vec();
         changed.push(next.clone());
@@ -121,6 +126,7 @@ fn confirmed_corrections_do_not_change_historical_mirror_arithmetic() {
     let mut changed = original[..5].to_vec();
     changed.push(correction.clone());
     changed.extend_from_slice(&original[5..]);
+
     let parsed = parse(&changed).unwrap();
     assert_eq!(parsed.events.len(), 2);
     assert_eq!(
@@ -137,6 +143,7 @@ fn confirmed_corrections_do_not_change_historical_mirror_arithmetic() {
         correction["payload"]["thread_token_usage"].clone();
     invented_mirror["payload"]["info"]["last_token_usage"] = correction["payload"]["usage"].clone();
     changed.insert(6, invented_mirror);
+
     assert!(parse(&changed).is_err());
 }
 
@@ -153,6 +160,7 @@ fn repeated_snapshots_compaction_and_zero_mirrors_do_not_add_events() {
     changed.extend_from_slice(&original[5..10]);
     changed.push(recomputed);
     changed.extend_from_slice(&original[10..]);
+
     assert_eq!(
         parse(&changed).unwrap().events,
         parse(&original).unwrap().events
@@ -167,6 +175,7 @@ fn repeated_snapshots_compaction_and_zero_mirrors_do_not_add_events() {
     }
     zero[9]["payload"]["thread_token_usage"] = zero[9]["payload"]["usage"].clone();
     zero[10]["payload"]["info"]["total_token_usage"] = zero[9]["payload"]["usage"].clone();
+
     let parsed = parse(&zero).unwrap();
     assert_eq!(parsed.events.len(), 2);
     assert_eq!(parsed.events[0].tokens.total(), 0);
@@ -181,6 +190,7 @@ fn adding_response_usage_to_a_legacy_offset_is_checked_for_overflow() {
         source[index]["payload"]["info"]["total_token_usage"] = largest.clone();
         source[index]["payload"]["info"]["last_token_usage"] = largest.clone();
     }
+
     assert!(parse(&source[..11]).is_ok());
     assert!(parse(&source[..12]).is_err());
 }

@@ -169,6 +169,7 @@ fn schedule(
     if attribution.provider != "openai" {
         return Err(EstimateUnavailableReason::UnsupportedProvider);
     }
+
     let model = match attribution.model.as_str() {
         "gpt-6-astra" => &GPT_6_ASTRA,
         "gpt-5.6-sol" | "gpt-5.6" => &GPT_5_6_SOL,
@@ -234,6 +235,7 @@ pub fn calculate_estimate(
     if !context.requests.usage_matches(event.tokens) {
         return Err(Reason::UnknownRequestGranularity);
     }
+
     if let RequestBreakdown::KnownRequests(requests) = &context.requests {
         return requests
             .as_slice()
@@ -253,6 +255,7 @@ pub fn calculate_estimate(
                 })
             });
     }
+
     price_tokens(
         event.tokens,
         context,
@@ -291,6 +294,7 @@ fn price_tokens(
     {
         return Err(Reason::IncompleteCacheDetail);
     }
+
     Ok(UsageEstimate {
         cost: calculate_cost(tokens, rates)?,
         assumed_short_context,
@@ -331,10 +335,12 @@ mod tests {
             input: u64::MAX,
             ..TokenCounts::default()
         };
+
         assert_eq!(
             calculate_cost(tokens, rates).unwrap().as_picodollars(),
             u128::from(u64::MAX) * u128::from(u64::MAX),
         );
+
         tokens.cache_read = u64::MAX;
         assert_eq!(
             calculate_cost(tokens, rates),

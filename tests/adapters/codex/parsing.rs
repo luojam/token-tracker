@@ -41,6 +41,7 @@ fn preserves_original_metadata_across_resume_and_client_upgrades() {
     resumed["payload"]["timestamp"] = json!("2026-01-01T00:00:00Z");
     resumed["payload"]["cwd"] = json!("/work/elsewhere");
     resumed["payload"]["cli_version"] = json!("future-client");
+
     let parsed = parse(&format!("{HEADER}\n{resumed}")).unwrap();
     assert_eq!(parsed.metadata, original.metadata);
 
@@ -56,6 +57,7 @@ fn preserves_original_metadata_across_resume_and_client_upgrades() {
         "session_meta",
         json!({"id": "thread-minimal", "timestamp": "2026-01-01T00:00:00Z"}),
     );
+
     let parsed = parse(&minimal.to_string()).unwrap();
     assert_eq!(parsed.metadata.working_directory, None);
 }
@@ -85,6 +87,7 @@ fn keeps_fork_owner_and_uses_explicit_subagent_parent() {
         parsed.metadata.parent_session,
         Some(ParentSession::SessionId("thread-main".into()))
     );
+
     let no_parent = subagent.replace(",\"parent_thread_id\":\"thread-main\"", "");
     assert_eq!(parse(&no_parent).unwrap().metadata.parent_session, None);
 }
@@ -111,6 +114,7 @@ fn rejects_unrelated_headers_and_conflicting_original_metadata() {
     let mut conflict: Value = serde_json::from_str(owner).unwrap();
     conflict["payload"]["parent_thread_id"] = json!("different-parent");
     assert!(parse(&conflict.to_string()).is_err());
+
     conflict["payload"]["parent_thread_id"] = json!("thread-fork");
     conflict["payload"]["forked_from_id"] = json!("thread-fork");
     assert!(parse(&conflict.to_string()).is_err());
@@ -121,6 +125,7 @@ fn rejects_unrelated_headers_and_conflicting_original_metadata() {
         parse(&format!("{owner}\n{ancestor}\n{ancestor_change}")),
         Err(CodexParseError::InvalidField { line: 3, .. })
     ));
+
     ancestor_change["payload"]["forked_from_id"] = json!("thread-fork");
     assert!(parse(&format!("{owner}\n{ancestor_change}")).is_err());
 
@@ -129,6 +134,7 @@ fn rejects_unrelated_headers_and_conflicting_original_metadata() {
         parse(&format!("{owner}\n{task}\n{ancestor}")),
         Err(CodexParseError::InvalidField { line: 3, .. })
     ));
+
     let subagent_owner = owner.replace("forked_from_id", "parent_thread_id");
     assert!(parse(&format!("{subagent_owner}\n{ancestor}")).is_err());
 }
@@ -136,12 +142,14 @@ fn rejects_unrelated_headers_and_conflicting_original_metadata() {
 #[test]
 fn requires_a_complete_header_with_original_id_and_source_timestamp() {
     assert!(matches!(parse(""), Err(CodexParseError::MissingHeader)));
+
     for source in ["{", r#"{"type":"session_meta","payload":"#] {
         assert!(matches!(
             parse(source),
             Err(CodexParseError::IncompleteHeader)
         ));
     }
+
     assert!(matches!(
         parse(r#"{"type":"response_item","payload":{}}"#),
         Err(CodexParseError::InvalidHeader)
@@ -157,6 +165,7 @@ fn requires_a_complete_header_with_original_id_and_source_timestamp() {
     ] {
         let mut header: Value = serde_json::from_str(HEADER).unwrap();
         *header.pointer_mut(pointer).unwrap() = value;
+
         let error = parse(&header.to_string()).unwrap_err();
         assert!(matches!(
             error,
@@ -165,13 +174,16 @@ fn requires_a_complete_header_with_original_id_and_source_timestamp() {
         assert!(!format!("{error:?} {error}").contains("SECRET"));
         assert!(error.source().is_none());
     }
+
     for missing in ["id", "timestamp"] {
         let mut header: Value = serde_json::from_str(HEADER).unwrap();
         header["payload"].as_object_mut().unwrap().remove(missing);
         assert!(parse(&header.to_string()).is_err());
     }
+
     let mut bytes = b"{\"type\":\"session_meta\",\"payload\":{\"id\":\"".to_vec();
     bytes.extend_from_slice(&[0xf0, 0x9f]);
+
     assert!(matches!(
         parse_bytes(&bytes),
         Err(CodexParseError::IncompleteHeader)
@@ -188,6 +200,7 @@ fn truncated_tails_preserve_usage_but_complete_malformed_lines_fail() {
         parse(&format!("{partial}\n")),
         Err(CodexParseError::MalformedLine { .. })
     ));
+
     let error = parse(&format!("{HEADER}\n{{SECRET_INVALID_JSON}}\n")).unwrap_err();
     assert!(matches!(error, CodexParseError::MalformedLine { line: 2 }));
     assert!(!format!("{error:?} {error}").contains("SECRET"));
@@ -230,12 +243,14 @@ fn validates_recognized_accounting_fields_without_exposing_values() {
             assert!(error.source().is_none());
         }
     }
+
     let mut missing = response.clone();
     missing["payload"]["usage"]
         .as_object_mut()
         .unwrap()
         .remove("input_tokens");
     assert!(parse(&format!("{HEADER}\n{missing}")).is_err());
+
     let overflow = response.to_string().replace(
         "\"input_tokens\":100",
         "\"input_tokens\":18446744073709551616",
@@ -257,8 +272,10 @@ fn validates_recognized_accounting_fields_without_exposing_values() {
         ));
         assert!(!format!("{error:?} {error}").contains("SECRET"));
     }
+
     let context = record("turn_context", json!({"turn_id": false}));
     assert!(parse(&format!("{HEADER}\n{context}")).is_err());
+
     let array_context = record("turn_context", json!(["turn-main"]));
     assert!(parse(&format!("{HEADER}\n{array_context}")).is_err());
     assert!(parse(&format!("{HEADER}\n[\"future_record\"]")).is_err());
@@ -268,11 +285,13 @@ fn validates_recognized_accounting_fields_without_exposing_values() {
         parse(legacy).unwrap().completion,
         SnapshotCompletion::Complete
     );
+
     let bad_legacy = legacy.replace("\"input_tokens\":100", "\"input_tokens\":false");
     assert!(matches!(
         parse(&bad_legacy),
         Err(CodexParseError::InvalidField { line: 5, .. })
     ));
+
     let missing_info = record("event_msg", json!({"type": "token_count"}));
     assert!(parse(&format!("{HEADER}\n{missing_info}")).is_ok());
 }
@@ -305,6 +324,7 @@ fn unknown_fields_and_client_versions_do_not_change_accounting() {
         .chain(records.iter().map(Value::to_string))
         .collect::<Vec<_>>()
         .join("\n");
+
     let parsed = parse(&source).unwrap();
     assert_eq!(parsed.metadata.session_id, "thread-main");
     assert_eq!(parsed.metadata.parent_session, None);
@@ -321,11 +341,13 @@ fn unknown_fields_and_client_versions_do_not_change_accounting() {
 #[test]
 fn read_failure_is_an_error_and_does_not_expose_reader_content() {
     struct FailingReader;
+
     impl Read for FailingReader {
         fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
             Err(io::Error::other("SECRET_READER_CONTENT"))
         }
     }
+
     let input = Cursor::new(format!("{HEADER}\n").into_bytes()).chain(FailingReader);
     let error = CodexSessionParser::new()
         .parse(

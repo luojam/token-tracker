@@ -57,6 +57,7 @@ const USAGE_OPTIONAL: &[&str] = &[
 pub fn read_snapshot(path: &Path) -> Result<HermesDatabaseSnapshot, HermesReadError> {
     let mut connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     connection.busy_timeout(Duration::from_secs(2))?;
+
     let transaction = connection.transaction()?;
     let session_columns = columns(&transaction, "sessions", SESSION_REQUIRED, SESSION_OPTIONAL)?;
     let usage_columns = columns(
@@ -65,6 +66,7 @@ pub fn read_snapshot(path: &Path) -> Result<HermesDatabaseSnapshot, HermesReadEr
         USAGE_REQUIRED,
         USAGE_OPTIONAL,
     )?;
+
     let mut sessions = BTreeMap::new();
     for row in read_rows(&transaction, "sessions", &session_columns)? {
         let id = row.text("id")?;
@@ -77,6 +79,7 @@ pub fn read_snapshot(path: &Path) -> Result<HermesDatabaseSnapshot, HermesReadEr
             ));
         }
     }
+
     for row in read_rows(&transaction, "session_model_usage", &usage_columns)? {
         let id = row.text("session_id")?;
         let Some((_, usage)) = sessions.get_mut(id) else {
@@ -86,6 +89,7 @@ pub fn read_snapshot(path: &Path) -> Result<HermesDatabaseSnapshot, HermesReadEr
         };
         usage.push(row);
     }
+
     transaction.commit()?;
     drop(connection);
 
@@ -123,6 +127,7 @@ fn columns(
     if !missing.is_empty() {
         return Err(HermesReadError::UnsupportedSchema { table, missing });
     }
+
     Ok(required
         .iter()
         .chain(

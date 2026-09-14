@@ -12,6 +12,7 @@ use crate::domain::{AgentId, UsageSummary};
 
 pub trait ImportAdapter<S: UsageStore> {
     fn agent_id(&self) -> AgentId;
+
     fn synchronize(
         &self,
         store: &mut S,
@@ -113,6 +114,7 @@ pub(crate) fn read_summary<S: UsageReadStore + UsageStore>(
         .usage_snapshot()
         .map_err(|source| ReportError::Storage(Box::new(source)))?;
     let summary = summarize_usage(&snapshot).map_err(ReportError::Summary)?;
+
     let agents = snapshot
         .sessions
         .iter()
@@ -133,6 +135,7 @@ pub(crate) fn read_summary<S: UsageReadStore + UsageStore>(
             }
         }
     }
+
     Ok((summary, diagnostics))
 }
 

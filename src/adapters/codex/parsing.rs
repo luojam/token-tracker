@@ -64,6 +64,7 @@ impl SessionParser for CodexSessionParser {
                 }
                 JsonlLine::Eof => break,
             };
+
             let entry: TypeWire = decode(text, line_number, "type")?;
             if entry.entry_type == "session_meta" {
                 validate_timestamp(text, line_number)?;
@@ -223,6 +224,7 @@ impl SessionState {
                         if let Some(mirrors) = &self.mirrors {
                             mirrors.require_confirmed(line)?;
                         }
+
                         if self.turns.accept_boundary(
                             &event.entry_type,
                             turn.turn_id.clone(),
@@ -306,6 +308,7 @@ impl SessionState {
                 field: "token_usage_record.payload.thread_id",
             });
         }
+
         let tokens = response
             .usage
             .0
@@ -352,6 +355,7 @@ impl SessionState {
                     return Err(CodexParseError::InvalidField { line, field });
                 }
             }
+
             if let Some(mirrors) = &self.mirrors {
                 mirrors.accept_repeat(&response, line)?;
             }
@@ -379,11 +383,13 @@ impl SessionState {
                     field: "token_usage_record.payload.thread_id",
                 });
             }
+
             self.mirrors
                 .get_or_insert_with(|| {
                     MirrorState::new(self.legacy.baseline(), response.thread_id.clone())
                 })
                 .accept_response(&response, line)?;
+
             let (attribution, pricing_context, _) = self.context.observation(
                 &response.turn_id,
                 Some(&response.thread_id),
@@ -437,6 +443,7 @@ impl SessionState {
                     field: "session_meta.payload.parent",
                 });
             }
+
             self.context.accept_header(
                 id,
                 header.provider,
@@ -463,6 +470,7 @@ impl SessionState {
                 field: "session_meta.payload.parent",
             });
         }
+
         self.expected_ancestor = header.identity.forked_from_id.clone();
         // Copied legacy turns cannot establish thread ownership.
         self.context.accept_header(id, header.provider, false);
@@ -508,6 +516,7 @@ impl HeaderWire {
                 return Err(CodexParseError::InvalidField { line, field });
             }
         }
+
         if matches!(
             (&self.parent_thread_id, &self.forked_from_id),
             (Some(parent), Some(fork)) if parent != fork
@@ -526,6 +535,7 @@ impl HeaderWire {
                 field: "session_meta.payload.parent",
             });
         }
+
         let started_at = parse_timestamp(&self.timestamp, line, "session_meta.payload.timestamp")?;
         Ok(NormalizedHeader {
             provider: self.model_provider,
@@ -696,6 +706,7 @@ impl TokenUsageWire {
         {
             return Err(invalid());
         }
+
         let cache_write = self.cache_write_input_tokens.unwrap_or(0);
         let cached = self
             .cached_input_tokens

@@ -50,6 +50,7 @@ impl MemorySource {
             revision: revision.clone(),
             path: None,
         });
+
         let mut session = TestParser { agent: "memory" }
             .parse(
                 &mut Cursor::new(pi_session(input)),
@@ -86,6 +87,7 @@ fn pathless_sessions_persist_loaded_revisions_and_retry_partial_snapshots() {
         states[0].last_import.as_ref().unwrap().revision,
         source.snapshots[&first].revision
     );
+
     let snapshot = store.usage_snapshot().unwrap();
     assert!(
         snapshot
@@ -98,10 +100,12 @@ fn pathless_sessions_persist_loaded_revisions_and_retry_partial_snapshots() {
 
     let mut store = SqliteUsageStore::open(&database).unwrap();
     assert_eq!(store.source_states(&source.agent_id()).unwrap(), states);
+
     source.discovery.sources[0].revision = source.snapshots[&first].revision.clone();
     let partial = source.snapshots.get_mut(&second).unwrap();
     partial.session.events[0].tokens.input = 30;
     partial.session.completion = SnapshotCompletion::Complete;
+
     let report =
         synchronize_sessions_at(&source, &mut store, Timestamp::from_unix_milliseconds(2)).unwrap();
     assert_eq!(report.counts.sources_unchanged, 1);
@@ -126,6 +130,7 @@ fn omitted_and_failed_sources_keep_history_until_absence_is_explicit() {
 
     source.discovery.sources[0].revision = SourceRevision(b"changed".to_vec());
     source.snapshots.clear();
+
     let failed =
         synchronize_sessions_at(&source, &mut store, Timestamp::from_unix_milliseconds(2)).unwrap();
     assert_eq!(failed.counts.sources_failed, 1);

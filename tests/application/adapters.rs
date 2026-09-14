@@ -22,13 +22,16 @@ struct TestDiscovery {
 }
 impl SessionFileDiscovery for TestDiscovery {
     type Error = io::Error;
+
     fn agent_id(&self) -> AgentId {
         self.agent.into()
     }
+
     fn discover(&self) -> Result<FileDiscoveryReport, Self::Error> {
         if self.fail {
             return Err(io::Error::other("discovery unavailable"));
         }
+
         let mut report = PiSessionDiscovery::new(&self.root)
             .discover()
             .map_err(io::Error::other)?;
@@ -79,6 +82,7 @@ fn invalid_imports_warn_without_preventing_reporting() {
     );
     let pi = FileSessionSource::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
+
     let report = run_all_time_report(&[&pi], &mut store, vec![]).unwrap();
     assert_eq!(report.summary.totals.tokens.input, 7);
     assert_eq!(report.warnings.len(), 2);
@@ -107,6 +111,7 @@ fn discovery_failure_does_not_prevent_other_adapters_from_importing() {
         },
     );
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
+
     let report = run_all_time_report(&[&unavailable, &pi], &mut store, vec![]).unwrap();
     assert_eq!(report.summary.totals.tokens.input, 7);
     assert_eq!(report.warnings.len(), 1);
@@ -121,6 +126,7 @@ fn agents_have_independent_usage_revisions_and_presence_at_the_same_path() {
     let tree = TempTree::new();
     let path = tree.root.join("shared.jsonl");
     fs::write(&path, pi_session(10)).unwrap();
+
     let discovery = |agent, files| TestDiscovery {
         agent,
         root: tree.root.clone(),
@@ -129,6 +135,7 @@ fn agents_have_independent_usage_revisions_and_presence_at_the_same_path() {
     };
     let first = discovery("first", vec![path.clone()]);
     let second = discovery("second", vec![path.clone()]);
+
     let sync = |store: &mut SqliteUsageStore, source: &TestDiscovery, time| {
         synchronize_sessions_at(
             &FileSessionSource::new(
@@ -143,11 +150,13 @@ fn agents_have_independent_usage_revisions_and_presence_at_the_same_path() {
         .unwrap()
         .counts
     };
+
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     for source in [&first, &second] {
         assert_eq!(sync(&mut store, source, 1).sources_imported, 1);
     }
     assert_eq!(sync(&mut store, &second, 2).sources_unchanged, 1);
+
     sync(&mut store, &discovery("first", vec![]), 100);
     assert!(!store.source_states(&"first".into()).unwrap()[0].present);
     assert!(store.source_states(&"second".into()).unwrap()[0].present);

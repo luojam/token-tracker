@@ -35,6 +35,7 @@ fn response_cache_detail_comes_only_from_usage_not_totals_or_mirrors() {
     assert_eq!(baseline.events.len(), 1);
     let pricing = facts(&baseline.events[0]);
     assert_eq!(pricing.requests, RequestBreakdown::SingleRequest);
+
     for usage_complete in [false, true] {
         let mut history = fixture[..5].to_vec();
         cache_field(&mut history[3]["payload"]["usage"], usage_complete);
@@ -44,6 +45,7 @@ fn response_cache_detail_comes_only_from_usage_not_totals_or_mirrors() {
         for vector in ["total_token_usage", "last_token_usage"] {
             cache_field(&mut history[4]["payload"]["info"][vector], !usage_complete);
         }
+
         let mut expected = baseline.events[0].clone();
         facts_mut(&mut expected).cache_detail = detail(usage_complete);
         assert_eq!(parse(&history[..4]).unwrap().events, vec![expected.clone()]);
@@ -58,6 +60,7 @@ fn detail_only_response_corrections_replace_completeness_but_keep_request_contex
         let mut history = fixture[..5].to_vec();
         cache_field(&mut history[3]["payload"]["usage"], initially_complete);
         history.insert(1, fixture[6].clone());
+
         let original = parse(&history).unwrap();
         assert_eq!(original.events.len(), 1);
 
@@ -67,6 +70,7 @@ fn detail_only_response_corrections_replace_completeness_but_keep_request_contex
         history.push(settings);
         history.extend_from_slice(&fixture[7..9]);
         history.last_mut().unwrap()["payload"]["model"] = json!("gpt-5.6");
+
         let mut correction = fixture[3].clone();
         correction["timestamp"] = json!("2026-02-01T00:00:00Z");
         cache_field(&mut correction["payload"]["usage"], !initially_complete);
@@ -89,6 +93,7 @@ fn legacy_cache_detail_requires_both_delta_endpoints_and_recovers_on_later_turns
         );
         history.push(fixture[7].clone());
         history.extend_from_slice(&fixture[9..11]);
+
         let mut second = fixture[6].clone();
         cache_field(
             &mut second["payload"]["info"]["total_token_usage"],
@@ -102,6 +107,7 @@ fn legacy_cache_detail_requires_both_delta_endpoints_and_recovers_on_later_turns
             record["payload"]["turn_id"] = json!("turn-legacy-c");
             history.push(record);
         }
+
         let mut third = fixture[12].clone();
         cache_field(&mut third["payload"]["info"]["total_token_usage"], true);
         history.push(third);
@@ -133,12 +139,14 @@ fn legacy_uncertainty_is_sticky_within_an_aggregate_and_noops_preserve_context()
             initially_complete,
         );
         let original = parse(&history).unwrap();
+
         let mut repeat = history[4].clone();
         cache_field(
             &mut repeat["payload"]["info"]["total_token_usage"],
             !initially_complete,
         );
         history.push(repeat);
+
         assert_eq!(parse(&history).unwrap().events, original.events);
 
         for index in [6, 12] {
@@ -146,6 +154,7 @@ fn legacy_uncertainty_is_sticky_within_an_aggregate_and_noops_preserve_context()
             cache_field(&mut next["payload"]["info"]["total_token_usage"], true);
             history.push(next);
         }
+
         let parsed = parse(&history).unwrap();
         assert_eq!(parsed.events.len(), 1);
         assert_eq!(

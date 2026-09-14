@@ -33,6 +33,7 @@ pub(super) fn pricing_context(
     if !endpoint.is_empty() && endpoint_provider(endpoint) != Some(provider) {
         return None;
     }
+
     match provider {
         "openai" => Some(PricingContext::OpenAi(OpenAiBilling {
             tier: ServiceTier::Unknown,

@@ -27,6 +27,7 @@ fn discovers_only_rollouts_in_nested_active_and_archive_roots_once_in_path_order
     ] {
         fs::write(nested.join(ignored), b"ignored").unwrap();
     }
+
     fs::write(tree.root.join("rollout-outside.jsonl"), b"outside roots").unwrap();
     let discovery = CodexSessionDiscovery::new([&active, &nested, &archive, &active]);
     let report = discovery.discover().unwrap();
@@ -50,6 +51,7 @@ fn discovers_only_rollouts_in_nested_active_and_archive_roots_once_in_path_order
         assert_eq!(file.revision.size, metadata.len());
         assert_eq!(file.revision.modified_at, metadata.modified().unwrap());
     }
+
     assert_eq!(
         report,
         CodexSessionDiscovery::new([archive, active])
@@ -83,6 +85,7 @@ fn missing_relative_roots_are_inspected_without_warnings() {
     let root = PathBuf::from(format!("missing-codex-root-{}", std::process::id()));
     let absolute = std::env::current_dir().unwrap().join(&root);
     assert!(!absolute.exists());
+
     let report = CodexSessionDiscovery::new([root]).discover().unwrap();
     assert!(report.files.is_empty());
     assert!(report.warnings.is_empty());

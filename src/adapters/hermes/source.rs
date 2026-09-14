@@ -51,6 +51,7 @@ impl SessionSource for HermesSessionSource {
     fn discover(&self, known: &[SourceState]) -> Result<DiscoveryReport, Self::Error> {
         let mut snapshots = self.snapshots.borrow_mut();
         snapshots.clear();
+
         let (databases, warnings, mut complete) = self.locations.discover();
         let mut report = DiscoveryReport {
             warnings,
@@ -98,6 +99,7 @@ impl SessionSource for HermesSessionSource {
                     }
                     continue;
                 }
+
                 let source = DiscoveredSource {
                     key: session.key.clone(),
                     revision: snapshot.revision.clone(),

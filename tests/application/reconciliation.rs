@@ -135,6 +135,7 @@ fn snapshot(reverse: bool) -> UsageSnapshot {
     if reverse {
         records.reverse();
     }
+
     let mut snapshot = UsageSnapshot::default();
     for (session, observations) in records {
         snapshot.sessions.push(session);
@@ -165,7 +166,6 @@ fn summary_reconciles_independently_of_observation_order() {
 fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     let context = OpenAiBilling {
         tier: ServiceTier::Standard,
-
         tier_evidence: TierEvidence::RequestedSetting,
         requests: RequestBreakdown::SingleRequest,
         cache_detail: CacheDetail::Complete,
@@ -174,6 +174,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
         provider: "openai".into(),
         model: "gpt-5.6".into(),
     };
+
     let mut data = snapshot(false);
     for session in &mut data.sessions {
         session.key.agent = "codex".into();
@@ -189,12 +190,12 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
         if observation.session.session_id == "child-session" {
             observation.event.pricing_context = Some(PricingContext::OpenAi(OpenAiBilling {
                 tier: ServiceTier::Fast,
-
                 tier_evidence: TierEvidence::ServedResponse,
                 ..context.clone()
             }));
         }
     }
+
     let Some(PricingContext::OpenAi(unknown)) = data.observations[1].event.pricing_context.as_mut()
     else {
         panic!("expected OpenAI billing");
@@ -207,6 +208,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     let mut conflicting = data.observations[2].clone();
     conflicting.event.identity.adapter_key = "tool".into();
     data.observations.push(conflicting);
+
     let (pi, mut observations) = sessions().into_iter().next().unwrap();
     observations[0].event.attribution = Some(model.clone());
     observations[0].event.pricing_context = Some(PricingContext::OpenAi(context));
@@ -217,6 +219,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     data.sessions.reverse();
     data.observations.reverse();
     assert_eq!(summarize_usage(&data).unwrap(), summary);
+
     let estimate = &summary
         .breakdown
         .iter()
@@ -236,6 +239,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
             partial: true,
         }
     );
+
     assert_eq!(estimate.imported_event_count, 2);
     assert_eq!(estimate.priced_event_count, 2);
     assert_eq!(estimate.requested_setting_event_count, 0);
@@ -270,6 +274,7 @@ fn typed_lineage_and_ambiguous_provenance_use_deterministic_precedence() {
     data.sessions[0].parent_session = Some(ParentSession::SessionId(child.session_id));
     let expected = summarize_usage(&data).unwrap();
     assert_eq!(expected.totals.tokens.input, 1005);
+
     data.sessions.reverse();
     data.observations.reverse();
     assert_eq!(summarize_usage(&data).unwrap(), expected);
@@ -281,8 +286,10 @@ fn unrelated_copies_use_start_time_then_source_path() {
     data.sessions[1].parent_session = None;
     data.sessions[0].started_at = Timestamp::from_unix_milliseconds(50);
     assert_eq!(summarize_usage(&data).unwrap().totals.tokens.input, 16);
+
     data.sessions[0].started_at = data.sessions[1].started_at;
     assert_eq!(summarize_usage(&data).unwrap().totals.tokens.input, 1005);
+
     data.sessions.reverse();
     data.observations.reverse();
     assert_eq!(summarize_usage(&data).unwrap().totals.tokens.input, 1005);

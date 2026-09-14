@@ -25,6 +25,7 @@ fn settings(thread: Option<&str>, tier: Option<Value>) -> Value {
     if let Some(tier) = tier {
         snapshot["service_tier"] = tier;
     }
+
     let mut payload = json!({"type": "thread_settings_applied", "thread_settings": snapshot});
     if let Some(thread) = thread {
         payload["thread_id"] = json!(thread);
@@ -67,6 +68,7 @@ fn new_turn_uses_its_model_and_clears_omitted_tier() {
     lines[6] = settings(None, None);
     lines[8]["payload"]["model"] = json!("new-model");
     lines.insert(1, settings(None, Some(json!("priority"))));
+
     let parsed = parse(&lines).unwrap();
     assert_tier(
         &parsed.events[0],
@@ -115,6 +117,7 @@ fn late_and_in_flight_settings_do_not_reprice_completed_responses() {
         context("c", json!("model-c")),
         response("c", "c", 1, 3),
     ]);
+
     let parsed = parse(&lines).unwrap();
     assert_eq!(parsed.events[0], first);
     assert_tier(
@@ -136,6 +139,7 @@ fn missing_provider_is_not_inferred_from_model() {
         .as_object_mut()
         .unwrap()
         .remove("model_provider");
+
     let parsed = parse(&lines).unwrap();
     assert_eq!(parsed.events[0].attribution, None);
     assert_eq!(parsed.events[0].tokens.total(), 110);
@@ -145,15 +149,18 @@ fn missing_provider_is_not_inferred_from_model() {
 fn legacy_aggregates_merge_only_context_of_contributing_deltas() {
     let mut lines = records(include_str!("../../fixtures/codex/legacy-fresh.jsonl"));
     lines.insert(1, settings(None, Some(json!("default"))));
+
     let original = parse(&lines[..6]).unwrap().events.remove(0);
     assert_tier(
         &original,
         ServiceTier::Standard,
         TierEvidence::RequestedSetting,
     );
+
     lines.insert(6, settings(None, Some(json!("priority"))));
     lines.insert(7, context("turn-legacy-a", json!("changed-model")));
     assert_eq!(parse(&lines[..9]).unwrap().events[0], original);
+
     let aggregate = parse(&lines).unwrap().events.remove(0);
     assert_eq!(aggregate.tokens.total(), 250);
     assert_eq!(aggregate.attribution, None);
@@ -165,6 +172,7 @@ fn child_overrides_and_foreign_settings_never_share_parent_defaults() {
     let mut lines = records(include_str!("../../fixtures/codex/response-subagent.jsonl"));
     lines[0]["payload"]["model_provider"] = json!("child-provider");
     lines.insert(1, settings(Some("thread-main"), Some(json!("priority"))));
+
     let parsed = parse(&lines).unwrap();
     assert_tier(
         &parsed.events[0],
@@ -175,8 +183,10 @@ fn child_overrides_and_foreign_settings_never_share_parent_defaults() {
         parsed.events[0].attribution.as_ref().unwrap().provider,
         "child-provider"
     );
+
     lines.insert(2, settings(Some("thread-child"), Some(json!("default"))));
     lines.insert(5, settings(Some("thread-main"), Some(json!("priority"))));
+
     let parsed = parse(&lines).unwrap();
     assert_tier(
         &parsed.events[0],
@@ -203,6 +213,7 @@ fn explicit_fork_response_owner_resolves_model_but_not_tier() {
         if conflicting_model {
             lines.push(context("turn-fork", json!("conflicting-model")));
         }
+
         let mut owned_response = response("fork-response", "turn-fork", 1, 1);
         owned_response["payload"]["thread_id"] = json!("thread-fork");
         lines.push(owned_response);
@@ -210,6 +221,7 @@ fn explicit_fork_response_owner_resolves_model_but_not_tier() {
         let parsed = parse(&lines).unwrap();
         assert_eq!(parsed.events.len(), 2);
         assert_eq!(parsed.events[0].attribution, None);
+
         let event = &parsed.events[1];
         assert_eq!(event.tokens.total(), 110);
         assert_eq!(
@@ -244,6 +256,7 @@ fn fork_turns_without_an_owner_boundary_remain_unknown() {
                 line["payload"]["model_provider"] = json!("child-provider");
             }
         }
+
         let parsed = parse(&lines).unwrap();
         assert_eq!(parsed.events.len(), 2);
         for event in &parsed.events {

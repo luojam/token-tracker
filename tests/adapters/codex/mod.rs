@@ -55,6 +55,7 @@ fn fixtures_and_prefixes_preserve_accounting() {
             );
             continue;
         }
+
         let parsed = result.unwrap_or_else(|error| panic!("{name}: {error}"));
         let actual: Vec<_> = parsed
             .events
@@ -73,6 +74,7 @@ fn fixtures_and_prefixes_preserve_accounting() {
             "{name}"
         );
     }
+
     for (name, prefixes) in expected["prefixes"].as_object().unwrap() {
         let source = fixture("codex", name);
         for (lines, expected) in prefixes.as_object().unwrap() {

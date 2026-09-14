@@ -37,6 +37,7 @@ fn successful_report(output: Output) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output.stderr.is_empty());
+
     let report = String::from_utf8(output.stdout).unwrap();
     assert!(!report.contains("SECRET_"));
     report
@@ -67,6 +68,7 @@ fn append(path: &Path, content: &str) {
 
 fn assert_no_content_persisted(database_directory: &Path) {
     assert!(database_directory.join("usage.db").is_file());
+
     // Raw bytes catch content left in freed pages and SQLite sidecars.
     for entry in fs::read_dir(database_directory).unwrap() {
         let path = entry.unwrap().path();
@@ -99,6 +101,7 @@ fn imports_all_adapters_and_preserves_usage_privately_across_runs() {
             "\"content\":[]",
             "\"content\":[{\"type\":\"tool_result\",\"content\":\"SECRET_CLAUDE_TOOL\"}]",
         );
+
     let codex = format!(
         "{CODEX_USAGE}{}",
         concat!(
@@ -117,6 +120,7 @@ fn imports_all_adapters_and_preserves_usage_privately_across_runs() {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, content).unwrap();
     }
+
     let run = || {
         successful_report(
             command(&home)
@@ -126,6 +130,7 @@ fn imports_all_adapters_and_preserves_usage_privately_across_runs() {
                 .unwrap(),
         )
     };
+
     let report = run();
     assert_totals(&report, [163, 113, 341, 144], 3, 8);
     assert!(
@@ -146,6 +151,7 @@ fn imports_all_adapters_and_preserves_usage_privately_across_runs() {
         "{SECRET_CLAUDE_MALFORMED}\n",
     )
     .unwrap();
+
     let partial = run();
     assert_totals(&partial, [165, 116, 341, 144], 3, 9);
     for warning in [
@@ -157,9 +163,11 @@ fn imports_all_adapters_and_preserves_usage_privately_across_runs() {
     }
     assert_eq!(run(), partial);
     assert_no_content_persisted(&data_home.join("token-tracker"));
+
     fs::remove_dir_all(&config).unwrap();
     fs::remove_dir_all(home.join(".pi")).unwrap();
     fs::remove_dir_all(&codex_home).unwrap();
+
     let retained = run();
     assert_eq!(
         retained.split_once("\nWarnings").unwrap().0,
@@ -191,11 +199,13 @@ fn legacy_request_pricing_survives_reopen_corrections_and_source_removal() {
             }
         }
     }
+
     let write = |records: &[Value]| {
         fs::write(&source, jsonl(records)).unwrap();
     };
     let run = || successful_report(command(&home).output().unwrap());
     write(&records);
+
     let report = run();
     assert!(report.contains("Total cost: $3.100000\n"), "{report}");
     assert_totals(
@@ -210,6 +220,7 @@ fn legacy_request_pricing_survives_reopen_corrections_and_source_removal() {
         records[6]["payload"]["info"]["total_token_usage"].clone();
     records.drain(4..6);
     write(&records);
+
     let corrected = run();
     assert!(corrected.contains("Total cost: $5.300000\n"), "{corrected}");
     assert_totals(
@@ -219,6 +230,7 @@ fn legacy_request_pricing_survives_reopen_corrections_and_source_removal() {
         1,
     );
     assert_eq!(run(), corrected);
+
     fs::remove_file(source).unwrap();
     assert_eq!(run(), corrected);
 }
@@ -253,6 +265,7 @@ fn adapter_setup_failure_still_reports_stored_usage() {
     let data_home = tree.root.join("data");
     fs::create_dir(&sessions).unwrap();
     fs::write(sessions.join("history.jsonl"), ALL_USAGE).unwrap();
+
     assert_eq!(
         successful_report(run_command(&sessions, &data_home, &home)),
         include_str!("../fixtures/all_time_report.txt")
@@ -309,6 +322,7 @@ fn hermes_discovers_default_and_profile_databases_and_respects_hermes_home() {
             ))
             .unwrap();
     }
+
     let run = |name: &str, hermes_home: &str| {
         successful_report(
             command(&home)
@@ -319,9 +333,11 @@ fn hermes_discovers_default_and_profile_databases_and_respects_hermes_home() {
                 .unwrap(),
         )
     };
+
     let default = run("default-data", "");
     assert!(default.contains("Sessions: 2\n"), "{default}");
     assert!(!default.contains("Warnings"), "{default}");
+
     let custom = run("custom-data", "custom");
     assert!(custom.contains("Sessions: 1\n"), "{custom}");
 }
@@ -334,6 +350,7 @@ fn imports_hermes_and_keeps_other_agents_working_with_a_broken_source() {
     let path = home.join(".hermes/state.db");
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     let connection = crate::support::hermes::database(&path);
+
     let report = successful_report(command(&home).output().unwrap());
     assert_totals(&report.replace(',', ""), [197, 98, 761, 96], 3, 9);
     for expected in ["Hermes usage:", "Pi usage:", "openai / model-a"] {
@@ -343,6 +360,7 @@ fn imports_hermes_and_keeps_other_agents_working_with_a_broken_source() {
     connection
         .execute_batch("ALTER TABLE session_model_usage RENAME COLUMN task TO legacy_task;")
         .unwrap();
+
     let fresh = successful_report(
         command(&home)
             .env("XDG_DATA_HOME", tree.root.join("fresh-data"))

@@ -16,6 +16,7 @@ pub(super) fn migrate(connection: &mut Connection) -> Result<(), SqliteStoreErro
     } else if !(INITIAL_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&version) {
         return Err(SqliteStoreError::UnsupportedSchemaVersion(version));
     }
+
     for migration in &MIGRATIONS[(version - INITIAL_SCHEMA_VERSION) as usize..] {
         transaction.execute_batch(migration)?;
     }

@@ -166,6 +166,7 @@ mod tests {
                 home.join(".claude/projects")
             );
         }
+
         assert_eq!(
             default_session_root_from(Some(home.as_os_str()), None).unwrap(),
             home.join("projects")
@@ -174,6 +175,7 @@ mod tests {
             default_session_root_from(Some(OsStr::new("custom-claude")), None).unwrap(),
             env::current_dir().unwrap().join("custom-claude/projects")
         );
+
         for home in [
             None,
             Some(OsStr::new("")),
@@ -184,6 +186,7 @@ mod tests {
                 Err(ClaudeDiscoveryError::HomeDirectoryUnavailable)
             ));
         }
+
         assert!(matches!(
             ClaudeSessionDiscovery::new("").discover(),
             Err(ClaudeDiscoveryError::EmptySessionRoot)

@@ -22,12 +22,14 @@ fn switching_from_turn_totals_to_responses_keeps_imported_keys() {
         )
         .unwrap()
     };
+
     sync(&mut store, &prefix(source, 8), 1);
     let legacy = store.usage_snapshot().unwrap().observations.remove(0);
     assert_eq!(
         legacy.event.identity.adapter_key,
         "legacy-turn-v1:turn-legacy-a"
     );
+
     let response = sync(&mut store, &prefix(source, 12), 2);
     assert_eq!(response.counts.observations_inserted, 1);
     let snapshot = store.usage_snapshot().unwrap();
@@ -39,6 +41,7 @@ fn switching_from_turn_totals_to_responses_keeps_imported_keys() {
             .iter()
             .any(|o| o.event.identity.adapter_key == "response-v1:response-a")
     );
+
     let cut = source.trim_end().len() - 1;
     assert_eq!(
         sync(&mut store, &source[..cut], 3)

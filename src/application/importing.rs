@@ -24,6 +24,7 @@ impl SessionImport {
         {
             return Err(InvalidImport::AgentMismatch);
         }
+
         let mut events = HashMap::new();
         for event in &self.session.events {
             if events
@@ -51,6 +52,7 @@ impl SessionImport {
                 return Err(InvalidImport::BillingUsageMismatch);
             }
         }
+
         validate_notices(&self.session.notices)?;
         Ok(ValidatedSessionImport(self))
     }
