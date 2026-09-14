@@ -9,7 +9,7 @@ use super::{
     CommitImportOutcome, DiscoveredSource, ImportStats, ParseNotice, SessionImport, SessionSource,
     SnapshotCompletion, SourceState, UsageStore,
 };
-use crate::domain::Timestamp;
+use crate::domain::{AgentId, Timestamp};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImportCounts {
@@ -21,6 +21,31 @@ pub struct ImportCounts {
     pub event_identities_inserted: u64,
     pub observations_inserted: u64,
     pub observations_updated: u64,
+}
+
+impl ImportCounts {
+    fn accumulate(&mut self, other: &Self) {
+        self.sources_discovered = self
+            .sources_discovered
+            .saturating_add(other.sources_discovered);
+        self.sources_imported = self.sources_imported.saturating_add(other.sources_imported);
+        self.sources_unchanged = self
+            .sources_unchanged
+            .saturating_add(other.sources_unchanged);
+        self.sources_failed = self.sources_failed.saturating_add(other.sources_failed);
+        self.partial_sources_imported = self
+            .partial_sources_imported
+            .saturating_add(other.partial_sources_imported);
+        self.event_identities_inserted = self
+            .event_identities_inserted
+            .saturating_add(other.event_identities_inserted);
+        self.observations_inserted = self
+            .observations_inserted
+            .saturating_add(other.observations_inserted);
+        self.observations_updated = self
+            .observations_updated
+            .saturating_add(other.observations_updated);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -62,6 +87,60 @@ impl Error for ImportSynchronizationError {
             Self::Storage { source, .. } => Some(source.as_ref()),
         }
     }
+}
+
+pub trait ImportAdapter<S: UsageStore> {
+    fn agent_id(&self) -> AgentId;
+
+    fn synchronize(
+        &self,
+        store: &mut S,
+    ) -> Result<SynchronizationReport, ImportSynchronizationError>;
+}
+
+impl<A: SessionSource, S: UsageStore> ImportAdapter<S> for A {
+    fn agent_id(&self) -> AgentId {
+        SessionSource::agent_id(self)
+    }
+
+    fn synchronize(
+        &self,
+        store: &mut S,
+    ) -> Result<SynchronizationReport, ImportSynchronizationError> {
+        synchronize_sessions(self, store)
+    }
+}
+
+pub(crate) fn import_adapters<S: UsageStore>(
+    adapters: &[&dyn ImportAdapter<S>],
+    store: &mut S,
+    warnings: Vec<ImportWarning>,
+) -> Result<SynchronizationReport, ImportSynchronizationError> {
+    let mut result = SynchronizationReport {
+        warnings,
+        ..Default::default()
+    };
+    for adapter in adapters {
+        match adapter.synchronize(store) {
+            Ok(report) => {
+                result.counts.accumulate(&report.counts);
+                result
+                    .warnings
+                    .extend(report.warnings.into_iter().map(|mut warning| {
+                        warning.message = format!("{}: {}", adapter.agent_id(), warning.message);
+                        warning
+                    }));
+            }
+            Err(ImportSynchronizationError::Discovery(source)) => {
+                result.warnings.push(ImportWarning {
+                    path: None,
+                    message: format!("{}: session discovery failed: {source}", adapter.agent_id()),
+                })
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(result)
 }
 
 pub fn synchronize_sessions<A, S>(

@@ -1,7 +1,8 @@
 use std::error::Error;
 use std::path::PathBuf;
 
-use super::workflow::{import_adapters, read_summary};
+use super::summarization::read_summary;
+use super::synchronization::import_adapters;
 use super::{
     ImportAdapter, ImportSynchronizationError, ImportWarning, ReportDiagnostic, ReportError,
     SynchronizationReport, UsageReport, build_usage_report,

@@ -1,6 +1,6 @@
 use token_tracker::application::{CostAmount, CostTotal, build_usage_report};
 use token_tracker::domain::{
-    EstimateTotal, EstimateTotals, EstimatedCost, SummaryTotals, UsageSummary,
+    EstimateTotal, EstimateTotals, EstimatedCost, RecordedCost, SummaryTotals, UsageSummary,
 };
 
 #[test]
@@ -25,4 +25,20 @@ fn estimate_only_totals_retain_integer_precision() {
             partial: false
         }
     );
+}
+
+#[test]
+fn estimate_overflow_invalidates_combined_cost() {
+    let report = build_usage_report(&UsageSummary {
+        totals: SummaryTotals {
+            recorded_cost: Some(RecordedCost::from_usd(1.0).unwrap()),
+            estimates: EstimateTotals {
+                cost: EstimateTotal::Overflow,
+                ..EstimateTotals::default()
+            },
+            ..SummaryTotals::default()
+        },
+        ..UsageSummary::default()
+    });
+    assert_eq!(report.totals.cost, CostTotal::Overflow);
 }
