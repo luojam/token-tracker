@@ -210,8 +210,8 @@ pub struct UsageEventIdentity {
     pub adapter_key: String,
 }
 
-/// Additive usage: cumulative counters must be converted to increments.
-/// Equal identities represent observations of the same usage.
+/// Different identities represent disjoint, additive usage.
+/// Repeated identities may revise the same usage, including a cumulative aggregate.
 #[derive(Clone, Debug, PartialEq)]
 pub struct UsageEvent {
     pub identity: UsageEventIdentity,
