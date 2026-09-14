@@ -156,7 +156,7 @@ fn imports_all_adapters_and_preserves_usage_privately_across_runs() {
     assert_totals(&partial, [165, 116, 341, 144], 3, 9);
     for warning in [
         "Warnings (2):\n",
-        "omitted 2 responses with incomplete usage",
+        "Claude: 2 responses across 1 file excluded because final usage is missing.",
         "malformed Claude session line 1",
     ] {
         assert!(partial.contains(warning), "{partial}");
@@ -173,7 +173,10 @@ fn imports_all_adapters_and_preserves_usage_privately_across_runs() {
         retained.split_once("\nWarnings").unwrap().0,
         partial.split_once("\nWarnings").unwrap().0
     );
-    assert!(retained.contains("omitted 2 responses with incomplete usage"));
+    assert!(
+        retained
+            .contains("Claude: 2 responses across 1 file excluded because final usage is missing.")
+    );
 }
 
 #[test]

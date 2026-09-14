@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    CommitImportOutcome, DiscoveredSource, ImportStats, ParseNotice, SessionImport, SessionSource,
-    SnapshotCompletion, SourceState, UsageStore,
+    CommitImportOutcome, DiscoveredSource, ImportStats, ParseNotice, ReportDiagnostic,
+    SessionImport, SessionSource, SnapshotCompletion, SourceState, UsageStore,
 };
 use crate::domain::{AgentId, Timestamp};
 
@@ -52,6 +52,7 @@ impl ImportCounts {
 pub struct ImportWarning {
     pub path: Option<PathBuf>,
     pub message: String,
+    pub diagnostic: Option<ReportDiagnostic>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -135,6 +136,7 @@ pub(crate) fn import_adapters<S: UsageStore>(
                 result.warnings.push(ImportWarning {
                     path: None,
                     message: format!("{}: session discovery failed: {source}", adapter.agent_id()),
+                    diagnostic: None,
                 })
             }
             Err(error) => return Err(error),
@@ -203,6 +205,7 @@ where
             .map(|warning| ImportWarning {
                 path: warning.path,
                 message: warning.message,
+                diagnostic: None,
             })
             .collect(),
     };
@@ -223,6 +226,7 @@ where
                 report.warnings.push(ImportWarning {
                     path: discovered.path.clone(),
                     message: error.to_string(),
+                    diagnostic: None,
                 });
                 continue;
             }
@@ -246,6 +250,7 @@ where
                 report.warnings.push(ImportWarning {
                     path: discovered.path.clone(),
                     message: error.to_string(),
+                    diagnostic: None,
                 });
                 continue;
             }
@@ -264,6 +269,7 @@ where
                 report.warnings.push(ImportWarning {
                     path: discovered.path.clone(),
                     message: "session import was superseded by a newer scan".into(),
+                    diagnostic: None,
                 });
             }
             Ok(CommitImportOutcome::DeferredIncomplete) => {
@@ -271,6 +277,7 @@ where
                 report.warnings.push(ImportWarning {
                     path: discovered.path.clone(),
                     message: "import deferred until the session snapshot is complete".into(),
+                    diagnostic: None,
                 });
             }
             Err(error) => {
@@ -297,6 +304,11 @@ where
             report.warnings.push(ImportWarning {
                 path: state.path.clone(),
                 message: notice_message(&notice),
+                diagnostic: Some(ReportDiagnostic {
+                    agent: agent.clone(),
+                    path: state.path.clone(),
+                    notice,
+                }),
             });
         }
     }

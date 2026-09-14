@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use token_tracker::application::{CostAmount, CostTotal, ImportWarning, UsageReport};
@@ -120,7 +121,24 @@ pub(super) fn render_terminal_report(
     render_estimate_diagnostics(&mut output, &totals.estimates);
 
     if !warnings.is_empty() {
-        let mut warnings = warnings.iter().collect::<Vec<_>>();
+        let mut missing_usage_count = 0_u128;
+        let mut missing_usage_files = BTreeSet::new();
+        let mut warnings = warnings
+            .iter()
+            .filter(|warning| {
+                if let Some(diagnostic) = &warning.diagnostic
+                    && diagnostic.agent.as_str() == "claude"
+                    && diagnostic.notice.code == "incomplete_response_usage"
+                    && let Some(path) = &diagnostic.path
+                {
+                    missing_usage_count += u128::from(diagnostic.notice.count.get());
+                    missing_usage_files.insert(path);
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect::<Vec<_>>();
         warnings.sort_by(|left, right| {
             left.path
                 .cmp(&right.path)
@@ -128,7 +146,27 @@ pub(super) fn render_terminal_report(
         });
 
         writeln!(output).unwrap();
-        writeln!(output, "Warnings ({}):", warnings.len()).unwrap();
+        writeln!(
+            output,
+            "Warnings ({}):",
+            warnings.len() + usize::from(missing_usage_count > 0)
+        )
+        .unwrap();
+        if missing_usage_count > 0 {
+            let response_plural = if missing_usage_count == 1 { "" } else { "s" };
+            let file_plural = if missing_usage_files.len() == 1 {
+                ""
+            } else {
+                "s"
+            };
+            writeln!(
+                output,
+                "- Claude: {} response{response_plural} across {} file{file_plural} excluded because final usage is missing.",
+                format_integer(missing_usage_count),
+                missing_usage_files.len(),
+            )
+            .unwrap();
+        }
         for warning in warnings {
             match &warning.path {
                 Some(path) => writeln!(

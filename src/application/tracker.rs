@@ -137,6 +137,7 @@ impl TokenTracker {
                         "{}: could not configure adapter: {source}",
                         config.agent_id()
                     ),
+                    diagnostic: None,
                 }),
             }
         }
