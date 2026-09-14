@@ -2,7 +2,8 @@ use std::{collections::HashSet, num::NonZeroU64, path::PathBuf};
 
 use super::{HERMES_AGENT_ID, HermesReadError, reading::AccountingRow};
 use crate::application::{
-    ParseNotice, SessionData, SessionSnapshot, SnapshotCompletion, SourceRevision,
+    ObservationRetention, ParseNotice, SessionData, SessionSnapshot, SnapshotCompletion,
+    SourceRevision,
 };
 use crate::domain::{
     AgentId, ModelAttribution, ParentSession, SessionMetadata, TokenCounts, UsageEvent,
@@ -117,6 +118,7 @@ pub(super) fn normalize(
                 .expect("accounting fields are serializable"),
         ),
         session: SessionData {
+            observation_retention: ObservationRetention::ReplaceSessionObservations,
             metadata,
             events,
             completion: SnapshotCompletion::Complete,

@@ -5,6 +5,29 @@ use super::{
 use crate::application::SessionImport;
 use crate::domain::{RecordedCost, UsageEvent};
 use rusqlite::{OptionalExtension, Transaction, params};
+use std::collections::HashSet;
+
+pub(super) fn remove_omitted_observations(
+    transaction: &Transaction<'_>,
+    source_session_id: i64,
+    retained: &HashSet<i64>,
+) -> Result<(), SqliteStoreError> {
+    let mut statement = transaction
+        .prepare_cached("SELECT event_id FROM usage_observations WHERE source_session_id = ?1")?;
+    let ids = statement
+        .query_map([source_session_id], |row| row.get::<_, i64>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    for id in ids {
+        if !retained.contains(&id) {
+            transaction
+                .prepare_cached(
+                    "DELETE FROM usage_observations WHERE source_session_id = ?1 AND event_id = ?2",
+                )?
+                .execute(params![source_session_id, id])?;
+        }
+    }
+    Ok(())
+}
 
 pub(super) fn normalization_changed(
     transaction: &Transaction<'_>,

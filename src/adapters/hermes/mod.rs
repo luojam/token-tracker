@@ -1,11 +1,13 @@
 mod parsing;
 mod reading;
+mod source;
 
 use std::{error::Error, fmt};
 
 use crate::application::{SessionSnapshot, SourceKey};
 
 pub use reading::read_snapshot;
+pub use source::HermesSessionSource;
 
 const HERMES_AGENT_ID: &str = "hermes";
 
@@ -30,6 +32,7 @@ pub enum HermesReadError {
     },
     InvalidField(&'static str),
     InconsistentAccounting(&'static str),
+    UncachedSnapshot,
 }
 
 impl fmt::Display for HermesReadError {
@@ -44,6 +47,9 @@ impl fmt::Display for HermesReadError {
             Self::InvalidField(field) => write!(f, "invalid Hermes accounting field: {field}"),
             Self::InconsistentAccounting(message) => {
                 write!(f, "invalid Hermes accounting: {message}")
+            }
+            Self::UncachedSnapshot => {
+                f.write_str("Hermes snapshot is no longer cached; discover sessions again")
             }
         }
     }

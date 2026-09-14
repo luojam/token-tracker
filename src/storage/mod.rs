@@ -12,8 +12,8 @@ mod reading;
 mod schema;
 
 use importing::{
-    import_is_stale, insert_observation, normalization_changed, update_observation,
-    upsert_imported_source, upsert_source_session,
+    import_is_stale, insert_observation, normalization_changed, remove_omitted_observations,
+    update_observation, upsert_imported_source, upsert_source_session,
 };
 use reading::{load_stored_observations, load_stored_sessions};
 use schema::migrate;
@@ -25,8 +25,8 @@ use std::path::Path;
 use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::application::{
-    CommitImportOutcome, DiscoveryReport, ImportStats, SnapshotCompletion, SourceState,
-    UsageReadStore, UsageSnapshot, UsageStore, ValidatedSessionImport,
+    CommitImportOutcome, DiscoveryReport, ImportStats, ObservationRetention, SnapshotCompletion,
+    SourceState, UsageReadStore, UsageSnapshot, UsageStore, ValidatedSessionImport,
 };
 use crate::domain::{AgentId, Timestamp};
 
@@ -161,7 +161,9 @@ impl UsageStore for SqliteUsageStore {
         }
 
         if import.session.completion != SnapshotCompletion::Complete
-            && normalization_changed(&transaction, import)?
+            && (import.session.observation_retention
+                == ObservationRetention::ReplaceSessionObservations
+                || normalization_changed(&transaction, import)?)
         {
             return Ok(CommitImportOutcome::DeferredIncomplete);
         }
@@ -169,6 +171,7 @@ impl UsageStore for SqliteUsageStore {
         let source_id = upsert_imported_source(&transaction, import)?;
         let source_session_id = upsert_source_session(&transaction, source_id, import)?;
         let mut stats = ImportStats::default();
+        let mut retained_events = HashSet::new();
 
         for event in &import.session.events {
             stats.event_identities_inserted += transaction
@@ -192,6 +195,7 @@ impl UsageStore for SqliteUsageStore {
                 )?;
 
             let billing_facts = billing::encode(event.pricing_context.as_ref())?;
+            retained_events.insert(event_id);
             let inserted = insert_observation(
                 &transaction,
                 source_id,
@@ -212,6 +216,11 @@ impl UsageStore for SqliteUsageStore {
                     billing_facts.as_deref(),
                 )? as u64;
             }
+        }
+
+        if import.session.observation_retention == ObservationRetention::ReplaceSessionObservations
+        {
+            remove_omitted_observations(&transaction, source_session_id, &retained_events)?;
         }
 
         transaction.commit()?;

@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 
 use super::CODEX_AGENT_ID;
 use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
-use crate::application::{SessionData, SnapshotCompletion};
+use crate::application::{ObservationRetention, SessionData, SnapshotCompletion};
 use crate::domain::{
     AgentId, CacheDetail, ParentSession, PricingContext, RequestBreakdown, SessionMetadata,
     Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
@@ -88,6 +88,7 @@ impl SessionParser for CodexSessionParser {
 
         let session = session.ok_or(CodexParseError::MissingHeader)?;
         Ok(SessionData {
+            observation_retention: ObservationRetention::RetainOmitted,
             metadata: session.metadata,
             events: session
                 .legacy

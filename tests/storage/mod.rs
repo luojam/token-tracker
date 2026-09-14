@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use token_tracker::adapters::files::{FileSessionSource, file_source_key};
 
 use token_tracker::application::{
-    CommitImportOutcome, DiscoveredSource, DiscoveryReport, ImportStats, ParseNotice, SessionData,
-    SessionImport, SnapshotCompletion, SourceRevision, UsageReadStore, UsageStore,
-    ValidatedSessionImport,
+    CommitImportOutcome, DiscoveredSource, DiscoveryReport, ImportStats, ObservationRetention,
+    ParseNotice, SessionData, SessionImport, SnapshotCompletion, SourceRevision, UsageReadStore,
+    UsageStore, ValidatedSessionImport,
 };
 use token_tracker::domain::{
     AgentId, AnthropicBilling, CacheWriteTokens, KnownRequests, ModelAttribution, ParentSession,
@@ -25,6 +25,7 @@ fn session_import(path: &str, input_tokens: u64) -> SessionImport {
         },
         scanned_at: Timestamp::from_unix_milliseconds(1_700_000_001_000),
         session: SessionData {
+            observation_retention: ObservationRetention::RetainOmitted,
             metadata: SessionMetadata {
                 agent: AgentId::from("pi"),
                 session_id: format!("session-{path}"),
@@ -258,8 +259,8 @@ fn normalization_failure_rolls_back_usage_billing_and_notices() {
         .unwrap()
         .execute_batch(
             "CREATE TRIGGER fail_insert BEFORE INSERT ON usage_events
-             WHEN NEW.adapter_key = 'additional-event'
-             BEGIN SELECT RAISE(ABORT, 'test failure'); END;",
+         WHEN NEW.adapter_key = 'additional-event'
+         BEGIN SELECT RAISE(ABORT, 'test failure'); END;",
         )
         .unwrap();
     assert!(matches!(
@@ -292,6 +293,34 @@ fn normalization_changes_preserve_history_from_rewritten_sources() {
         store.commit_import(&validated(&replacement)).unwrap();
         assert_eq!(store.usage_snapshot().unwrap(), before);
     }
+}
+
+#[test]
+fn replacement_requires_complete_data_and_deletes_only_its_sessions_observations() {
+    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    let mut import = session_import("/sessions/a.jsonl", 10);
+    store.commit_import(&validated(&import)).unwrap();
+    let other = session_import("/sessions/b.jsonl", 20);
+    store.commit_import(&validated(&other)).unwrap();
+    let before = store.usage_snapshot().unwrap();
+    let states = store.source_states(&"pi".into()).unwrap();
+
+    import.session.observation_retention = ObservationRetention::ReplaceSessionObservations;
+    import.session.completion = SnapshotCompletion::Partial;
+    import.session.events.clear();
+    assert_eq!(
+        store.commit_import(&validated(&import)).unwrap(),
+        CommitImportOutcome::DeferredIncomplete
+    );
+    assert_eq!(store.usage_snapshot().unwrap(), before);
+    assert_eq!(store.source_states(&"pi".into()).unwrap(), states);
+
+    import.session.completion = SnapshotCompletion::Complete;
+    store.commit_import(&validated(&import)).unwrap();
+    let after = store.usage_snapshot().unwrap();
+    assert_eq!(after.sessions, before.sessions);
+    assert_eq!(after.observations.len(), 1);
+    assert_eq!(after.observations[0].event, other.session.events[0]);
 }
 
 #[test]

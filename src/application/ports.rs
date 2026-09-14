@@ -82,7 +82,15 @@ pub struct SessionData {
     pub metadata: SessionMetadata,
     pub events: Vec<UsageEvent>,
     pub completion: SnapshotCompletion,
+    pub observation_retention: ObservationRetention,
     pub notices: Vec<ParseNotice>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObservationRetention {
+    RetainOmitted,
+    /// Replace only this source/session's observations; requires a complete snapshot.
+    ReplaceSessionObservations,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -140,8 +148,8 @@ pub trait UsageStore {
         observed_at: Timestamp,
     ) -> Result<(), Self::Error>;
 
-    /// Atomically upserts source/session metadata and observations, retaining omitted history.
-    /// Defers normalization changes until the snapshot is complete.
+    /// Atomically imports metadata and observations according to the retention policy.
+    /// Defers replacements and normalization changes until the snapshot is complete.
     fn commit_import(
         &mut self,
         import: &ValidatedSessionImport,

@@ -191,8 +191,7 @@ where
                 report.counts.sources_failed += 1;
                 report.warnings.push(ImportWarning {
                     path: discovered.path.clone(),
-                    message: "normalization change deferred until the session snapshot is complete"
-                        .into(),
+                    message: "import deferred until the session snapshot is complete".into(),
                 });
             }
             Err(error) => {

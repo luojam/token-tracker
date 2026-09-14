@@ -4,7 +4,7 @@ use std::num::NonZeroU32;
 use super::CLAUDE_AGENT_ID;
 use super::discovery::{is_agent_id, is_session_id};
 use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
-use crate::application::{ParseNotice, SessionData, SnapshotCompletion};
+use crate::application::{ObservationRetention, ParseNotice, SessionData, SnapshotCompletion};
 use crate::domain::{
     AgentId, AnthropicBilling, CacheWriteTokens, KnownRequests, ModelAttribution, ParentSession,
     PricingContext, RequestBreakdown, ServiceSpeed, ServiceTier, SessionMetadata, TierEvidence,
@@ -102,6 +102,7 @@ impl SessionParser for ClaudeSessionParser {
             }
         }
         Ok(SessionData {
+            observation_retention: ObservationRetention::RetainOmitted,
             metadata: metadata.finish()?,
             events,
             completion,

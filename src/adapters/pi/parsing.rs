@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 
 use super::PI_AGENT_ID;
 use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
-use crate::application::{SessionData, SnapshotCompletion};
+use crate::application::{ObservationRetention, SessionData, SnapshotCompletion};
 use crate::domain::{
     AgentId, InvalidRecordedCost, ModelAttribution, ParentSession, RecordedCost, SessionMetadata,
     Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
@@ -93,6 +93,7 @@ impl SessionParser for PiSessionParser {
         }
 
         Ok(SessionData {
+            observation_retention: ObservationRetention::RetainOmitted,
             metadata,
             events,
             completion,

@@ -1,7 +1,11 @@
 use rusqlite::Connection;
-use token_tracker::adapters::hermes::{HermesReadError, read_snapshot};
-use token_tracker::application::SnapshotCompletion;
-use token_tracker::domain::{ParentSession, TokenCounts, UsageKind};
+use token_tracker::adapters::hermes::{HermesReadError, HermesSessionSource, read_snapshot};
+use token_tracker::application::{
+    SessionSource, SnapshotCompletion, SynchronizationReport, UsageReadStore, UsageStore,
+    summarize_usage, synchronize_sessions_at,
+};
+use token_tracker::domain::{ParentSession, Timestamp, TokenCounts, UsageKind};
+use token_tracker::storage::SqliteUsageStore;
 
 use crate::support::TempTree;
 
@@ -235,4 +239,226 @@ fn unsupported_schema_and_invalid_accounting_cannot_become_empty_usage() {
     ));
     assert!(read_snapshot(&tree.root.join("missing.db")).is_err());
     assert!(!tree.root.join("missing.db").exists());
+}
+
+fn sync(
+    source: &HermesSessionSource,
+    store: &mut SqliteUsageStore,
+    time: i64,
+) -> SynchronizationReport {
+    synchronize_sessions_at(source, store, Timestamp::from_unix_milliseconds(time)).unwrap()
+}
+
+fn totals(store: &SqliteUsageStore) -> TokenCounts {
+    summarize_usage(&store.usage_snapshot().unwrap())
+        .unwrap()
+        .totals
+        .tokens
+}
+
+#[test]
+fn cumulative_sessions_replace_buckets_across_scans_restart_and_pruning() {
+    let tree = TempTree::new();
+    let (path, connection) = fixture(&tree);
+    let tracker = tree.root.join("tracker.db");
+    let source = HermesSessionSource::new([path.clone()]);
+    let mut store = SqliteUsageStore::open(&tracker).unwrap();
+    assert_eq!(sync(&source, &mut store, 1).counts.sources_imported, 2);
+    let mut expected = TokenCounts {
+        input: 172,
+        output: 60,
+        cache_read: 710,
+        cache_write: 32,
+    };
+    assert_eq!(totals(&store), expected);
+    assert_eq!(sync(&source, &mut store, 2).counts.sources_unchanged, 2);
+    assert_eq!(totals(&store), expected);
+
+    connection
+        .execute_batch(
+            "UPDATE sessions SET input_tokens = input_tokens + 50 WHERE id = 'child';
+         UPDATE session_model_usage SET input_tokens = input_tokens + 50
+         WHERE model = 'model-a' AND task = '';",
+        )
+        .unwrap();
+    assert_eq!(sync(&source, &mut store, 3).counts.observations_updated, 1);
+    expected.input += 50;
+    assert_eq!(totals(&store), expected);
+
+    connection
+        .execute_batch(
+            "DELETE FROM session_model_usage WHERE task = '';
+         INSERT INTO session_model_usage (session_id, model, billing_provider, billing_base_url,
+             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+         VALUES ('child', 'redistributed', 'proxy', 'https://example.test', 210, 55, 650, 30);",
+        )
+        .unwrap();
+    assert_eq!(sync(&source, &mut store, 4).counts.sources_imported, 1);
+    assert_eq!(totals(&store), expected);
+    let snapshot = store.usage_snapshot().unwrap();
+    assert_eq!(snapshot.observations.len(), 3);
+
+    drop(store);
+    let mut store = SqliteUsageStore::open(&tracker).unwrap();
+    let restarted = HermesSessionSource::new([path]);
+    assert_eq!(sync(&restarted, &mut store, 5).counts.sources_unchanged, 2);
+    assert_eq!(totals(&store), expected);
+    connection
+        .execute_batch(
+            "UPDATE sessions SET input_tokens = 200 WHERE id = 'child';
+         UPDATE session_model_usage SET input_tokens = 200 WHERE task = '';",
+        )
+        .unwrap();
+    sync(&source, &mut store, 6);
+    expected.input -= 10;
+    assert_eq!(totals(&store), expected);
+
+    connection
+        .execute_batch("DELETE FROM session_model_usage; DELETE FROM sessions;")
+        .unwrap();
+    assert_eq!(sync(&source, &mut store, 7).counts.sources_discovered, 0);
+    assert!(
+        store
+            .source_states(&"hermes".into())
+            .unwrap()
+            .iter()
+            .all(|state| !state.present)
+    );
+    assert_eq!(totals(&store), expected);
+    assert_eq!(
+        summarize_usage(&store.usage_snapshot().unwrap())
+            .unwrap()
+            .totals
+            .session_count,
+        2
+    );
+}
+
+#[test]
+fn wal_snapshots_are_cached_read_only_and_failures_preserve_imports() {
+    let tree = TempTree::new();
+    let (path, connection) = fixture(&tree);
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;
+         PRAGMA wal_checkpoint(TRUNCATE);
+         UPDATE session_model_usage SET input_tokens = 15 WHERE task = 'compression';",
+        )
+        .unwrap();
+    let wal = path.with_extension("db-wal");
+    let contents = || (std::fs::read(&path).unwrap(), std::fs::read(&wal).unwrap());
+    let before = contents();
+    assert!(!before.1.is_empty());
+    let source = HermesSessionSource::new([path.clone()]);
+    let discovered = source.discover(&[]).unwrap();
+    let child = discovered
+        .sources
+        .iter()
+        .find(|discovered| source.load(discovered).unwrap().session.metadata.session_id == "child")
+        .unwrap();
+    let cached = source.load(child).unwrap();
+    assert_eq!(contents(), before);
+
+    connection
+        .execute_batch(
+            "UPDATE session_model_usage SET output_tokens = 13 WHERE task = 'compression';",
+        )
+        .unwrap();
+    assert_eq!(source.load(child).unwrap(), cached);
+    let before = contents();
+    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    sync(&source, &mut store, 1);
+    assert_eq!(
+        totals(&store),
+        TokenCounts {
+            input: 182,
+            output: 70,
+            cache_read: 710,
+            cache_write: 32
+        }
+    );
+    assert_eq!(contents(), before);
+    let stored = store.usage_snapshot().unwrap();
+    let states = store.source_states(&"hermes".into()).unwrap();
+
+    for sql in [
+        "UPDATE session_model_usage SET input_tokens = -1 WHERE task = 'compression';",
+        "ALTER TABLE session_model_usage RENAME COLUMN task TO legacy_task;",
+    ] {
+        connection.execute_batch(sql).unwrap();
+        let before = contents();
+        let report = sync(&source, &mut store, 2);
+        assert!(
+            report
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("Hermes"))
+        );
+        assert_eq!(store.usage_snapshot().unwrap(), stored);
+        assert_eq!(store.source_states(&"hermes".into()).unwrap(), states);
+        assert_eq!(contents(), before);
+    }
+}
+
+#[test]
+fn duplicate_sessions_defer_conflicts_and_only_covered_absence_changes_presence() {
+    let tree = TempTree::new();
+    let (path, connection) = fixture(&tree);
+    let copy = tree.root.join("copy.db");
+    std::fs::copy(&path, &copy).unwrap();
+    let source = HermesSessionSource::new([path.clone(), copy.clone()]);
+    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    assert_eq!(sync(&source, &mut store, 1).counts.sources_imported, 2);
+    let stored = store.usage_snapshot().unwrap();
+    connection
+        .execute_batch("UPDATE sessions SET input_tokens = 999 WHERE id = 'child';")
+        .unwrap();
+    let conflict = sync(&source, &mut store, 2);
+    assert!(
+        conflict
+            .warnings
+            .iter()
+            .any(|warning| warning.message.contains("Conflicting Hermes copies"))
+    );
+    assert_eq!(store.usage_snapshot().unwrap(), stored);
+    assert!(
+        store
+            .source_states(&"hermes".into())
+            .unwrap()
+            .iter()
+            .all(|state| state.present)
+    );
+
+    let authoritative = HermesSessionSource::new([path.clone()]);
+    assert_eq!(
+        sync(&authoritative, &mut store, 3).counts.sources_imported,
+        1
+    );
+    assert_eq!(totals(&store).input, 1011);
+    let known = store.source_states(&"hermes".into()).unwrap();
+    connection
+        .execute_batch("UPDATE sessions SET input_tokens = -1 WHERE id = 'child';")
+        .unwrap();
+    let rejected_copy = source.discover(&known).unwrap();
+    assert_eq!(rejected_copy.sources.len(), 1);
+    assert!(rejected_copy.missing_sources.is_empty());
+
+    connection
+        .execute_batch("DELETE FROM session_model_usage; DELETE FROM sessions;")
+        .unwrap();
+    Connection::open(&copy)
+        .unwrap()
+        .execute_batch("DELETE FROM session_model_usage; DELETE FROM sessions;")
+        .unwrap();
+    assert!(
+        HermesSessionSource::new([copy.clone()])
+            .discover(&known)
+            .unwrap()
+            .missing_sources
+            .is_empty()
+    );
+    std::fs::remove_file(&copy).unwrap();
+    let failed = source.discover(&known).unwrap();
+    assert!(!failed.warnings.is_empty());
+    assert!(failed.missing_sources.is_empty());
 }
