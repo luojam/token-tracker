@@ -1,26 +1,23 @@
 Token Tracker — All Time
 
-Total tokens: 49
-Input tokens: 16
-Output tokens: 9
-Cache-read tokens: 11
-Cache-write tokens: 13
-Total cost: $0.750000 (partial)
-Sessions: 2
-Unique usage events: 3
+Total tokens: 178
+Input tokens: 25
+Output tokens: 38
+Cache-read tokens: 51
+Cache-write tokens: 64
+Total cost: $1.020000 (partial)
+Sessions: 1
+Unique usage events: 4
 
 Usage by provider/model:
 
 Pi usage:
   Provider / model               Input  Output  Cache read  Cache write  Total  Events         Cost
-  provider-a / model-a              10       2           3            4     19       1    $0.250000
-  Unattributed tool results          1       1           1            1      4       1  unavailable
-  Unattributed branch summaries      5       6           7            8     26       1    $0.500000
+  provider-a / model-resolved       10      20          30           40    100       1    $0.120000
+  Unattributed tool results          1       2           3            4     10       1  unavailable
+  Unattributed compactions           5       6           7            8     26       1    $0.340000
+  Unattributed branch summaries      9      10          11           12     42       1    $0.560000
 
 Cost estimates:
 - Priced events: 0 / 1 without recorded cost
 - Unpriced (missing pricing context): 1 events
-
-Warnings (2):
-- discovery warning
-- /sessions/z-bad.jsonl: could not parse

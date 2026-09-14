@@ -1,12 +1,12 @@
 use std::fmt::Write;
 
-use crate::application::{CostAmount, CostTotal, ImportWarning, UsageReport};
-use crate::domain::{
+use token_tracker::application::{CostAmount, CostTotal, ImportWarning, UsageReport};
+use token_tracker::domain::{
     EstimateTotals, EstimateUnavailableReason, ModelAttribution, ServiceTier, SummaryGroup,
     UsageKind,
 };
 
-pub fn render_terminal_report(
+pub(super) fn render_terminal_report(
     report: &UsageReport,
     warnings: &[ImportWarning],
     agent_labels: &[(&str, &str)],

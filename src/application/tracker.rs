@@ -13,6 +13,14 @@ use crate::adapters::hermes::{HERMES_AGENT_ID, HermesSessionSource};
 use crate::adapters::pi::{PI_AGENT_ID, PiSessionDiscovery, PiSessionParser};
 use crate::storage::{SqliteStoreError, SqliteUsageStore};
 
+/// Agent identifiers and display names for the bundled sources.
+pub const AGENT_LABELS: &[(&str, &str)] = &[
+    (HERMES_AGENT_ID, "Hermes"),
+    (PI_AGENT_ID, "Pi"),
+    (CODEX_AGENT_ID, "Codex"),
+    (CLAUDE_AGENT_ID, "Claude Code"),
+];
+
 #[derive(Clone, Debug)]
 pub struct TokenTrackerConfig {
     /// `None` uses the default database path and creates its parent directories.

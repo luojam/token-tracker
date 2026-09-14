@@ -14,7 +14,9 @@ pub use synchronization::{
     ImportCounts, ImportSynchronizationError, ImportWarning, SynchronizationReport,
     synchronize_sessions, synchronize_sessions_at,
 };
-pub use tracker::{LocalSourceConfig, ReportResult, TokenTracker, TokenTrackerConfig};
+pub use tracker::{
+    AGENT_LABELS, LocalSourceConfig, ReportResult, TokenTracker, TokenTrackerConfig,
+};
 pub use workflow::{
     AllTimeReport, AllTimeReportError, ImportAdapter, ReportDiagnostic, ReportError,
     run_all_time_report,

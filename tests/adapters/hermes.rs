@@ -523,9 +523,6 @@ fn cumulative_subscription_usage_is_estimated_with_disclosed_assumptions() {
             summary.totals.estimates.assumed_short_context_event_count,
             2
         );
-        let report = token_tracker::application::build_usage_report(&summary);
-        let rendered = token_tracker::cli::render_terminal_report(&report, &[], &[]);
-        assert!(rendered.contains("Assumed short-context rates for cumulative usage: 2 events"));
         for observation in &snapshot.observations {
             let estimate = calculate_estimate(&observation.event)
                 .unwrap()

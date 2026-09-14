@@ -253,7 +253,10 @@ fn adapter_setup_failure_still_reports_stored_usage() {
     let data_home = tree.root.join("data");
     fs::create_dir(&sessions).unwrap();
     fs::write(sessions.join("history.jsonl"), ALL_USAGE).unwrap();
-    successful_report(run_command(&sessions, &data_home, &home));
+    assert_eq!(
+        successful_report(run_command(&sessions, &data_home, &home)),
+        include_str!("../fixtures/all_time_report.txt")
+    );
 
     let report = successful_report(
         command(&home)
@@ -266,6 +269,23 @@ fn adapter_setup_failure_still_reports_stored_usage() {
     assert!(report.contains("pi: could not configure adapter:"));
     assert!(report.contains("codex: could not configure adapter:"));
     assert!(report.contains("claude: could not configure adapter:"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn output_failure_exits_with_an_error() {
+    let tree = TempTree::new();
+    let output = command(&tree.root)
+        .stdout(OpenOptions::new().write(true).open("/dev/full").unwrap())
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .starts_with("token-tracker: could not write report:")
+    );
 }
 
 #[test]

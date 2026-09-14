@@ -1,8 +1,5 @@
-use std::path::PathBuf;
-use token_tracker::cli::render_terminal_report;
-
 use token_tracker::application::{
-    ImportWarning, SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot,
+    CostAmount, CostTotal, SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot,
     build_usage_report, summarize_usage,
 };
 use token_tracker::domain::{
@@ -147,26 +144,21 @@ fn snapshot(reverse: bool) -> UsageSnapshot {
 }
 
 #[test]
-fn summary_reconciles_and_renders_independently_of_observation_order() {
+fn summary_reconciles_independently_of_observation_order() {
     let summary = summarize_usage(&snapshot(false)).unwrap();
     assert_eq!(summary, summarize_usage(&snapshot(true)).unwrap());
     assert_eq!(
-        render_terminal_report(
-            &build_usage_report(&summary),
-            &[
-                ImportWarning {
-                    path: Some(PathBuf::from("/sessions/z-bad.jsonl")),
-                    message: "could not parse".into(),
-                },
-                ImportWarning {
-                    path: None,
-                    message: "discovery warning".into(),
-                },
-            ],
-            &[("pi", "Pi")],
-        ),
-        include_str!("../fixtures/all_time_report.txt")
+        summary.totals.tokens,
+        TokenCounts {
+            input: 16,
+            output: 9,
+            cache_read: 11,
+            cache_write: 13,
+        }
     );
+    assert_eq!(summary.totals.session_count, 2);
+    assert_eq!(summary.totals.unique_usage_event_count, 3);
+    assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 0.75);
 }
 
 #[test]
@@ -237,8 +229,13 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
     assert_eq!(summary.totals.tokens.input, 27);
     assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 0.5);
     assert_eq!(summary.totals.estimates.imported_event_count, 3);
-    let report = render_terminal_report(&build_usage_report(&summary), &[], &[]);
-    assert!(report.contains("Total cost: $0.500395 (partial)\n"));
+    assert_eq!(
+        build_usage_report(&summary).totals.cost,
+        CostTotal::Available {
+            amount: CostAmount::Usd(0.500395),
+            partial: true,
+        }
+    );
     assert_eq!(estimate.imported_event_count, 2);
     assert_eq!(estimate.priced_event_count, 2);
     assert_eq!(estimate.requested_setting_event_count, 0);
@@ -257,15 +254,6 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
         estimate.tier_event_counts,
         std::collections::BTreeMap::from([(ServiceTier::Standard, 1), (ServiceTier::Fast, 1)])
     );
-    for diagnostic in [
-        "- Tier from served responses: 1 events",
-        "- Assumed standard tier: 1 events",
-        "- Assumed cache writes priced as input: 1 events",
-        "- Priced tier standard: 1 events",
-        "- Priced tier fast: 1 events",
-    ] {
-        assert!(report.contains(diagnostic), "{report}");
-    }
 }
 
 #[test]

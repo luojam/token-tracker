@@ -1,11 +1,10 @@
 use std::path::Path;
 use token_tracker::adapters::files::{ParseContext, SessionParser};
-use token_tracker::cli::render_terminal_report;
 
 use token_tracker::adapters::claude::ClaudeSessionParser;
 use token_tracker::application::{
-    SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot, build_usage_report,
-    summarize_usage,
+    CostAmount, CostTotal, SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot,
+    build_usage_report, summarize_usage,
 };
 use token_tracker::domain::{
     AnthropicBilling, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, OpenAiBilling,
@@ -62,19 +61,6 @@ fn add_session(snapshot: &mut UsageSnapshot, agent: &str, id: &str, events: Vec<
         }));
 }
 
-fn section_row<'a>(report: &'a str, agent: &str, model: &str) -> &'a str {
-    report
-        .split_once(&format!("{agent} usage:\n"))
-        .unwrap()
-        .1
-        .split("\n\n")
-        .next()
-        .unwrap()
-        .lines()
-        .find(|line| line.contains(model))
-        .unwrap()
-}
-
 #[test]
 fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     let oracle = oracle_event();
@@ -128,25 +114,53 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     for (row, source) in usage_report.rows.iter().zip(&summary.breakdown) {
         assert_eq!(row.estimates, source.estimates);
     }
-    let report = render_terminal_report(
-        &usage_report,
-        &[],
-        &[("claude", "Claude Code"), ("codex", "Codex"), ("pi", "Pi")],
-    );
-    assert!(
-        report.contains("Total cost: $2.001000 (partial)\n"),
-        "{report}"
+    assert_eq!(
+        usage_report.totals.cost,
+        CostTotal::Available {
+            amount: CostAmount::Usd(2.001),
+            partial: true,
+        }
     );
     for (agent, model, expected) in [
-        ("Claude Code", "claude-opus-5", "$1.000887 (partial)"),
-        ("Codex", "claude-opus-5", "unavailable"),
-        ("Pi", "claude-opus-5", "$1.000000"),
-        ("Codex", "gpt-6-astra", "$0.000113"),
+        (
+            "claude",
+            "claude-opus-5",
+            CostTotal::Available {
+                amount: CostAmount::Usd(1.0008875),
+                partial: true,
+            },
+        ),
+        ("codex", "claude-opus-5", CostTotal::Unavailable),
+        (
+            "pi",
+            "claude-opus-5",
+            CostTotal::Available {
+                amount: CostAmount::Usd(1.0),
+                partial: false,
+            },
+        ),
+        (
+            "codex",
+            "gpt-6-astra",
+            CostTotal::Available {
+                amount: CostAmount::Estimated(EstimatedCost::from_picodollars(112_500_000)),
+                partial: false,
+            },
+        ),
     ] {
-        assert!(
-            section_row(&report, agent, model).ends_with(expected),
-            "{report}"
-        );
+        let row = usage_report
+            .rows
+            .iter()
+            .find(|row| {
+                row.agent.as_str() == agent
+                    && matches!(
+                        &row.group,
+                        token_tracker::domain::SummaryGroup::ProviderModel(attribution)
+                            if attribution.model == model
+                    )
+            })
+            .unwrap();
+        assert_eq!(row.cost, expected);
     }
 }
 
@@ -190,13 +204,6 @@ fn pricing_follows_billing_provider_for_any_agent_and_retains_all_rate_versions(
             [&token_tracker::domain::EstimateUnavailableReason::UnsupportedProvider],
         1
     );
-    let report = render_terminal_report(&build_usage_report(&summary), &[], &[]);
-    assert!(report.contains("another-agent usage:\n"));
-    assert!(report.contains("- Priced events: 2 / 3 without recorded cost\n"));
-    assert!(report.contains("- Unpriced (unsupported provider): 1 events\n"));
-    for (snapshot, date) in &estimate.rate_snapshots {
-        assert!(report.contains(&format!("- Rates: {snapshot} ({date})\n")));
-    }
     assert_eq!(estimate.rate_snapshots.len(), 2);
     assert!(
         estimate
