@@ -1,3 +1,5 @@
+mod publishing;
+
 use serde_json::{Value, json};
 use token_tracker::domain::export::{
     EXPORT_FORMAT_VERSION, ExportEstimate, ExportSnapshot, UsdAmount,
@@ -36,7 +38,7 @@ fn money_uses_decimal_usd_strings_without_losing_precision() {
 #[test]
 fn example_preserves_pricing_context_and_shared_sessions_in_one_event() {
     let expected: Value =
-        serde_json::from_str(include_str!("../../docs/export-example.json")).unwrap();
+        serde_json::from_str(include_str!("../fixtures/export-example.json")).unwrap();
     let snapshot: ExportSnapshot = serde_json::from_value(expected.clone()).unwrap();
     assert_eq!(snapshot.format_version, EXPORT_FORMAT_VERSION);
     assert_eq!(snapshot.events.len(), 1);
@@ -55,7 +57,7 @@ fn example_preserves_pricing_context_and_shared_sessions_in_one_event() {
 #[test]
 fn zero_unavailable_and_recorded_cost_estimates_are_distinct() {
     let mut example: Value =
-        serde_json::from_str(include_str!("../../docs/export-example.json")).unwrap();
+        serde_json::from_str(include_str!("../fixtures/export-example.json")).unwrap();
     let estimate = &mut example["events"][0]["estimate"];
     estimate["cost_usd"] = json!("0");
     let zero: ExportEstimate = serde_json::from_value(estimate.clone()).unwrap();

@@ -1,0 +1,66 @@
+{
+  "machine_id": "machine-example",
+  "machine_name": "Example workstation",
+  "export_revision": 1,
+  "format_version": 1,
+  "exported_at_unix_ms": 1789462800000,
+  "events": [
+    {
+      "agent": "codex",
+      "event_key": "response-example",
+      "timestamp_unix_ms": 1789462700000,
+      "usage_kind": "assistant",
+      "provider": "openai",
+      "model": "gpt-5.6-sol",
+      "tokens": {
+        "input": 100,
+        "output": 20,
+        "cache_read": 30,
+        "cache_write": 0
+      },
+      "recorded_cost_usd": null,
+      "estimate": {
+        "status": "available",
+        "cost_usd": "0.012345678901",
+        "pricing_version": "openai-api-2026-09-09",
+        "pricing_date": "2026-09-09",
+        "tier": "standard",
+        "tier_evidence": "unknown",
+        "assumptions": {
+          "standard_rates": true,
+          "cache_writes_as_input": true,
+          "short_context": false
+        }
+      },
+      "pricing_context": {
+        "open_ai": {
+          "tier": "unknown",
+          "tier_evidence": "unknown",
+          "requests": {
+            "known_requests": [
+              { "input": 40, "output": 5, "cache_read": 10, "cache_write": 0 },
+              { "input": 60, "output": 15, "cache_read": 20, "cache_write": 0 }
+            ]
+          },
+          "cache_detail": "incomplete"
+        }
+      },
+      "sessions": [
+        {
+          "session_id": "session-original",
+          "started_at_unix_ms": 1789462600000,
+          "name": "Implement usage export",
+          "working_directory": "/home/jami/myprojects/token-tracker",
+          "parent_session": null
+        },
+        {
+          "session_id": "session-fork",
+          "started_at_unix_ms": 1789462750000,
+          "name": "Review usage export",
+          "working_directory": "/home/jami/myprojects/token-tracker",
+          "parent_session": { "session_id": "session-original" }
+        }
+      ]
+    }
+  ]
+}

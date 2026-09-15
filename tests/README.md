@@ -5,7 +5,7 @@ The suite starts at `integration.rs`, grouped by component:
 - `pricing/`: rates, costs, and precision.
 - `storage/`: persistence and failure handling.
 - `cli/`: command wiring, rendered output, privacy, and failures.
-- `export/`: serialized contract and money precision.
+- `export/`: serialized contract, money precision, and destination publication semantics.
 
 Reuse `support/` and fixtures. Name tests after behavior and keep expected values
 independent of the implementation. Test lifecycles at the application layer, not

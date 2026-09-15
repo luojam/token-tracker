@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn preserves_unsigned_integer_and_decimal_money_precision() {
         let mut snapshot: ExportSnapshot =
-            serde_json::from_str(include_str!("../../docs/export-example.json")).unwrap();
+            serde_json::from_str(include_str!("../../tests/fixtures/export-example.json")).unwrap();
         snapshot.export_revision = u64::MAX;
         snapshot.events[0].tokens.input = u64::MAX;
         snapshot.events[0].recorded_cost_usd =
