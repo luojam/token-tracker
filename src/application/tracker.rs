@@ -2,7 +2,7 @@ use std::error::Error;
 use std::path::PathBuf;
 
 use super::reporting::read_usage_summary;
-use super::synchronization::import_adapters;
+use super::synchronization::synchronize_adapters;
 use super::{
     ExportError, ImportAdapter, ImportSynchronizationError, ImportWarning, ReportDiagnostic,
     ReportError, SynchronizationReport, UsageReport, build_usage_report,
@@ -173,7 +173,7 @@ impl TokenTracker {
         }
 
         let adapters = adapters.iter().map(Box::as_ref).collect::<Vec<_>>();
-        import_adapters(&adapters, &mut self.store, warnings)
+        synchronize_adapters(&adapters, &mut self.store, warnings)
     }
 
     /// Reads stored usage and diagnostics without refreshing or changing stored state.

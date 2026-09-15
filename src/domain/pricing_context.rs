@@ -3,7 +3,7 @@ use super::{CacheDetail, ServiceTier, TierEvidence, TokenCounts};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CacheWriteTokens {
-    pub duration_seconds: u32,
+    pub ttl_seconds: u32,
     pub tokens: u64,
 }
 

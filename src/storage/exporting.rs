@@ -96,13 +96,13 @@ impl ExportSink for SqliteExportSink {
                 };
             }
         }
-        replace_contents(&transaction, snapshot).map_err(PublishError::Destination)?;
+        replace_machine_snapshot(&transaction, snapshot).map_err(PublishError::Destination)?;
         transaction.commit().map_err(PublishError::Destination)?;
         Ok(PublishOutcome::Published)
     }
 }
 
-fn replace_contents(
+fn replace_machine_snapshot(
     transaction: &rusqlite::Transaction<'_>,
     snapshot: &ExportSnapshot,
 ) -> rusqlite::Result<()> {
@@ -177,7 +177,7 @@ mod tests {
         transaction
             .execute_batch(include_str!("export_schema.sql"))
             .unwrap();
-        replace_contents(&transaction, &snapshot).unwrap();
+        replace_machine_snapshot(&transaction, &snapshot).unwrap();
         transaction.commit().unwrap();
         let values: (String, i64, String) = connection
             .query_row(

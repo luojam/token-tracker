@@ -80,10 +80,10 @@ fn lookup_rates(
         _ => return Err(Reason::UnsupportedModel),
     };
     if tier_evidence != TierEvidence::ServedResponse {
-        return Err(Reason::UnknownTier);
+        return Err(Reason::UnresolvedTier);
     }
     match tier {
-        ServiceTier::Unknown => return Err(Reason::UnknownTier),
+        ServiceTier::Unknown => return Err(Reason::UnresolvedTier),
         ServiceTier::Standard => {}
         _ => return Err(Reason::UnsupportedTier),
     }
@@ -143,7 +143,7 @@ fn price_tokens(
     match durations {
         Some(durations) => {
             for duration in durations {
-                let rate = match duration.duration_seconds {
+                let rate = match duration.ttl_seconds {
                     300 => rates.cache_write_5m,
                     3600 => rates.cache_write_1h,
                     _ => return Err(EstimateUnavailableReason::IncompleteCacheDetail),

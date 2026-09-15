@@ -90,12 +90,14 @@ fn aggregate_cost(recorded: Option<RecordedCost>, estimates: &EstimateTotals) ->
             CostAmount::Usd(cost)
         }
         (None, Some(estimated)) => CostAmount::Estimated(estimated),
-        (None, None) if estimates.imported_event_count > 0 => return CostTotal::Unavailable,
+        (None, None) if estimates.estimate_candidate_event_count > 0 => {
+            return CostTotal::Unavailable;
+        }
         (None, None) => return CostTotal::Absent,
     };
     CostTotal::Available {
         amount,
-        partial: estimates.priced_event_count < estimates.imported_event_count,
+        partial: estimates.priced_event_count < estimates.estimate_candidate_event_count,
     }
 }
 
@@ -200,7 +202,7 @@ fn add_estimate(totals: &mut EstimateTotals, estimate: &EventEstimate) {
     if let Some((snapshot, date)) = estimate.rate_snapshot {
         totals.rate_snapshots.insert(snapshot.into(), date.into());
     }
-    totals.imported_event_count += 1;
+    totals.estimate_candidate_event_count += 1;
 
     match estimate.result {
         Ok(value) => {
@@ -298,7 +300,7 @@ mod tests {
         add_estimate(&mut totals, &estimate);
 
         assert_eq!(totals.cost, EstimateTotal::Overflow);
-        assert_eq!(totals.imported_event_count, 4);
+        assert_eq!(totals.estimate_candidate_event_count, 4);
         assert_eq!(totals.priced_event_count, 3);
         assert_eq!(totals.requested_setting_event_count, 3);
         assert_eq!(

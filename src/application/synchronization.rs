@@ -112,7 +112,7 @@ impl<A: SessionSource, S: UsageStore> ImportAdapter<S> for A {
     }
 }
 
-pub(crate) fn import_adapters<S: UsageStore>(
+pub(crate) fn synchronize_adapters<S: UsageStore>(
     adapters: &[&dyn ImportAdapter<S>],
     store: &mut S,
     warnings: Vec<ImportWarning>,
@@ -211,10 +211,9 @@ where
     };
 
     for discovered in sources {
-        if known_sources
-            .get(&discovered.key)
-            .is_some_and(|state| source_is_unchanged(state, &discovered, normalization_version))
-        {
+        if known_sources.get(&discovered.key).is_some_and(|state| {
+            source_import_is_current(state, &discovered, normalization_version)
+        }) {
             report.counts.sources_unchanged += 1;
             continue;
         }
@@ -330,7 +329,7 @@ fn notice_message(notice: &ParseNotice) -> String {
     message
 }
 
-fn source_is_unchanged(
+fn source_import_is_current(
     state: &SourceState,
     discovered: &DiscoveredSource,
     version: NonZeroU32,

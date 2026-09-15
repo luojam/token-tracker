@@ -33,7 +33,7 @@ fn response_cache_detail_comes_only_from_usage_not_totals_or_mirrors() {
     let fixture = records(RESPONSE);
     let baseline = parse(&fixture[..4]).unwrap();
     assert_eq!(baseline.events.len(), 1);
-    let pricing = facts(&baseline.events[0]);
+    let pricing = openai_context(&baseline.events[0]);
     assert_eq!(pricing.requests, RequestBreakdown::SingleRequest);
 
     for usage_complete in [false, true] {
@@ -47,7 +47,7 @@ fn response_cache_detail_comes_only_from_usage_not_totals_or_mirrors() {
         }
 
         let mut expected = baseline.events[0].clone();
-        facts_mut(&mut expected).cache_detail = detail(usage_complete);
+        openai_context_mut(&mut expected).cache_detail = detail(usage_complete);
         assert_eq!(parse(&history[..4]).unwrap().events, vec![expected.clone()]);
         assert_eq!(parse(&history).unwrap().events, vec![expected]);
     }
@@ -77,7 +77,7 @@ fn detail_only_response_corrections_replace_completeness_but_keep_request_contex
         history.push(correction);
 
         let mut expected = original.events[0].clone();
-        facts_mut(&mut expected).cache_detail = detail(!initially_complete);
+        openai_context_mut(&mut expected).cache_detail = detail(!initially_complete);
         assert_eq!(parse(&history).unwrap().events, vec![expected]);
     }
 }
@@ -119,7 +119,7 @@ fn legacy_cache_detail_requires_both_delta_endpoints_and_recovers_on_later_turns
             first_complete && second_complete,
             second_complete,
         ]) {
-            let pricing = facts(event);
+            let pricing = openai_context(event);
             assert_eq!(pricing.cache_detail, detail(complete));
             assert!(matches!(
                 pricing.requests,
@@ -158,20 +158,20 @@ fn legacy_uncertainty_is_sticky_within_an_aggregate_and_noops_preserve_context()
         let parsed = parse(&history).unwrap();
         assert_eq!(parsed.events.len(), 1);
         assert_eq!(
-            facts(&parsed.events[0]).cache_detail,
+            openai_context(&parsed.events[0]).cache_detail,
             detail(initially_complete)
         );
     }
 }
 
-fn facts(event: &UsageEvent) -> &OpenAiPricingContext {
+fn openai_context(event: &UsageEvent) -> &OpenAiPricingContext {
     let Some(PricingContext::OpenAi(context)) = event.pricing_context.as_ref() else {
         panic!("expected OpenAI pricing context");
     };
     context
 }
 
-fn facts_mut(event: &mut UsageEvent) -> &mut OpenAiPricingContext {
+fn openai_context_mut(event: &mut UsageEvent) -> &mut OpenAiPricingContext {
     let Some(PricingContext::OpenAi(context)) = event.pricing_context.as_mut() else {
         panic!("expected OpenAI pricing context");
     };

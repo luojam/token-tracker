@@ -38,11 +38,11 @@ fn event() -> UsageEvent {
             requests: RequestBreakdown::KnownRequests(KnownRequests::new(tokens)),
             cache_writes: Some(vec![
                 CacheWriteTokens {
-                    duration_seconds: 300,
+                    ttl_seconds: 300,
                     tokens: 30,
                 },
                 CacheWriteTokens {
-                    duration_seconds: 3600,
+                    ttl_seconds: 3600,
                     tokens: 10,
                 },
             ]),
@@ -82,7 +82,7 @@ fn fixture_costs_include_cache_durations_and_compaction_once() {
         ("msg_1h", expected(242_000_000)),
         ("msg_compaction", expected(1_161_500_000)),
         ("msg_missing_duration", Err(Reason::IncompleteCacheDetail)),
-        ("msg_null_evidence", Err(Reason::UnknownTier)),
+        ("msg_null_evidence", Err(Reason::UnresolvedTier)),
         ("msg_missing_speed", Err(Reason::UnknownSpeed)),
         ("msg_opaque", Err(Reason::UnsupportedProvider)),
         ("msg_unattributed", Err(Reason::UnknownAttribution)),
@@ -175,7 +175,7 @@ fn bundled_models_use_exact_flat_rates() {
     };
     facts(&mut event).requests = RequestBreakdown::KnownRequests(KnownRequests::new(event.tokens));
     facts(&mut event).cache_writes = Some(vec![CacheWriteTokens {
-        duration_seconds: 3600,
+        ttl_seconds: 3600,
         tokens: u64::MAX,
     }]);
 
@@ -190,7 +190,7 @@ fn only_served_tier_evidence_allows_pricing() {
     for evidence in [TierEvidence::Unknown, TierEvidence::RequestedSetting] {
         let mut event = event();
         facts(&mut event).tier_evidence = evidence;
-        assert_eq!(calculate_estimate(&event), Err(Reason::UnknownTier));
+        assert_eq!(calculate_estimate(&event), Err(Reason::UnresolvedTier));
     }
 }
 
@@ -200,7 +200,7 @@ fn unsupported_facts_report_the_most_specific_reason() {
         (
             ServiceTier::Unknown,
             ServiceSpeed::Standard,
-            Reason::UnknownTier,
+            Reason::UnresolvedTier,
         ),
         (
             ServiceTier::Unsupported("standard_only".into()),

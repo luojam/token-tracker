@@ -80,7 +80,7 @@ impl DirectoryLayout for Layout {
         }
     }
 
-    fn is_session_file(&self, path: &Path) -> bool {
+    fn is_source_file(&self, path: &Path) -> bool {
         if path.extension() != Some(OsStr::new("jsonl")) {
             return false;
         }

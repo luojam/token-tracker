@@ -31,7 +31,7 @@ fn oracle_event() -> UsageEvent {
         .remove(0)
 }
 
-fn facts(event: &mut UsageEvent) -> &mut AnthropicPricingContext {
+fn anthropic_context_mut(event: &mut UsageEvent) -> &mut AnthropicPricingContext {
     let Some(PricingContext::Anthropic(context)) = event.pricing_context.as_mut() else {
         panic!("expected Anthropic pricing context");
     };
@@ -68,7 +68,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     let oracle = oracle_event();
     let mut missing_speed = oracle.clone();
     missing_speed.identity.adapter_key = "missing-speed".into();
-    facts(&mut missing_speed).speed = ServiceSpeed::Unknown;
+    anthropic_context_mut(&mut missing_speed).speed = ServiceSpeed::Unknown;
 
     let mut recorded = oracle.clone();
     recorded.identity.adapter_key = "recorded".into();
@@ -83,7 +83,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     );
 
     let mut conflicting = oracle.clone();
-    facts(&mut conflicting).speed = ServiceSpeed::Fast;
+    anthropic_context_mut(&mut conflicting).speed = ServiceSpeed::Fast;
     add_session(&mut snapshot, "claude", "copy", vec![conflicting]);
 
     let mut pi = oracle.clone();
@@ -112,7 +112,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     add_session(&mut snapshot, "codex", "main", vec![codex, unsupported]);
 
     let summary = calculate_usage_summary(&snapshot).unwrap();
-    assert_eq!(summary.totals.estimates.imported_event_count, 4);
+    assert_eq!(summary.totals.estimates.estimate_candidate_event_count, 4);
     assert_eq!(summary.totals.estimates.priced_event_count, 2);
 
     let usage_report = build_usage_report(&summary);
@@ -180,7 +180,7 @@ fn pricing_follows_context_provider_for_any_agent_and_retains_all_rate_versions(
         provider: "openai".into(),
         model: "gpt-6-astra".into(),
     });
-    let original = facts(&mut openai).clone();
+    let original = anthropic_context_mut(&mut openai).clone();
     openai.pricing_context = Some(PricingContext::OpenAi(OpenAiPricingContext {
         tier: original.tier,
         tier_evidence: original.tier_evidence,
@@ -203,7 +203,7 @@ fn pricing_follows_context_provider_for_any_agent_and_retains_all_rate_versions(
 
     let summary = calculate_usage_summary(&snapshot).unwrap();
     let estimate = &summary.totals.estimates;
-    assert_eq!(estimate.imported_event_count, 3);
+    assert_eq!(estimate.estimate_candidate_event_count, 3);
     assert_eq!(estimate.priced_event_count, 2);
     assert_eq!(
         estimate.cost,
@@ -243,7 +243,10 @@ fn missing_pricing_context_still_count_toward_coverage() {
     let summary = calculate_usage_summary(&snapshot).unwrap();
     let totals = &summary.totals.estimates;
     assert_eq!(
-        (totals.imported_event_count, totals.priced_event_count),
+        (
+            totals.estimate_candidate_event_count,
+            totals.priced_event_count
+        ),
         (2, 1)
     );
     assert_eq!(

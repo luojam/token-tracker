@@ -105,7 +105,7 @@ fn insufficient_facts_are_unavailable_even_for_zero_tokens() {
         ),
         (
             |e| facts(e).tier_evidence = TierEvidence::Unknown,
-            Reason::UnknownTier,
+            Reason::UnresolvedTier,
         ),
         (
             |e| facts(e).cache_detail = CacheDetail::Incomplete,

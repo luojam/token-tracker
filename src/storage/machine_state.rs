@@ -10,7 +10,7 @@ pub(crate) struct MachineState {
     connection: Connection,
 }
 
-pub(crate) struct MachineExport<'a> {
+pub(crate) struct ExportRevisionTransaction<'a> {
     transaction: Transaction<'a>,
     pub machine_id: String,
     pub revision: u64,
@@ -27,7 +27,7 @@ impl MachineState {
     }
 
     /// Hold the lock through the usage read so revision order follows snapshot order.
-    pub fn begin_export(&mut self) -> Result<MachineExport<'_>, SqliteStoreError> {
+    pub fn begin_export(&mut self) -> Result<ExportRevisionTransaction<'_>, SqliteStoreError> {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -74,7 +74,7 @@ impl MachineState {
             .map_err(|_| SqliteStoreError::CorruptData("an invalid export revision"))?
             .checked_add(1)
             .ok_or(SqliteStoreError::ValueOutOfRange("export revision"))?;
-        Ok(MachineExport {
+        Ok(ExportRevisionTransaction {
             transaction,
             machine_id,
             revision,
@@ -82,7 +82,7 @@ impl MachineState {
     }
 }
 
-impl MachineExport<'_> {
+impl ExportRevisionTransaction<'_> {
     pub fn commit(self) -> Result<(), SqliteStoreError> {
         self.transaction.execute(
             "UPDATE machine_state SET export_revision = ?1 WHERE singleton = 1",

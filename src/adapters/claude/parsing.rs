@@ -422,7 +422,7 @@ fn parse_usage(
         match &component.cache_creation {
             Some(durations) => {
                 for duration in durations {
-                    let total = writes.entry(duration.duration_seconds).or_default();
+                    let total = writes.entry(duration.ttl_seconds).or_default();
                     *total = total
                         .checked_add(duration.tokens)
                         .ok_or_else(|| invalid(line, "cache duration overflow"))?;
@@ -449,8 +449,8 @@ fn parse_usage(
         cache_writes: complete_durations.then(|| {
             writes
                 .into_iter()
-                .map(|(duration_seconds, tokens)| CacheWriteTokens {
-                    duration_seconds,
+                .map(|(ttl_seconds, tokens)| CacheWriteTokens {
+                    ttl_seconds,
                     tokens,
                 })
                 .collect()
@@ -479,11 +479,11 @@ fn component(usage: &Value, line: usize) -> Result<UsageComponent, ClaudeParseEr
 
             Ok(vec![
                 CacheWriteTokens {
-                    duration_seconds: 300,
+                    ttl_seconds: 300,
                     tokens: ephemeral_5m,
                 },
                 CacheWriteTokens {
-                    duration_seconds: 3600,
+                    ttl_seconds: 3600,
                     tokens: ephemeral_1h,
                 },
             ])

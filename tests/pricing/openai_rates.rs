@@ -103,7 +103,7 @@ fn bundled_rates_switch_at_the_request_input_boundary() {
 #[test]
 fn unknown_names_and_tiers_never_fall_back_to_supported_rates() {
     use EstimateUnavailableReason::{
-        UnknownTier, UnsupportedModel, UnsupportedProvider, UnsupportedTier,
+        UnresolvedTier, UnsupportedModel, UnsupportedProvider, UnsupportedTier,
     };
     use ServiceTier::{Fast, Standard, Unknown, Unsupported};
 
@@ -115,11 +115,11 @@ fn unknown_names_and_tiers_never_fall_back_to_supported_rates() {
         ("openai", "codex-auto-review", Standard, UnsupportedModel),
         ("openai", "codex-auto-review", Fast, UnsupportedModel),
         ("openai", "gpt-5.5-custom", Fast, UnsupportedModel),
-        ("openai", "gpt-5.4-mini", Unknown, UnknownTier),
+        ("openai", "gpt-5.4-mini", Unknown, UnresolvedTier),
         ("openai", "gpt-6-astra-custom", Fast, UnsupportedModel),
         ("openai", "gpt-5.6-sol-2026-09-07", Fast, UnsupportedModel),
         ("openai", "GPT-5.6", Standard, UnsupportedModel),
-        ("openai", "gpt-6-astra", Unknown, UnknownTier),
+        ("openai", "gpt-6-astra", Unknown, UnresolvedTier),
         (
             "openai",
             "gpt-5.6",

@@ -86,7 +86,7 @@ fn context(tokens: TokenCounts) -> PricingContext {
         speed: ServiceSpeed::Fast,
         requests: RequestBreakdown::KnownRequests(KnownRequests::new(tokens)),
         cache_writes: Some(vec![CacheWriteTokens {
-            duration_seconds: 300,
+            ttl_seconds: 300,
             tokens: tokens.cache_write,
         }]),
     })

@@ -149,11 +149,11 @@ fn final_responses_and_pricing_context_corrections_survive_reopen() {
     facts.requests = RequestBreakdown::KnownRequests(KnownRequests::new(expected.tokens));
     facts.cache_writes = Some(vec![
         CacheWriteTokens {
-            duration_seconds: 300,
+            ttl_seconds: 300,
             tokens: 20,
         },
         CacheWriteTokens {
-            duration_seconds: 3600,
+            ttl_seconds: 3600,
             tokens: 20,
         },
     ]);

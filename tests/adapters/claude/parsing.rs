@@ -64,8 +64,8 @@ fn check_usage(parsed: &SessionData, expected: &Value, name: &str) {
                     })),
                     "tokens": tokens(event.tokens),
                     "recorded_cost": null,
-                    "pricing_facts": event.pricing_context.as_ref().map(|context| match context {
-                        token_tracker::domain::PricingContext::Anthropic(facts) => serde_json::to_value(facts).unwrap(),
+                    "pricing_context": event.pricing_context.as_ref().map(|context| match context {
+                        token_tracker::domain::PricingContext::Anthropic(context) => serde_json::to_value(context).unwrap(),
                         _ => panic!("expected Anthropic pricing context"),
                     }),
                 }),

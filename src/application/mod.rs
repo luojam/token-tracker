@@ -1,7 +1,7 @@
 mod all_time_report;
 mod event_deduplication;
 pub mod exporting;
-mod importing;
+mod import_validation;
 mod ports;
 mod reporting;
 mod synchronization;
@@ -24,6 +24,6 @@ pub use tracker::{
     AGENT_LABELS, LocalSourceConfig, ReportResult, TokenTracker, TokenTrackerConfig,
 };
 
-pub(crate) use importing::validate_notices;
-pub use importing::{InvalidImport, ValidatedSessionImport};
+pub(crate) use import_validation::validate_notices;
+pub use import_validation::{InvalidImport, ValidatedSessionImport};
 pub use ports::*;

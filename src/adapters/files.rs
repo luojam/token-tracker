@@ -22,7 +22,7 @@ pub struct FileRevision {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DiscoveredSessionFile {
+pub struct DiscoveredFile {
     pub path: PathBuf,
     pub revision: FileRevision,
 }
@@ -47,7 +47,7 @@ impl FileDiscoveryCoverage {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileDiscoveryReport {
-    pub files: Vec<DiscoveredSessionFile>,
+    pub files: Vec<DiscoveredFile>,
     pub warnings: Vec<DiscoveryWarning>,
     pub coverage: FileDiscoveryCoverage,
 }

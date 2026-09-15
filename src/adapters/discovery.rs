@@ -1,5 +1,5 @@
 use crate::adapters::files::{
-    DiscoveredSessionFile, FileDiscoveryCoverage, FileDiscoveryReport, FileRevision,
+    DiscoveredFile, FileDiscoveryCoverage, FileDiscoveryReport, FileRevision,
 };
 use crate::application::DiscoveryWarning;
 use std::path::{Path, PathBuf};
@@ -9,7 +9,7 @@ pub(super) trait DirectoryLayout: Sized {
     /// None excludes this directory from the adapter's layout.
     fn child_directory(&self, name: &OsStr) -> Option<Self>;
 
-    fn is_session_file(&self, path: &Path) -> bool;
+    fn is_source_file(&self, path: &Path) -> bool;
 }
 
 #[derive(Clone, Copy)]
@@ -20,7 +20,7 @@ impl DirectoryLayout for RecursiveLayout {
         Some(*self)
     }
 
-    fn is_session_file(&self, path: &Path) -> bool {
+    fn is_source_file(&self, path: &Path) -> bool {
         (self.0)(path)
     }
 }
@@ -131,7 +131,7 @@ fn scan_directory<L: DirectoryLayout>(
             }
             continue;
         }
-        let candidate = layout.is_session_file(&path);
+        let candidate = layout.is_source_file(&path);
         if !candidate && !(file_type.is_symlink() && child_layout.is_some()) {
             continue;
         }
@@ -175,7 +175,7 @@ fn scan_directory<L: DirectoryLayout>(
                 continue;
             }
         };
-        report.files.push(DiscoveredSessionFile {
+        report.files.push(DiscoveredFile {
             path,
             revision: FileRevision {
                 size: metadata.len(),

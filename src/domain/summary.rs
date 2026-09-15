@@ -37,7 +37,7 @@ pub enum EstimateUnavailableReason {
     UnknownAttribution,
     UnsupportedProvider,
     UnsupportedModel,
-    UnknownTier,
+    UnresolvedTier,
     UnsupportedTier,
     UnknownSpeed,
     UnsupportedSpeed,
@@ -69,7 +69,7 @@ pub enum EstimateTotal {
 pub struct EstimateTotals {
     pub cost: EstimateTotal,
     /// Canonical events eligible for estimation in this total or breakdown row.
-    pub imported_event_count: u64,
+    pub estimate_candidate_event_count: u64,
     pub priced_event_count: u64,
     /// Evidence counts include priced events only.
     pub requested_setting_event_count: u64,

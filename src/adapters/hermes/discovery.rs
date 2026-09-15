@@ -74,7 +74,7 @@ impl DirectoryLayout for Layout {
         }
     }
 
-    fn is_session_file(&self, path: &Path) -> bool {
+    fn is_source_file(&self, path: &Path) -> bool {
         matches!(self, Self::Root | Self::Profile)
             && path.file_name() == Some(OsStr::new("state.db"))
     }

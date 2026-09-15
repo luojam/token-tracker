@@ -10,7 +10,7 @@ fn estimate_only_totals_retain_integer_precision() {
         totals: SummaryTotals {
             estimates: EstimateTotals {
                 cost: EstimateTotal::Available(cost),
-                imported_event_count: 1,
+                estimate_candidate_event_count: 1,
                 priced_event_count: 1,
                 ..EstimateTotals::default()
             },

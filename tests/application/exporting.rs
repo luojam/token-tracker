@@ -60,7 +60,7 @@ fn export_matches_reports_and_keeps_shared_sessions_without_refreshing() {
     assert_eq!(unavailable, 1);
     assert_eq!(
         unavailable,
-        totals.estimates.imported_event_count - totals.estimates.priced_event_count
+        totals.estimates.estimate_candidate_event_count - totals.estimates.priced_event_count
     );
     let CostTotal::Available {
         amount: CostAmount::Usd(expected),

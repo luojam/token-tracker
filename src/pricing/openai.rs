@@ -182,7 +182,7 @@ fn schedule(
     match tier {
         ServiceTier::Standard => Ok(&model.standard),
         ServiceTier::Fast => Ok(&model.fast),
-        ServiceTier::Unknown => Err(EstimateUnavailableReason::UnknownTier),
+        ServiceTier::Unknown => Err(EstimateUnavailableReason::UnresolvedTier),
         ServiceTier::Unsupported(_) => Err(EstimateUnavailableReason::UnsupportedTier),
     }
 }
@@ -230,7 +230,7 @@ pub fn calculate_estimate(
     let (tier, evidence) = estimate_tier(context);
     let schedule = schedule(attribution, &tier)?;
     if context.tier != ServiceTier::Unknown && evidence == TierEvidence::Unknown {
-        return Err(Reason::UnknownTier);
+        return Err(Reason::UnresolvedTier);
     }
     if !context.requests.usage_matches(event.tokens) {
         return Err(Reason::UnknownRequestGranularity);

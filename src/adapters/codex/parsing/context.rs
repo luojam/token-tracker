@@ -23,7 +23,7 @@ pub(super) struct ContextState {
 #[derive(Default)]
 struct ThreadContext {
     provider: Option<String>,
-    settings: Option<RawServiceTier>,
+    service_tier_setting: Option<RawServiceTier>,
 }
 
 struct TurnContext {
@@ -100,7 +100,9 @@ impl ContextState {
                 model: None,
                 has_context: false,
                 model_conflict: false,
-                tier: TierContext::new(thread.and_then(|thread| thread.settings.as_ref())),
+                tier: TierContext::new(
+                    thread.and_then(|thread| thread.service_tier_setting.as_ref()),
+                ),
             })
         } else {
             None
@@ -127,8 +129,8 @@ impl ContextState {
         // Unscoped review events may be forwarded from the child, not local defaults.
         let raw = (settings.thread_id.is_some() || allow_unscoped)
             .then_some(settings.thread_settings.0.service_tier.0);
-        let changed = thread.settings != raw;
-        thread.settings = raw;
+        let changed = thread.service_tier_setting != raw;
+        thread.service_tier_setting = raw;
         // A changed default is not a request-start or served-tier record.
         if changed
             && let Some(turn) = &mut self.active

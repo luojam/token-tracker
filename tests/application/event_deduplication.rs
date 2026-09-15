@@ -260,7 +260,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_pricing_context_cove
         .estimates;
     assert_eq!(summary.totals.tokens.input, 27);
     assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 0.5);
-    assert_eq!(summary.totals.estimates.imported_event_count, 3);
+    assert_eq!(summary.totals.estimates.estimate_candidate_event_count, 3);
     assert_eq!(
         build_usage_report(&summary).totals.cost,
         CostTotal::Available {
@@ -269,7 +269,7 @@ fn canonical_estimates_keep_whole_observations_and_explicit_pricing_context_cove
         }
     );
 
-    assert_eq!(estimate.imported_event_count, 2);
+    assert_eq!(estimate.estimate_candidate_event_count, 2);
     assert_eq!(estimate.priced_event_count, 2);
     assert_eq!(estimate.requested_setting_event_count, 0);
     assert_eq!(estimate.served_response_event_count, 1);
@@ -310,7 +310,7 @@ fn typed_lineage_and_ambiguous_provenance_use_deterministic_precedence() {
 }
 
 #[test]
-fn unrelated_copies_use_start_time_then_source_path() {
+fn unrelated_copies_use_start_time_then_session_id() {
     let mut data = snapshot(false);
     data.sessions[1].parent_session = None;
     data.sessions[0].started_at = Timestamp::from_unix_milliseconds(50);

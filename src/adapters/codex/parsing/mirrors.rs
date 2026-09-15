@@ -91,7 +91,7 @@ impl MirrorState {
         Ok(())
     }
 
-    pub(super) fn accept_repeat(
+    pub(super) fn validate_repeat(
         &self,
         response: &ResponseUsageWire,
         line: usize,

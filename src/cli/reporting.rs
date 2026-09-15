@@ -108,7 +108,7 @@ pub(super) fn render_terminal_report(
                     .iter()
                     .find(|(id, _)| *id == agent.as_str())
                     .map_or(agent.as_str(), |(_, label)| *label);
-                let label = one_line(label);
+                let label = escape_control_characters(label);
                 writeln!(output).unwrap();
                 writeln!(output, "{label} usage:").unwrap();
                 render_table_row(&mut output, &headers, &widths);
@@ -172,11 +172,13 @@ pub(super) fn render_terminal_report(
                 Some(path) => writeln!(
                     output,
                     "- {}: {}",
-                    one_line(&path.display().to_string()),
-                    one_line(&warning.message)
+                    escape_control_characters(&path.display().to_string()),
+                    escape_control_characters(&warning.message)
                 )
                 .unwrap(),
-                None => writeln!(output, "- {}", one_line(&warning.message)).unwrap(),
+                None => {
+                    writeln!(output, "- {}", escape_control_characters(&warning.message)).unwrap()
+                }
             }
         }
     }
@@ -185,7 +187,7 @@ pub(super) fn render_terminal_report(
 }
 
 fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) {
-    if estimates.imported_event_count == 0 {
+    if estimates.estimate_candidate_event_count == 0 {
         return;
     }
 
@@ -195,7 +197,7 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
         output,
         "- Priced events: {} / {} without recorded cost",
         format_integer(estimates.priced_event_count),
-        format_integer(estimates.imported_event_count)
+        format_integer(estimates.estimate_candidate_event_count)
     )
     .unwrap();
 
@@ -245,7 +247,7 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
             ServiceTier::Standard => "standard".into(),
             ServiceTier::Fast => "fast".into(),
             ServiceTier::Unknown => "unknown".into(),
-            ServiceTier::Unsupported(value) => one_line(value),
+            ServiceTier::Unsupported(value) => escape_control_characters(value),
         };
         writeln!(
             output,
@@ -261,7 +263,7 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
             EstimateUnavailableReason::UnknownAttribution => "unknown attribution",
             EstimateUnavailableReason::UnsupportedProvider => "unsupported provider",
             EstimateUnavailableReason::UnsupportedModel => "unsupported model",
-            EstimateUnavailableReason::UnknownTier => "unknown tier",
+            EstimateUnavailableReason::UnresolvedTier => "unresolved tier",
             EstimateUnavailableReason::UnsupportedTier => "unsupported tier",
             EstimateUnavailableReason::UnknownSpeed => "unknown speed",
             EstimateUnavailableReason::UnsupportedSpeed => "unsupported speed",
@@ -283,8 +285,8 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
         writeln!(
             output,
             "- Rates: {} ({})",
-            one_line(snapshot),
-            one_line(date)
+            escape_control_characters(snapshot),
+            escape_control_characters(date)
         )
         .unwrap();
     }
@@ -322,8 +324,8 @@ fn cost_label(cost: CostTotal) -> Option<String> {
 fn model_label(attribution: &ModelAttribution) -> String {
     format!(
         "{} / {}",
-        one_line(&attribution.provider),
-        one_line(&attribution.model)
+        escape_control_characters(&attribution.provider),
+        escape_control_characters(&attribution.model)
     )
 }
 
@@ -340,7 +342,7 @@ fn group_label(group: &SummaryGroup) -> String {
     }
 }
 
-fn one_line(value: &str) -> String {
+fn escape_control_characters(value: &str) -> String {
     value
         .chars()
         .flat_map(|character| match character {

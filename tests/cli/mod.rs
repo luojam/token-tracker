@@ -85,7 +85,7 @@ fn assert_no_content_persisted(database_directory: &Path) {
 }
 
 #[test]
-fn imports_all_adapters_and_preserves_usage_privately_across_runs() {
+fn imports_pi_codex_and_claude_and_preserves_usage_privately_across_runs() {
     let tree = TempTree::new();
     let home = tree.root.join("home");
     let data_home = tree.root.join("data");

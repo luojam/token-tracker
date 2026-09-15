@@ -35,7 +35,7 @@
             25
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -51,11 +51,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]
@@ -76,7 +76,7 @@
             20
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -92,11 +92,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]
@@ -133,7 +133,7 @@
             25
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -149,11 +149,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]
@@ -174,7 +174,7 @@
             3
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -224,7 +224,7 @@
             3
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -274,7 +274,7 @@
             3
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -322,7 +322,7 @@
             3
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -375,7 +375,7 @@
             20
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -391,11 +391,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]
@@ -416,7 +416,7 @@
             3
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -432,11 +432,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 4
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 0
               }
             ]
@@ -457,7 +457,7 @@
             3
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "fast",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -473,11 +473,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 0
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 4
               }
             ]
@@ -498,7 +498,7 @@
             3
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -530,7 +530,7 @@
             26
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -552,11 +552,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 20
               }
             ]
@@ -577,7 +577,7 @@
             1
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "unknown",
             "tier": "unknown",
             "tier_evidence": "served_response",
@@ -609,7 +609,7 @@
             1
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "unknown",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -641,7 +641,7 @@
             1
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -670,7 +670,7 @@
             1
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -702,7 +702,7 @@
             1
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -734,7 +734,7 @@
             1
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": {
               "unsupported": "future-tier"
@@ -784,7 +784,7 @@
             3
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -852,7 +852,7 @@
             3
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -975,7 +975,7 @@
             20
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -991,11 +991,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]
@@ -1023,7 +1023,7 @@
             20
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -1039,11 +1039,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]
@@ -1064,7 +1064,7 @@
             20
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -1080,11 +1080,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]
@@ -1112,7 +1112,7 @@
             25
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -1128,11 +1128,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]
@@ -1153,7 +1153,7 @@
             20
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -1169,11 +1169,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]
@@ -1201,7 +1201,7 @@
             25
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -1217,11 +1217,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]
@@ -1242,7 +1242,7 @@
             20
           ],
           "recorded_cost": null,
-          "pricing_facts": {
+          "pricing_context": {
             "speed": "standard",
             "tier": "standard",
             "tier_evidence": "served_response",
@@ -1258,11 +1258,11 @@
             },
             "cache_writes": [
               {
-                "duration_seconds": 300,
+                "ttl_seconds": 300,
                 "tokens": 30
               },
               {
-                "duration_seconds": 3600,
+                "ttl_seconds": 3600,
                 "tokens": 10
               }
             ]

@@ -357,7 +357,7 @@ impl SessionState {
             }
 
             if let Some(mirrors) = &self.mirrors {
-                mirrors.accept_repeat(&response, line)?;
+                mirrors.validate_repeat(&response, line)?;
             }
             // Corrections retain the original request identity and timestamp.
             original.event.tokens = tokens;
