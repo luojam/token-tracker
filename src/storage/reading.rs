@@ -1,9 +1,13 @@
 use super::{
-    SqliteStoreError, decode_parent, decode_path, decode_u64, parse_notices, pricing_context,
-    to_sql_conversion_error, usage_kind_from_str,
+    SqliteStoreError, SqliteUsageStore,
+    codec::{
+        decode_parent, decode_parse_notices, decode_path, decode_pricing_context, decode_u64,
+        to_sql_conversion_error, usage_kind_from_str,
+    },
 };
 use crate::application::{
     ReportDiagnostic, SessionProvenance, SourceKey, SourceSessionKey, UsageObservation,
+    UsageReadStore, UsageSnapshot,
 };
 use crate::domain::{
     AgentId, ModelAttribution, RecordedCost, Timestamp, TokenCounts, UsageEvent, UsageEventIdentity,
@@ -11,7 +15,27 @@ use crate::domain::{
 use rusqlite::Connection;
 use std::collections::HashMap;
 
-pub(super) fn load_stored_diagnostics(
+impl UsageReadStore for SqliteUsageStore {
+    type Error = SqliteStoreError;
+
+    fn usage_snapshot(&self) -> Result<UsageSnapshot, Self::Error> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let sessions = load_stored_sessions(&transaction)?;
+        let observations = load_stored_observations(&transaction, &sessions)?;
+        let diagnostics = load_stored_diagnostics(&transaction)?;
+        transaction.commit()?;
+
+        let mut sessions = sessions.into_values().collect::<Vec<_>>();
+        sessions.sort_by(|left, right| left.key.cmp(&right.key));
+        Ok(UsageSnapshot {
+            sessions,
+            observations,
+            diagnostics,
+        })
+    }
+}
+
+fn load_stored_diagnostics(
     connection: &Connection,
 ) -> Result<Vec<ReportDiagnostic>, SqliteStoreError> {
     let mut statement = connection.prepare(
@@ -24,7 +48,7 @@ pub(super) fn load_stored_diagnostics(
     while let Some(row) = rows.next()? {
         let agent = AgentId::new(row.get::<_, String>(0)?);
         let path = row.get::<_, Option<Vec<u8>>>(1)?.map(decode_path);
-        let notices = parse_notices::decode(&row.get::<_, String>(2)?)?;
+        let notices = decode_parse_notices(&row.get::<_, String>(2)?)?;
         diagnostics.extend(notices.into_iter().map(|notice| ReportDiagnostic {
             agent: agent.clone(),
             path: path.clone(),
@@ -34,7 +58,7 @@ pub(super) fn load_stored_diagnostics(
     Ok(diagnostics)
 }
 
-pub(super) fn load_stored_sessions(
+fn load_stored_sessions(
     connection: &Connection,
 ) -> Result<HashMap<i64, SessionProvenance>, SqliteStoreError> {
     let mut statement = connection.prepare(
@@ -64,7 +88,7 @@ pub(super) fn load_stored_sessions(
     rows.collect::<Result<_, _>>().map_err(Into::into)
 }
 
-pub(super) fn load_stored_observations(
+fn load_stored_observations(
     connection: &Connection,
     sessions: &HashMap<i64, SessionProvenance>,
 ) -> Result<Vec<UsageObservation>, SqliteStoreError> {
@@ -120,7 +144,7 @@ pub(super) fn load_stored_observations(
                 attribution,
                 tokens,
                 recorded_cost,
-                pricing_context: pricing_context::decode(row.get(12)?, tokens)?,
+                pricing_context: decode_pricing_context(row.get(12)?, tokens)?,
             },
         });
     }

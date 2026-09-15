@@ -1,8 +1,9 @@
-use super::{SqliteStoreError, parse_notices};
+use super::SqliteStoreError;
 use crate::application::{
-    SnapshotCompletion, SourceKey, SourceRevision, SourceState, SuccessfulImport,
+    ParseNotice, SnapshotCompletion, SourceKey, SourceRevision, SourceState, SuccessfulImport,
+    validate_notices,
 };
-use crate::domain::{ParentSession, Timestamp, UsageEvent, UsageKind};
+use crate::domain::{ParentSession, PricingContext, Timestamp, TokenCounts, UsageEvent, UsageKind};
 use std::{
     ffi::OsString,
     num::NonZeroU32,
@@ -35,7 +36,7 @@ pub(super) fn source_state_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result
         })
         .transpose()?;
     let notices =
-        parse_notices::decode(&row.get::<_, String>(7)?).map_err(to_sql_conversion_error)?;
+        decode_parse_notices(&row.get::<_, String>(7)?).map_err(to_sql_conversion_error)?;
 
     let last_import = match (
         last_imported_revision,
@@ -148,7 +149,7 @@ pub(super) fn completion_to_str(completion: SnapshotCompletion) -> &'static str 
     }
 }
 
-pub(super) fn completion_from_str(value: &str) -> Result<SnapshotCompletion, SqliteStoreError> {
+fn completion_from_str(value: &str) -> Result<SnapshotCompletion, SqliteStoreError> {
     match value {
         "complete" => Ok(SnapshotCompletion::Complete),
         "partial" => Ok(SnapshotCompletion::Partial),
@@ -158,10 +159,52 @@ pub(super) fn completion_from_str(value: &str) -> Result<SnapshotCompletion, Sql
     }
 }
 
-pub(super) fn corrupt_sql_value(message: &'static str) -> rusqlite::Error {
+fn corrupt_sql_value(message: &'static str) -> rusqlite::Error {
     to_sql_conversion_error(SqliteStoreError::CorruptData(message))
 }
 
 pub(super) fn to_sql_conversion_error(error: SqliteStoreError) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, Box::new(error))
+}
+
+pub(super) fn encode_parse_notices(notices: &[ParseNotice]) -> Result<String, SqliteStoreError> {
+    serde_json::to_string(notices).map_err(SqliteStoreError::Serialization)
+}
+
+pub(super) fn decode_parse_notices(value: &str) -> Result<Vec<ParseNotice>, SqliteStoreError> {
+    let notices: Vec<ParseNotice> = serde_json::from_str(value)
+        .map_err(|_| SqliteStoreError::CorruptData("invalid parse notices"))?;
+    if validate_notices(&notices).is_err() {
+        return Err(SqliteStoreError::CorruptData(
+            "duplicate parse notice codes",
+        ));
+    }
+    Ok(notices)
+}
+
+pub(super) fn encode_pricing_context(
+    context: Option<&PricingContext>,
+) -> Result<Option<String>, SqliteStoreError> {
+    context
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(SqliteStoreError::Serialization)
+}
+
+pub(super) fn decode_pricing_context(
+    encoded: Option<String>,
+    tokens: TokenCounts,
+) -> Result<Option<PricingContext>, SqliteStoreError> {
+    encoded
+        .map(|encoded| {
+            let context: PricingContext = serde_json::from_str(&encoded)
+                .map_err(|_| SqliteStoreError::CorruptData("invalid pricing context"))?;
+            if !context.usage_matches(tokens) {
+                return Err(SqliteStoreError::CorruptData(
+                    "pricing context does not match usage",
+                ));
+            }
+            Ok(context)
+        })
+        .transpose()
 }

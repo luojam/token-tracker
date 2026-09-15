@@ -1,8 +1,8 @@
 use std::error::Error;
 use std::fmt;
 
+use super::reporting::read_usage_totals;
 use super::synchronization::import_adapters;
-use super::usage_totals::read_usage_totals;
 use super::{ImportAdapter, ImportSynchronizationError, ImportWarning, UsageReadStore, UsageStore};
 use crate::domain::UsageSummary;
 

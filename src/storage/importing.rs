@@ -1,13 +1,167 @@
 use super::{
-    SqliteStoreError, attribution_parts, completion_to_str, encode_parent, encode_path, encode_u64,
-    parse_notices, usage_kind_to_str,
+    SqliteStoreError, SqliteUsageStore,
+    codec::{
+        attribution_parts, completion_to_str, encode_parent, encode_parse_notices, encode_path,
+        encode_pricing_context, encode_u64, source_state_from_row, usage_kind_to_str,
+    },
 };
-use crate::application::SessionImport;
-use crate::domain::{RecordedCost, UsageEvent};
-use rusqlite::{OptionalExtension, Transaction, params};
+use crate::application::{
+    CommitImportOutcome, DiscoveryReport, ImportStats, ObservationRetention, SessionImport,
+    SnapshotCompletion, SourceState, UsageStore, ValidatedSessionImport,
+};
+use crate::domain::{AgentId, RecordedCost, Timestamp, UsageEvent};
+use rusqlite::{OptionalExtension, Transaction, TransactionBehavior, params};
 use std::collections::HashSet;
 
-pub(super) fn remove_omitted_observations(
+impl UsageStore for SqliteUsageStore {
+    type Error = SqliteStoreError;
+
+    fn source_states(&self, agent: &AgentId) -> Result<Vec<SourceState>, Self::Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT source_key, path, last_observed_revision, last_imported_revision,
+                    last_successful_scan_ms, last_parse_completion, present, parse_notices, normalization_version
+               FROM import_sources
+              WHERE agent = ?1
+              ORDER BY source_key",
+        )?;
+        let rows = statement.query_map([agent.as_str()], source_state_from_row)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn record_discovery(
+        &mut self,
+        agent: &AgentId,
+        report: &DiscoveryReport,
+        observed_at: Timestamp,
+    ) -> Result<(), Self::Error> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let discovered_keys: HashSet<_> = report.sources.iter().map(|source| &source.key).collect();
+        for source in &report.sources {
+            transaction
+                .prepare_cached(
+                    "INSERT INTO import_sources (
+                    source_key, path, agent, last_observed_revision, last_discovery_scan_ms, present
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, 1)
+                 ON CONFLICT(agent, source_key) DO UPDATE SET
+                    path = excluded.path,
+                    last_observed_revision = excluded.last_observed_revision,
+                    last_discovery_scan_ms = excluded.last_discovery_scan_ms,
+                    present = 1
+                 WHERE excluded.last_discovery_scan_ms >= import_sources.last_discovery_scan_ms",
+                )?
+                .execute(params![
+                    source.key.0,
+                    source.path.as_deref().map(encode_path),
+                    agent.as_str(),
+                    source.revision.0,
+                    observed_at.as_unix_milliseconds()
+                ])?;
+        }
+
+        for key in &report.missing_sources {
+            if discovered_keys.contains(key) {
+                continue;
+            }
+            transaction
+                .prepare_cached(
+                    "UPDATE import_sources SET present = 0, last_discovery_scan_ms = ?1
+                 WHERE agent = ?2 AND source_key = ?3 AND last_discovery_scan_ms <= ?1",
+                )?
+                .execute(params![
+                    observed_at.as_unix_milliseconds(),
+                    agent.as_str(),
+                    key.0
+                ])?;
+        }
+
+        transaction.commit()?;
+        Ok(())
+    }
+
+    fn commit_import(
+        &mut self,
+        import: &ValidatedSessionImport,
+    ) -> Result<CommitImportOutcome, Self::Error> {
+        let import = import.as_import();
+
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if import_is_stale(&transaction, import)? {
+            return Ok(CommitImportOutcome::IgnoredStale);
+        }
+
+        if import.session.completion != SnapshotCompletion::Complete
+            && (import.session.observation_retention
+                == ObservationRetention::ReplaceSessionObservations
+                || normalization_changed(&transaction, import)?)
+        {
+            return Ok(CommitImportOutcome::DeferredIncomplete);
+        }
+
+        let source_id = upsert_imported_source(&transaction, import)?;
+        let source_session_id = upsert_source_session(&transaction, source_id, import)?;
+        let mut stats = ImportStats::default();
+        let mut retained_events = HashSet::new();
+
+        for event in &import.session.events {
+            stats.event_identities_inserted += transaction
+                .prepare_cached(
+                    "INSERT INTO usage_events (agent, adapter_key)
+                 VALUES (?1, ?2)
+                 ON CONFLICT(agent, adapter_key) DO NOTHING",
+                )?
+                .execute(params![
+                    event.identity.agent.as_str(),
+                    &event.identity.adapter_key
+                ])? as u64;
+
+            let event_id: i64 = transaction
+                .prepare_cached(
+                    "SELECT id FROM usage_events WHERE agent = ?1 AND adapter_key = ?2",
+                )?
+                .query_row(
+                    params![event.identity.agent.as_str(), &event.identity.adapter_key],
+                    |row| row.get(0),
+                )?;
+
+            let pricing_context = encode_pricing_context(event.pricing_context.as_ref())?;
+            retained_events.insert(event_id);
+            let inserted = insert_observation(
+                &transaction,
+                source_id,
+                source_session_id,
+                event_id,
+                event,
+                pricing_context.as_deref(),
+            )?;
+            if inserted {
+                stats.observations_inserted += 1;
+            } else {
+                stats.observations_updated += update_observation(
+                    &transaction,
+                    source_id,
+                    source_session_id,
+                    event_id,
+                    event,
+                    pricing_context.as_deref(),
+                )? as u64;
+            }
+        }
+
+        if import.session.observation_retention == ObservationRetention::ReplaceSessionObservations
+        {
+            remove_omitted_observations(&transaction, source_session_id, &retained_events)?;
+        }
+
+        transaction.commit()?;
+        Ok(CommitImportOutcome::Applied(stats))
+    }
+}
+
+fn remove_omitted_observations(
     transaction: &Transaction<'_>,
     source_session_id: i64,
     retained: &HashSet<i64>,
@@ -29,7 +183,7 @@ pub(super) fn remove_omitted_observations(
     Ok(())
 }
 
-pub(super) fn normalization_changed(
+fn normalization_changed(
     transaction: &Transaction<'_>,
     import: &SessionImport,
 ) -> Result<bool, SqliteStoreError> {
@@ -50,7 +204,7 @@ pub(super) fn normalization_changed(
         .map_err(Into::into)
 }
 
-pub(super) fn upsert_imported_source(
+fn upsert_imported_source(
     transaction: &Transaction<'_>,
     import: &SessionImport,
 ) -> Result<i64, SqliteStoreError> {
@@ -81,7 +235,7 @@ pub(super) fn upsert_imported_source(
                 import.source.revision.0,
                 import.scanned_at.as_unix_milliseconds(),
                 completion_to_str(import.session.completion),
-                parse_notices::encode(&import.session.notices)?,
+                encode_parse_notices(&import.session.notices)?,
                 import.normalization_version.get()
             ],
             |row| row.get(0),
@@ -89,7 +243,7 @@ pub(super) fn upsert_imported_source(
         .map_err(Into::into)
 }
 
-pub(super) fn upsert_source_session(
+fn upsert_source_session(
     transaction: &Transaction<'_>,
     source_id: i64,
     import: &SessionImport,
@@ -115,7 +269,7 @@ pub(super) fn upsert_source_session(
     ).map_err(Into::into)
 }
 
-pub(super) fn import_is_stale(
+fn import_is_stale(
     transaction: &Transaction<'_>,
     import: &SessionImport,
 ) -> Result<bool, SqliteStoreError> {
@@ -133,7 +287,7 @@ pub(super) fn import_is_stale(
         || last_successful_scan.is_some_and(|last_scan| last_scan > scanned_at))
 }
 
-pub(super) fn insert_observation(
+fn insert_observation(
     transaction: &Transaction<'_>,
     source_id: i64,
     source_session_id: i64,
@@ -169,7 +323,7 @@ pub(super) fn insert_observation(
     Ok(inserted)
 }
 
-pub(super) fn update_observation(
+fn update_observation(
     transaction: &Transaction<'_>,
     source_id: i64,
     source_session_id: i64,

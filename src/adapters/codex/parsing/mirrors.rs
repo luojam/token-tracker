@@ -152,24 +152,3 @@ impl MirrorState {
         Ok(())
     }
 }
-
-impl TokenUsageWire {
-    fn checked_add(&self, other: &Self) -> Option<Self> {
-        Some(Self {
-            input_tokens: self.input_tokens.checked_add(other.input_tokens)?,
-            cached_input_tokens: self
-                .cached_input_tokens
-                .checked_add(other.cached_input_tokens)?,
-            cache_write_input_tokens: Some(
-                self.cache_write_input_tokens
-                    .unwrap_or(0)
-                    .checked_add(other.cache_write_input_tokens.unwrap_or(0))?,
-            ),
-            output_tokens: self.output_tokens.checked_add(other.output_tokens)?,
-            reasoning_output_tokens: self
-                .reasoning_output_tokens
-                .checked_add(other.reasoning_output_tokens)?,
-            total_tokens: self.total_tokens.checked_add(other.total_tokens)?,
-        })
-    }
-}

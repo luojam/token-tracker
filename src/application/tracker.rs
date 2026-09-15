@@ -1,8 +1,8 @@
 use std::error::Error;
 use std::path::PathBuf;
 
+use super::reporting::read_usage_totals;
 use super::synchronization::import_adapters;
-use super::usage_totals::read_usage_totals;
 use super::{
     ExportError, ImportAdapter, ImportSynchronizationError, ImportWarning, ReportDiagnostic,
     ReportError, SynchronizationReport, UsageReport, build_usage_report,
