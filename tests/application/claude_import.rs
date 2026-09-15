@@ -7,7 +7,7 @@ use token_tracker::adapters::files::FileSessionSource;
 use serde_json::Value;
 use token_tracker::adapters::claude::{ClaudeSessionDiscovery, ClaudeSessionParser};
 use token_tracker::application::{
-    SynchronizationReport, UsageReadStore, UsageSnapshot, calculate_usage_totals,
+    SynchronizationReport, UsageReadStore, UsageSnapshot, calculate_usage_summary,
     synchronize_sessions_at,
 };
 use token_tracker::domain::{
@@ -97,7 +97,7 @@ fn event(snapshot: &UsageSnapshot, key: &str) -> UsageEvent {
 }
 
 fn totals(ledger: &Ledger, sessions: u64, events: u64, tokens: u128) {
-    let summary = calculate_usage_totals(&ledger.snapshot()).unwrap();
+    let summary = calculate_usage_summary(&ledger.snapshot()).unwrap();
     assert_eq!(summary.totals.session_count, sessions);
     assert_eq!(summary.totals.unique_usage_event_count, events);
     assert_eq!(summary.totals.tokens.total(), tokens);
@@ -198,7 +198,7 @@ fn shared_history_and_children_are_counted_once() {
         assert_eq!(snapshot.observations.len(), 6);
         totals(&ledger, 4, 5, 348);
 
-        let summary = calculate_usage_totals(&snapshot).unwrap();
+        let summary = calculate_usage_summary(&snapshot).unwrap();
         assert_eq!(&summary, expected_summary.get_or_insert(summary.clone()));
         assert_eq!(ledger.sync().counts.sources_unchanged, 4);
         assert_eq!(ledger.snapshot(), snapshot);

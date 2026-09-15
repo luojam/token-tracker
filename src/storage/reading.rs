@@ -2,7 +2,7 @@ use super::{
     SqliteStoreError, SqliteUsageStore,
     codec::{
         decode_parent, decode_parse_notices, decode_path, decode_pricing_context, decode_u64,
-        to_sql_conversion_error, usage_kind_from_str,
+        from_sql_conversion_error, usage_kind_from_str,
     },
 };
 use crate::application::{
@@ -81,7 +81,7 @@ fn load_stored_sessions(
                 working_directory: row.get::<_, Option<Vec<u8>>>(9)?.map(decode_path),
                 started_at: Timestamp::from_unix_milliseconds(row.get(3)?),
                 parent_session: decode_parent(row.get(6)?, row.get(4)?)
-                    .map_err(to_sql_conversion_error)?,
+                    .map_err(from_sql_conversion_error)?,
             },
         ))
     })?;

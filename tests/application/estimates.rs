@@ -4,7 +4,7 @@ use token_tracker::adapters::files::{ParseContext, SessionParser};
 use token_tracker::adapters::claude::ClaudeSessionParser;
 use token_tracker::application::{
     CostAmount, CostTotal, SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot,
-    build_usage_report, calculate_usage_totals,
+    build_usage_report, calculate_usage_summary,
 };
 use token_tracker::domain::{
     AnthropicPricingContext, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution,
@@ -111,7 +111,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     };
     add_session(&mut snapshot, "codex", "main", vec![codex, unsupported]);
 
-    let summary = calculate_usage_totals(&snapshot).unwrap();
+    let summary = calculate_usage_summary(&snapshot).unwrap();
     assert_eq!(summary.totals.estimates.imported_event_count, 4);
     assert_eq!(summary.totals.estimates.priced_event_count, 2);
 
@@ -201,7 +201,7 @@ fn pricing_follows_context_provider_for_any_agent_and_retains_all_rate_versions(
         vec![anthropic, openai, unknown],
     );
 
-    let summary = calculate_usage_totals(&snapshot).unwrap();
+    let summary = calculate_usage_summary(&snapshot).unwrap();
     let estimate = &summary.totals.estimates;
     assert_eq!(estimate.imported_event_count, 3);
     assert_eq!(estimate.priced_event_count, 2);
@@ -240,7 +240,7 @@ fn missing_pricing_context_still_count_toward_coverage() {
     let mut snapshot = UsageSnapshot::default();
     add_session(&mut snapshot, "claude", "main", vec![priced, missing]);
 
-    let summary = calculate_usage_totals(&snapshot).unwrap();
+    let summary = calculate_usage_summary(&snapshot).unwrap();
     let totals = &summary.totals.estimates;
     assert_eq!(
         (totals.imported_event_count, totals.priced_event_count),

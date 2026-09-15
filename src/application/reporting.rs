@@ -99,13 +99,13 @@ fn aggregate_cost(recorded: Option<RecordedCost>, estimates: &EstimateTotals) ->
     }
 }
 
-pub(crate) fn read_usage_totals<S: UsageReadStore>(
+pub(crate) fn read_usage_summary<S: UsageReadStore>(
     store: &S,
 ) -> Result<(UsageSummary, Vec<ReportDiagnostic>), ReportError> {
     let snapshot = store
         .usage_snapshot()
         .map_err(|source| ReportError::Storage(Box::new(source)))?;
-    let summary = calculate_usage_totals(&snapshot).map_err(ReportError::Summary)?;
+    let summary = calculate_usage_summary(&snapshot).map_err(ReportError::Summary)?;
 
     Ok((summary, snapshot.diagnostics))
 }
@@ -113,7 +113,7 @@ pub(crate) fn read_usage_totals<S: UsageReadStore>(
 #[derive(Debug)]
 pub enum ReportError {
     Storage(Box<dyn Error + Send + Sync>),
-    Summary(UsageTotalsError),
+    Summary(UsageSummaryError),
 }
 
 impl fmt::Display for ReportError {
@@ -134,20 +134,22 @@ impl Error for ReportError {
     }
 }
 
-pub fn calculate_usage_totals(snapshot: &UsageSnapshot) -> Result<UsageSummary, UsageTotalsError> {
+pub fn calculate_usage_summary(
+    snapshot: &UsageSnapshot,
+) -> Result<UsageSummary, UsageSummaryError> {
     let usage = deduplicate_events(snapshot).map_err(|error| match error {
-        DeduplicationError::InvalidData(message) => UsageTotalsError::InvalidData(message),
+        DeduplicationError::InvalidData(message) => UsageSummaryError::InvalidData(message),
     })?;
-    calculate_event_totals(
-        count(usage.session_count)?,
+    summarize_events(
+        count_as_u64(usage.session_count)?,
         usage.events.iter().map(|event| &event.canonical.event),
     )
 }
 
-fn calculate_event_totals<'a>(
+fn summarize_events<'a>(
     session_count: u64,
     events: impl IntoIterator<Item = &'a UsageEvent>,
-) -> Result<UsageSummary, UsageTotalsError> {
+) -> Result<UsageSummary, UsageSummaryError> {
     let mut totals = SummaryTotals {
         session_count,
         ..SummaryTotals::default()
@@ -157,9 +159,9 @@ fn calculate_event_totals<'a>(
         totals.unique_usage_event_count = totals
             .unique_usage_event_count
             .checked_add(1)
-            .ok_or(UsageTotalsError::Overflow("event count"))?;
+            .ok_or(UsageSummaryError::Overflow("event count"))?;
         totals.tokens = add_tokens(totals.tokens, event.tokens)?;
-        add_cost(&mut totals.recorded_cost, event.recorded_cost)?;
+        add_recorded_cost(&mut totals.recorded_cost, event.recorded_cost)?;
 
         let group = match &event.attribution {
             Some(attribution) => SummaryGroup::ProviderModel(attribution.clone()),
@@ -176,11 +178,11 @@ fn calculate_event_totals<'a>(
                 unique_usage_event_count: 0,
             });
         row.tokens = add_tokens(row.tokens, event.tokens)?;
-        add_cost(&mut row.recorded_cost, event.recorded_cost)?;
+        add_recorded_cost(&mut row.recorded_cost, event.recorded_cost)?;
         row.unique_usage_event_count = row
             .unique_usage_event_count
             .checked_add(1)
-            .ok_or(UsageTotalsError::Overflow("event count"))?;
+            .ok_or(UsageSummaryError::Overflow("event count"))?;
 
         if let Some(estimate) = crate::pricing::calculate_estimate(event) {
             add_estimate(&mut totals.estimates, &estimate);
@@ -228,38 +230,38 @@ fn add_estimate(totals: &mut EstimateTotals, estimate: &EventEstimate) {
     }
 }
 
-fn add_tokens(current: TokenCounts, value: TokenCounts) -> Result<TokenCounts, UsageTotalsError> {
+fn add_tokens(current: TokenCounts, value: TokenCounts) -> Result<TokenCounts, UsageSummaryError> {
     current
         .checked_add(value)
-        .ok_or(UsageTotalsError::Overflow("token total"))
+        .ok_or(UsageSummaryError::Overflow("token total"))
 }
 
-fn add_cost(
+fn add_recorded_cost(
     current: &mut Option<RecordedCost>,
     value: Option<RecordedCost>,
-) -> Result<(), UsageTotalsError> {
+) -> Result<(), UsageSummaryError> {
     if let Some(value) = value {
         *current = Some(match *current {
             Some(current) => current
                 .checked_add(value)
-                .map_err(|_| UsageTotalsError::Overflow("recorded cost"))?,
+                .map_err(|_| UsageSummaryError::Overflow("recorded cost"))?,
             None => value,
         });
     }
     Ok(())
 }
 
-fn count(value: usize) -> Result<u64, UsageTotalsError> {
-    u64::try_from(value).map_err(|_| UsageTotalsError::Overflow("count"))
+fn count_as_u64(value: usize) -> Result<u64, UsageSummaryError> {
+    u64::try_from(value).map_err(|_| UsageSummaryError::Overflow("count"))
 }
 
 #[derive(Debug)]
-pub enum UsageTotalsError {
+pub enum UsageSummaryError {
     InvalidData(&'static str),
     Overflow(&'static str),
 }
 
-impl fmt::Display for UsageTotalsError {
+impl fmt::Display for UsageSummaryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidData(message) => write!(f, "invalid usage data: {message}"),
@@ -268,7 +270,7 @@ impl fmt::Display for UsageTotalsError {
     }
 }
 
-impl Error for UsageTotalsError {}
+impl Error for UsageSummaryError {}
 
 #[cfg(test)]
 mod tests {

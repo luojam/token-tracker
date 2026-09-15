@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt;
 
-use super::reporting::read_usage_totals;
+use super::reporting::read_usage_summary;
 use super::synchronization::import_adapters;
 use super::{ImportAdapter, ImportSynchronizationError, ImportWarning, UsageReadStore, UsageStore};
 use crate::domain::UsageSummary;
@@ -18,8 +18,8 @@ where
 {
     let imported =
         import_adapters(adapters, store, warnings).map_err(AllTimeReportError::Synchronization)?;
-    let (summary, _) =
-        read_usage_totals(store).map_err(|source| AllTimeReportError::Summary(Box::new(source)))?;
+    let (summary, _) = read_usage_summary(store)
+        .map_err(|source| AllTimeReportError::Summary(Box::new(source)))?;
     Ok(AllTimeReport {
         summary,
         warnings: imported.warnings,

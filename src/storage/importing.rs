@@ -96,7 +96,7 @@ impl UsageStore for SqliteUsageStore {
         if import.session.completion != SnapshotCompletion::Complete
             && (import.session.observation_retention
                 == ObservationRetention::ReplaceSessionObservations
-                || normalization_changed(&transaction, import)?)
+                || normalization_version_changed(&transaction, import)?)
         {
             return Ok(CommitImportOutcome::DeferredIncomplete);
         }
@@ -183,7 +183,7 @@ fn remove_omitted_observations(
     Ok(())
 }
 
-fn normalization_changed(
+fn normalization_version_changed(
     transaction: &Transaction<'_>,
     import: &SessionImport,
 ) -> Result<bool, SqliteStoreError> {

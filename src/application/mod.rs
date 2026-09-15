@@ -13,8 +13,8 @@ pub use event_deduplication::{
 };
 pub use exporting::{ExportError, ExportSink, PublishError, PublishOutcome};
 pub use reporting::{
-    CostAmount, CostTotal, ReportError, ReportRow, ReportTotals, UsageReport, UsageTotalsError,
-    build_usage_report, calculate_usage_totals,
+    CostAmount, CostTotal, ReportError, ReportRow, ReportTotals, UsageReport, UsageSummaryError,
+    build_usage_report, calculate_usage_summary,
 };
 pub use synchronization::{
     ImportAdapter, ImportCounts, ImportSynchronizationError, ImportWarning, SynchronizationReport,

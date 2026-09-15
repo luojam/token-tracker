@@ -22,7 +22,7 @@ pub(super) fn source_state_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result
         .get::<_, Option<String>>(5)?
         .map(|value| completion_from_str(&value))
         .transpose()
-        .map_err(to_sql_conversion_error)?;
+        .map_err(from_sql_conversion_error)?;
     let present = match row.get::<_, i64>(6)? {
         0 => false,
         1 => true,
@@ -36,7 +36,7 @@ pub(super) fn source_state_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result
         })
         .transpose()?;
     let notices =
-        decode_parse_notices(&row.get::<_, String>(7)?).map_err(to_sql_conversion_error)?;
+        decode_parse_notices(&row.get::<_, String>(7)?).map_err(from_sql_conversion_error)?;
 
     let last_import = match (
         last_imported_revision,
@@ -160,10 +160,10 @@ fn completion_from_str(value: &str) -> Result<SnapshotCompletion, SqliteStoreErr
 }
 
 fn corrupt_sql_value(message: &'static str) -> rusqlite::Error {
-    to_sql_conversion_error(SqliteStoreError::CorruptData(message))
+    from_sql_conversion_error(SqliteStoreError::CorruptData(message))
 }
 
-pub(super) fn to_sql_conversion_error(error: SqliteStoreError) -> rusqlite::Error {
+pub(super) fn from_sql_conversion_error(error: SqliteStoreError) -> rusqlite::Error {
     rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Blob, Box::new(error))
 }
 

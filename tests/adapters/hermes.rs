@@ -2,7 +2,7 @@ use rusqlite::Connection;
 use token_tracker::adapters::hermes::{HermesReadError, HermesSessionSource, read_snapshot};
 use token_tracker::application::{
     SessionSource, SnapshotCompletion, SynchronizationReport, UsageReadStore, UsageStore,
-    calculate_usage_totals, synchronize_sessions_at,
+    calculate_usage_summary, synchronize_sessions_at,
 };
 use token_tracker::domain::{ParentSession, Timestamp, TokenCounts, UsageKind};
 use token_tracker::pricing::calculate_estimate;
@@ -236,7 +236,7 @@ fn sync(
 }
 
 fn totals(store: &SqliteUsageStore) -> TokenCounts {
-    calculate_usage_totals(&store.usage_snapshot().unwrap())
+    calculate_usage_summary(&store.usage_snapshot().unwrap())
         .unwrap()
         .totals
         .tokens
@@ -317,7 +317,7 @@ fn cumulative_sessions_replace_buckets_across_scans_restart_and_pruning() {
     );
     assert_eq!(totals(&store), expected);
     assert_eq!(
-        calculate_usage_totals(&store.usage_snapshot().unwrap())
+        calculate_usage_summary(&store.usage_snapshot().unwrap())
             .unwrap()
             .totals
             .session_count,
@@ -557,7 +557,7 @@ fn cumulative_subscription_usage_is_estimated_with_disclosed_assumptions() {
         let report = sync(&source, &mut store, time);
         assert_eq!(report.warnings.len(), 1);
         let snapshot = store.usage_snapshot().unwrap();
-        let summary = calculate_usage_totals(&snapshot).unwrap();
+        let summary = calculate_usage_summary(&snapshot).unwrap();
         assert_eq!(summary.totals.estimates.priced_event_count, 2);
         assert_eq!(
             summary.totals.estimates.assumed_short_context_event_count,
