@@ -11,7 +11,7 @@
 //! - https://developers.openai.com/api/docs/guides/prompt-caching (cache-write charges)
 
 use crate::domain::{
-    CacheDetail, EstimateUnavailableReason, EstimatedCost, ModelAttribution, OpenAiBilling,
+    CacheDetail, EstimateUnavailableReason, EstimatedCost, ModelAttribution, OpenAiPricingContext,
     PricingContext, RequestBreakdown, ServiceTier, TierEvidence, TokenCounts, UsageEstimate,
     UsageEvent,
 };
@@ -202,7 +202,7 @@ pub enum MissingCacheWritePolicy {
     TreatAsInput,
 }
 
-pub(super) fn estimate_tier(context: &OpenAiBilling) -> (ServiceTier, TierEvidence) {
+pub(super) fn estimate_tier(context: &OpenAiPricingContext) -> (ServiceTier, TierEvidence) {
     match context.tier {
         ServiceTier::Unknown => (ServiceTier::Standard, TierEvidence::Unknown),
         _ => (context.tier.clone(), context.tier_evidence),
@@ -267,7 +267,7 @@ pub fn calculate_estimate(
 
 fn price_tokens(
     tokens: TokenCounts,
-    context: &OpenAiBilling,
+    context: &OpenAiPricingContext,
     schedule: &ContextRates,
     exact_request: bool,
     missing_cache_writes: MissingCacheWritePolicy,

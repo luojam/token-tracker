@@ -49,7 +49,7 @@ impl SessionImport {
                 .as_ref()
                 .is_some_and(|context| !context.usage_matches(event.tokens))
             {
-                return Err(InvalidImport::BillingUsageMismatch);
+                return Err(InvalidImport::PricingContextUsageMismatch);
             }
         }
 
@@ -69,7 +69,7 @@ pub enum InvalidImport {
     AgentMismatch,
     ConflictingEventIdentity,
     TokenCountOutOfRange,
-    BillingUsageMismatch,
+    PricingContextUsageMismatch,
     DuplicateNoticeCodes,
 }
 
@@ -79,7 +79,9 @@ impl fmt::Display for InvalidImport {
             Self::AgentMismatch => "source returned usage for a different agent",
             Self::ConflictingEventIdentity => "conflicting usage events with the same identity",
             Self::TokenCountOutOfRange => "token count exceeds the supported integer range",
-            Self::BillingUsageMismatch => "invalid billing usage components or totals",
+            Self::PricingContextUsageMismatch => {
+                "invalid pricing context usage components or totals"
+            }
             Self::DuplicateNoticeCodes => "duplicate parse notice codes",
         })
     }

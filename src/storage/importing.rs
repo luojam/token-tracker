@@ -139,14 +139,14 @@ pub(super) fn insert_observation(
     source_session_id: i64,
     event_id: i64,
     event: &UsageEvent,
-    billing_facts: Option<&str>,
+    pricing_context: Option<&str>,
 ) -> Result<bool, SqliteStoreError> {
     let (provider, model) = attribution_parts(event);
     let inserted = transaction
         .prepare_cached(
             "INSERT INTO usage_observations (
             source_id, source_session_id, event_id, timestamp_ms, usage_kind, provider, model,
-            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, recorded_cost_usd, billing_facts
+            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, recorded_cost_usd, pricing_context
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(source_session_id, event_id) DO NOTHING",
         )?
@@ -163,7 +163,7 @@ pub(super) fn insert_observation(
             encode_u64(event.tokens.cache_read)?,
             encode_u64(event.tokens.cache_write)?,
             event.recorded_cost.map(RecordedCost::as_usd),
-            billing_facts
+            pricing_context
         ])?
         == 1;
     Ok(inserted)
@@ -175,21 +175,21 @@ pub(super) fn update_observation(
     source_session_id: i64,
     event_id: i64,
     event: &UsageEvent,
-    billing_facts: Option<&str>,
+    pricing_context: Option<&str>,
 ) -> Result<usize, SqliteStoreError> {
     let (provider, model) = attribution_parts(event);
     transaction.prepare_cached(
         "UPDATE usage_observations SET timestamp_ms = ?1, usage_kind = ?2, provider = ?3, model = ?4,
             input_tokens = ?5, output_tokens = ?6, cache_read_tokens = ?7, cache_write_tokens = ?8,
-            recorded_cost_usd = ?9, billing_facts = ?10
+            recorded_cost_usd = ?9, pricing_context = ?10
          WHERE source_id = ?11 AND source_session_id = ?12 AND event_id = ?13
            AND (timestamp_ms IS NOT ?1 OR usage_kind IS NOT ?2 OR provider IS NOT ?3 OR model IS NOT ?4
                 OR input_tokens IS NOT ?5 OR output_tokens IS NOT ?6 OR cache_read_tokens IS NOT ?7
-                OR cache_write_tokens IS NOT ?8 OR recorded_cost_usd IS NOT ?9 OR billing_facts IS NOT ?10)",
+                OR cache_write_tokens IS NOT ?8 OR recorded_cost_usd IS NOT ?9 OR pricing_context IS NOT ?10)",
     )?.execute(
         params![event.timestamp.as_unix_milliseconds(), usage_kind_to_str(event.kind), provider, model,
             encode_u64(event.tokens.input)?, encode_u64(event.tokens.output)?, encode_u64(event.tokens.cache_read)?,
-            encode_u64(event.tokens.cache_write)?, event.recorded_cost.map(RecordedCost::as_usd), billing_facts,
+            encode_u64(event.tokens.cache_write)?, event.recorded_cost.map(RecordedCost::as_usd), pricing_context,
             source_id, source_session_id, event_id],
     ).map_err(Into::into)
 }

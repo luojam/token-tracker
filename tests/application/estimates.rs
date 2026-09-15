@@ -7,9 +7,9 @@ use token_tracker::application::{
     build_usage_report, summarize_usage,
 };
 use token_tracker::domain::{
-    AnthropicBilling, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, OpenAiBilling,
-    PricingContext, RecordedCost, RequestBreakdown, ServiceSpeed, ServiceTier, TierEvidence,
-    Timestamp, TokenCounts, UsageEvent,
+    AnthropicPricingContext, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution,
+    OpenAiPricingContext, PricingContext, RecordedCost, RequestBreakdown, ServiceSpeed,
+    ServiceTier, TierEvidence, Timestamp, TokenCounts, UsageEvent,
 };
 
 fn oracle_event() -> UsageEvent {
@@ -31,9 +31,9 @@ fn oracle_event() -> UsageEvent {
         .remove(0)
 }
 
-fn facts(event: &mut UsageEvent) -> &mut AnthropicBilling {
+fn facts(event: &mut UsageEvent) -> &mut AnthropicPricingContext {
     let Some(PricingContext::Anthropic(context)) = event.pricing_context.as_mut() else {
-        panic!("expected Anthropic billing");
+        panic!("expected Anthropic pricing context");
     };
     context
 }
@@ -90,7 +90,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     add_session(&mut snapshot, "pi", "main", vec![pi]);
 
     let mut codex = oracle.clone();
-    codex.pricing_context = Some(PricingContext::OpenAi(OpenAiBilling {
+    codex.pricing_context = Some(PricingContext::OpenAi(OpenAiPricingContext {
         tier: ServiceTier::Standard,
         tier_evidence: TierEvidence::ServedResponse,
         requests: RequestBreakdown::SingleRequest,
@@ -170,7 +170,7 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
 }
 
 #[test]
-fn pricing_follows_billing_provider_for_any_agent_and_retains_all_rate_versions() {
+fn pricing_follows_context_provider_for_any_agent_and_retains_all_rate_versions() {
     let anthropic = oracle_event();
     let mut openai = anthropic.clone();
     openai.identity.adapter_key = "openai".into();
@@ -179,7 +179,7 @@ fn pricing_follows_billing_provider_for_any_agent_and_retains_all_rate_versions(
         model: "gpt-6-astra".into(),
     });
     let original = facts(&mut openai).clone();
-    openai.pricing_context = Some(PricingContext::OpenAi(OpenAiBilling {
+    openai.pricing_context = Some(PricingContext::OpenAi(OpenAiPricingContext {
         tier: original.tier,
         tier_evidence: original.tier_evidence,
         requests: original.requests,
@@ -226,7 +226,7 @@ fn pricing_follows_billing_provider_for_any_agent_and_retains_all_rate_versions(
 }
 
 #[test]
-fn missing_pricing_facts_still_count_toward_coverage() {
+fn missing_pricing_context_still_count_toward_coverage() {
     use token_tracker::domain::EstimateUnavailableReason as Reason;
 
     let priced = oracle_event();

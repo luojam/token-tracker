@@ -1,6 +1,7 @@
 use super::ObjectWire;
 use crate::domain::{
-    CacheDetail, ModelAttribution, OpenAiBilling, RequestBreakdown, ServiceTier, TierEvidence,
+    CacheDetail, ModelAttribution, OpenAiPricingContext, RequestBreakdown, ServiceTier,
+    TierEvidence,
 };
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeMap;
@@ -143,7 +144,11 @@ impl ContextState {
         thread_id: Option<&str>,
         requests: RequestBreakdown,
         cache_detail: CacheDetail,
-    ) -> (Option<ModelAttribution>, OpenAiBilling, RawServiceTier) {
+    ) -> (
+        Option<ModelAttribution>,
+        OpenAiPricingContext,
+        RawServiceTier,
+    ) {
         let turn = self.active.as_ref().filter(|turn| {
             turn.id == turn_id
                 && thread_id.is_none_or(|id| turn.owner.as_deref().is_none_or(|owner| owner == id))
@@ -173,7 +178,7 @@ impl ContextState {
             .unwrap_or_else(|| TierContext::new(None));
         (
             attribution,
-            OpenAiBilling {
+            OpenAiPricingContext {
                 tier: tier.tier,
                 tier_evidence: tier.evidence,
                 requests,

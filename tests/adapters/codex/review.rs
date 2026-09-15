@@ -145,7 +145,7 @@ fn review_settings_require_parent_ownership_and_preserve_prior_pricing() {
         assert_eq!(parsed.events[1].attribution, prior.attribution);
 
         let Some(PricingContext::OpenAi(context)) = &parsed.events[1].pricing_context else {
-            panic!("expected OpenAI billing");
+            panic!("expected OpenAI pricing context");
         };
         assert_eq!(context.tier, expected);
     }

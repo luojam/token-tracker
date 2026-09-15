@@ -9,9 +9,10 @@ use token_tracker::application::{
     UsageReadStore, UsageStore, ValidatedSessionImport,
 };
 use token_tracker::domain::{
-    AgentId, AnthropicBilling, CacheWriteTokens, KnownRequests, ModelAttribution, ParentSession,
-    PricingContext, RecordedCost, RequestBreakdown, ServiceSpeed, ServiceTier, SessionMetadata,
-    TierEvidence, Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
+    AgentId, AnthropicPricingContext, CacheWriteTokens, KnownRequests, ModelAttribution,
+    ParentSession, PricingContext, RecordedCost, RequestBreakdown, ServiceSpeed, ServiceTier,
+    SessionMetadata, TierEvidence, Timestamp, TokenCounts, UsageEvent, UsageEventIdentity,
+    UsageKind,
 };
 use token_tracker::storage::{SqliteStoreError, SqliteUsageStore};
 
@@ -79,7 +80,7 @@ fn validated(import: &SessionImport) -> ValidatedSessionImport {
 }
 
 fn context(tokens: TokenCounts) -> PricingContext {
-    PricingContext::Anthropic(AnthropicBilling {
+    PricingContext::Anthropic(AnthropicPricingContext {
         tier: ServiceTier::Standard,
         tier_evidence: TierEvidence::ServedResponse,
         speed: ServiceSpeed::Fast,
@@ -92,7 +93,7 @@ fn context(tokens: TokenCounts) -> PricingContext {
 }
 
 #[test]
-fn imports_round_trip_and_corrections_replace_usage_and_billing() {
+fn imports_round_trip_and_corrections_replace_usage_and_pricing_context() {
     let tree = TempTree::new();
     let path = tree.root.join("usage.db");
     let mut store = SqliteUsageStore::open(&path).unwrap();
@@ -258,7 +259,7 @@ fn stale_imports_and_discoveries_cannot_regress_source_state() {
 }
 
 #[test]
-fn normalization_failure_rolls_back_usage_billing_and_notices() {
+fn normalization_failure_rolls_back_usage_pricing_context_and_notices() {
     let tree = TempTree::new();
     let path = tree.root.join("usage.db");
     let mut store = SqliteUsageStore::open(&path).unwrap();
@@ -350,8 +351,8 @@ fn corrupt_state_is_rejected_without_exposing_contents() {
     for sql in [
         "UPDATE import_sources SET last_successful_scan_ms = NULL",
         "UPDATE import_sources SET parse_notices = '[{\"code\":\"PRIVATE\",\"message\":\"PRIVATE\",\"count\":0}]'",
-        "UPDATE usage_observations SET billing_facts = '{\"PRIVATE\":42}'",
-        "UPDATE usage_observations SET billing_facts = json_set(billing_facts, '$.anthropic.requests.known_requests[0].input', 999)",
+        "UPDATE usage_observations SET pricing_context = '{\"PRIVATE\":42}'",
+        "UPDATE usage_observations SET pricing_context = json_set(pricing_context, '$.anthropic.requests.known_requests[0].input', 999)",
     ] {
         let tree = TempTree::new();
         let path = tree.root.join("usage.db");
@@ -368,7 +369,7 @@ fn corrupt_state_is_rejected_without_exposing_contents() {
         }
         connection.execute(sql, []).unwrap();
 
-        let error = if sql.contains("billing_facts") || sql.contains("parse_notices") {
+        let error = if sql.contains("pricing_context") || sql.contains("parse_notices") {
             store.usage_snapshot().unwrap_err()
         } else {
             store.source_states(&"pi".into()).unwrap_err()

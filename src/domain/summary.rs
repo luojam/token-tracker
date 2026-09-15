@@ -28,7 +28,10 @@ pub struct SummaryBreakdown {
     pub unique_usage_event_count: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum EstimateUnavailableReason {
     MissingPricingContext,
     UnknownAttribution,

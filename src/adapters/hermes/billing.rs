@@ -1,7 +1,7 @@
 use super::reading::AccountingRow;
 use crate::domain::{
-    AnthropicBilling, CacheDetail, OpenAiBilling, PricingContext, RecordedCost, RequestBreakdown,
-    ServiceSpeed, ServiceTier, TierEvidence,
+    AnthropicPricingContext, CacheDetail, OpenAiPricingContext, PricingContext, RecordedCost,
+    RequestBreakdown, ServiceSpeed, ServiceTier, TierEvidence,
 };
 
 pub(super) fn provider<'a>(raw: &'a str, endpoint: &str) -> &'a str {
@@ -35,7 +35,7 @@ pub(super) fn pricing_context(
     }
 
     match provider {
-        "openai" => Some(PricingContext::OpenAi(OpenAiBilling {
+        "openai" => Some(PricingContext::OpenAi(OpenAiPricingContext {
             tier: ServiceTier::Unknown,
             tier_evidence: TierEvidence::Unknown,
             requests: if api_call_count == 1 {
@@ -46,7 +46,7 @@ pub(super) fn pricing_context(
             // A cumulative zero cannot prove cache-write reporting was complete.
             cache_detail: CacheDetail::Incomplete,
         })),
-        "anthropic" => Some(PricingContext::Anthropic(AnthropicBilling {
+        "anthropic" => Some(PricingContext::Anthropic(AnthropicPricingContext {
             tier: ServiceTier::Unknown,
             tier_evidence: TierEvidence::Unknown,
             speed: ServiceSpeed::Unknown,

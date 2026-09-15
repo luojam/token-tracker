@@ -9,16 +9,16 @@ pub(super) fn encode(context: Option<&PricingContext>) -> Result<Option<String>,
 }
 
 pub(super) fn decode(
-    facts: Option<String>,
+    encoded: Option<String>,
     tokens: TokenCounts,
 ) -> Result<Option<PricingContext>, SqliteStoreError> {
-    facts
-        .map(|facts| {
-            let context: PricingContext = serde_json::from_str(&facts)
-                .map_err(|_| SqliteStoreError::CorruptData("invalid billing inputs"))?;
+    encoded
+        .map(|encoded| {
+            let context: PricingContext = serde_json::from_str(&encoded)
+                .map_err(|_| SqliteStoreError::CorruptData("invalid pricing context"))?;
             if !context.usage_matches(tokens) {
                 return Err(SqliteStoreError::CorruptData(
-                    "billing inputs do not match usage",
+                    "pricing context does not match usage",
                 ));
             }
             Ok(context)

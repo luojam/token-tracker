@@ -103,7 +103,7 @@ fn totals(ledger: &Ledger, sessions: u64, events: u64, tokens: u128) {
 }
 
 #[test]
-fn final_responses_and_billing_corrections_survive_reopen() {
+fn final_responses_and_pricing_context_corrections_survive_reopen() {
     let mut ledger = Ledger::new();
     let source = fixture("claude", "snapshots.jsonl");
     let path = fixture_path("snapshots.jsonl");
@@ -142,7 +142,7 @@ fn final_responses_and_billing_corrections_survive_reopen() {
     expected.tokens.cache_read = 90;
     expected.tokens.output = 25;
     let Some(PricingContext::Anthropic(facts)) = expected.pricing_context.as_mut() else {
-        panic!("expected Anthropic billing");
+        panic!("expected Anthropic pricing context");
     };
     facts.speed = ServiceSpeed::Fast;
     facts.requests = RequestBreakdown::KnownRequests(KnownRequests::new(expected.tokens));

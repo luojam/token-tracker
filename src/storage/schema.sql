@@ -58,7 +58,7 @@ CREATE TABLE usage_observations (
     cache_read_tokens INTEGER NOT NULL CHECK (cache_read_tokens >= 0),
     cache_write_tokens INTEGER NOT NULL CHECK (cache_write_tokens >= 0),
     recorded_cost_usd REAL,
-    billing_facts TEXT CHECK (billing_facts IS NULL OR json_valid(billing_facts)),
+    pricing_context TEXT CHECK (pricing_context IS NULL OR json_valid(pricing_context)),
     PRIMARY KEY (source_session_id, event_id),
     FOREIGN KEY (source_session_id, source_id) REFERENCES sessions(id, source_id),
     CHECK ((provider IS NULL) = (model IS NULL)),

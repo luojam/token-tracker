@@ -5,7 +5,7 @@ use token_tracker::adapters::files::{ParseContext, SessionParser};
 use token_tracker::adapters::claude::ClaudeSessionParser;
 
 use token_tracker::domain::{
-    AnthropicBilling, CacheWriteTokens, EstimateUnavailableReason as Reason, EstimatedCost,
+    AnthropicPricingContext, CacheWriteTokens, EstimateUnavailableReason as Reason, EstimatedCost,
     KnownRequests, ModelAttribution, PricingContext, RequestBreakdown, ServiceSpeed, ServiceTier,
     TierEvidence, Timestamp, TokenCounts, UsageEstimate, UsageEvent, UsageEventIdentity, UsageKind,
 };
@@ -31,7 +31,7 @@ fn event() -> UsageEvent {
         }),
         tokens,
         recorded_cost: None,
-        pricing_context: Some(PricingContext::Anthropic(AnthropicBilling {
+        pricing_context: Some(PricingContext::Anthropic(AnthropicPricingContext {
             tier: ServiceTier::Standard,
             speed: ServiceSpeed::Standard,
             tier_evidence: TierEvidence::ServedResponse,
@@ -50,9 +50,9 @@ fn event() -> UsageEvent {
     }
 }
 
-fn facts(event: &mut UsageEvent) -> &mut AnthropicBilling {
+fn facts(event: &mut UsageEvent) -> &mut AnthropicPricingContext {
     let Some(PricingContext::Anthropic(context)) = event.pricing_context.as_mut() else {
-        panic!("expected Anthropic billing");
+        panic!("expected Anthropic pricing context");
     };
     context
 }

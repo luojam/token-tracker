@@ -76,7 +76,7 @@ impl RequestBreakdown {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OpenAiBilling {
+pub struct OpenAiPricingContext {
     pub tier: ServiceTier,
     pub tier_evidence: TierEvidence,
     pub requests: RequestBreakdown,
@@ -85,7 +85,7 @@ pub struct OpenAiBilling {
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AnthropicBilling {
+pub struct AnthropicPricingContext {
     pub tier: ServiceTier,
     pub tier_evidence: TierEvidence,
     pub speed: ServiceSpeed,
@@ -96,8 +96,8 @@ pub struct AnthropicBilling {
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PricingContext {
-    OpenAi(OpenAiBilling),
-    Anthropic(AnthropicBilling),
+    OpenAi(OpenAiPricingContext),
+    Anthropic(AnthropicPricingContext),
 }
 
 impl PricingContext {

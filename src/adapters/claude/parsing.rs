@@ -6,9 +6,9 @@ use super::discovery::{is_agent_id, is_session_id};
 use crate::adapters::jsonl::{JsonlError, JsonlLine, JsonlReader};
 use crate::application::{ObservationRetention, ParseNotice, SessionData, SnapshotCompletion};
 use crate::domain::{
-    AgentId, AnthropicBilling, CacheWriteTokens, KnownRequests, ModelAttribution, ParentSession,
-    PricingContext, RequestBreakdown, ServiceSpeed, ServiceTier, SessionMetadata, TierEvidence,
-    Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
+    AgentId, AnthropicPricingContext, CacheWriteTokens, KnownRequests, ModelAttribution,
+    ParentSession, PricingContext, RequestBreakdown, ServiceSpeed, ServiceTier, SessionMetadata,
+    TierEvidence, Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
 use chrono::DateTime;
 use serde::Deserialize;
@@ -433,7 +433,7 @@ fn parse_usage(
         }
     }
 
-    let pricing = PricingContext::Anthropic(AnthropicBilling {
+    let pricing = PricingContext::Anthropic(AnthropicPricingContext {
         tier: served_tier(usage.get("service_tier"), line)?,
         speed: served_speed(usage.get("speed"), line)?,
         tier_evidence: TierEvidence::ServedResponse,

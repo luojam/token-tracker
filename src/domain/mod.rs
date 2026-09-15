@@ -1,7 +1,8 @@
-mod billing;
+pub mod export;
+mod pricing_context;
 mod summary;
-pub use billing::{
-    AnthropicBilling, CacheWriteTokens, KnownRequests, OpenAiBilling, PricingContext,
+pub use pricing_context::{
+    AnthropicPricingContext, CacheWriteTokens, KnownRequests, OpenAiPricingContext, PricingContext,
     RequestBreakdown, ServiceSpeed,
 };
 pub use summary::*;
@@ -188,7 +189,10 @@ pub enum CacheDetail {
     Incomplete,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum UsageKind {
     Assistant,
     ToolResult,

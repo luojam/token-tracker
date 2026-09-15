@@ -1,7 +1,7 @@
-mod billing;
 mod codec;
 mod error;
 mod paths;
+mod pricing_context;
 
 use codec::*;
 pub use error::SqliteStoreError;
@@ -198,7 +198,7 @@ impl UsageStore for SqliteUsageStore {
                     |row| row.get(0),
                 )?;
 
-            let billing_facts = billing::encode(event.pricing_context.as_ref())?;
+            let pricing_context = pricing_context::encode(event.pricing_context.as_ref())?;
             retained_events.insert(event_id);
             let inserted = insert_observation(
                 &transaction,
@@ -206,7 +206,7 @@ impl UsageStore for SqliteUsageStore {
                 source_session_id,
                 event_id,
                 event,
-                billing_facts.as_deref(),
+                pricing_context.as_deref(),
             )?;
             if inserted {
                 stats.observations_inserted += 1;
@@ -217,7 +217,7 @@ impl UsageStore for SqliteUsageStore {
                     source_session_id,
                     event_id,
                     event,
-                    billing_facts.as_deref(),
+                    pricing_context.as_deref(),
                 )? as u64;
             }
         }

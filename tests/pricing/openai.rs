@@ -1,6 +1,6 @@
 use token_tracker::domain::{
     CacheDetail, EstimateUnavailableReason, EstimatedCost, KnownRequests, ModelAttribution,
-    OpenAiBilling, PricingContext, RequestBreakdown, ServiceTier, TierEvidence, Timestamp,
+    OpenAiPricingContext, PricingContext, RequestBreakdown, ServiceTier, TierEvidence, Timestamp,
     TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
 use token_tracker::pricing::openai::{self as pricing, MissingCacheWritePolicy};
@@ -24,7 +24,7 @@ fn event() -> UsageEvent {
         }),
         tokens: TokenCounts::default(),
         recorded_cost: None,
-        pricing_context: Some(PricingContext::OpenAi(OpenAiBilling {
+        pricing_context: Some(PricingContext::OpenAi(OpenAiPricingContext {
             tier: ServiceTier::Standard,
             tier_evidence: TierEvidence::RequestedSetting,
             requests: RequestBreakdown::SingleRequest,
@@ -298,9 +298,9 @@ fn explicit_cache_policy_prices_unresolved_input_without_reclassifying_known_wri
     );
 }
 
-fn facts(event: &mut UsageEvent) -> &mut OpenAiBilling {
+fn facts(event: &mut UsageEvent) -> &mut OpenAiPricingContext {
     let Some(PricingContext::OpenAi(context)) = event.pricing_context.as_mut() else {
-        panic!("expected OpenAI billing");
+        panic!("expected OpenAI pricing context");
     };
     context
 }

@@ -56,7 +56,7 @@ fn mirror(total: u64) -> Value {
 
 fn assert_tier(event: &UsageEvent, tier: ServiceTier, evidence: TierEvidence) {
     let Some(PricingContext::OpenAi(context)) = &event.pricing_context else {
-        panic!("expected OpenAI billing");
+        panic!("expected OpenAI pricing context");
     };
     assert_eq!(context.tier, tier);
     assert_eq!(context.tier_evidence, evidence);

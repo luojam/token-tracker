@@ -1,5 +1,5 @@
 use super::{
-    SqliteStoreError, billing, decode_parent, decode_path, decode_u64, parse_notices,
+    SqliteStoreError, decode_parent, decode_path, decode_u64, parse_notices, pricing_context,
     to_sql_conversion_error, usage_kind_from_str,
 };
 use crate::application::{
@@ -69,7 +69,7 @@ pub(super) fn load_stored_observations(
         "SELECT event.agent, event.adapter_key, observation.source_session_id, observation.usage_kind,
                 observation.provider, observation.model, observation.input_tokens, observation.output_tokens,
                 observation.cache_read_tokens, observation.cache_write_tokens, observation.recorded_cost_usd,
-                observation.timestamp_ms, observation.billing_facts
+                observation.timestamp_ms, observation.pricing_context
          FROM usage_observations observation
          JOIN usage_events event ON event.id = observation.event_id")?;
     let mut rows = statement.query([])?;
@@ -117,7 +117,7 @@ pub(super) fn load_stored_observations(
                 attribution,
                 tokens,
                 recorded_cost,
-                pricing_context: billing::decode(row.get(12)?, tokens)?,
+                pricing_context: pricing_context::decode(row.get(12)?, tokens)?,
             },
         });
     }

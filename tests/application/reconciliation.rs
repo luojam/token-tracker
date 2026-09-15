@@ -3,7 +3,7 @@ use token_tracker::application::{
     build_usage_report, summarize_usage,
 };
 use token_tracker::domain::{
-    AgentId, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, OpenAiBilling,
+    AgentId, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, OpenAiPricingContext,
     ParentSession, PricingContext, RecordedCost, RequestBreakdown, ServiceTier, TierEvidence,
     Timestamp, TokenCounts, UsageEvent, UsageEventIdentity, UsageKind,
 };
@@ -163,8 +163,8 @@ fn summary_reconciles_independently_of_observation_order() {
 }
 
 #[test]
-fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
-    let context = OpenAiBilling {
+fn canonical_estimates_keep_whole_observations_and_explicit_pricing_context_coverage() {
+    let context = OpenAiPricingContext {
         tier: ServiceTier::Standard,
         tier_evidence: TierEvidence::RequestedSetting,
         requests: RequestBreakdown::SingleRequest,
@@ -188,17 +188,18 @@ fn canonical_estimates_keep_whole_observations_and_explicit_billing_coverage() {
             observation.event.pricing_context = Some(PricingContext::OpenAi(context.clone()));
         }
         if observation.session.session_id == "child-session" {
-            observation.event.pricing_context = Some(PricingContext::OpenAi(OpenAiBilling {
-                tier: ServiceTier::Fast,
-                tier_evidence: TierEvidence::ServedResponse,
-                ..context.clone()
-            }));
+            observation.event.pricing_context =
+                Some(PricingContext::OpenAi(OpenAiPricingContext {
+                    tier: ServiceTier::Fast,
+                    tier_evidence: TierEvidence::ServedResponse,
+                    ..context.clone()
+                }));
         }
     }
 
     let Some(PricingContext::OpenAi(unknown)) = data.observations[1].event.pricing_context.as_mut()
     else {
-        panic!("expected OpenAI billing");
+        panic!("expected OpenAI pricing context");
     };
     unknown.tier = ServiceTier::Unknown;
 

@@ -3,7 +3,7 @@ use crate::support::records;
 
 use serde_json::{Value, json};
 use token_tracker::domain::{
-    CacheDetail, OpenAiBilling, PricingContext, RequestBreakdown, UsageEvent,
+    CacheDetail, OpenAiPricingContext, PricingContext, RequestBreakdown, UsageEvent,
 };
 
 const RESPONSE: &str = include_str!("../../fixtures/codex/response-mirrors.jsonl");
@@ -164,16 +164,16 @@ fn legacy_uncertainty_is_sticky_within_an_aggregate_and_noops_preserve_context()
     }
 }
 
-fn facts(event: &UsageEvent) -> &OpenAiBilling {
+fn facts(event: &UsageEvent) -> &OpenAiPricingContext {
     let Some(PricingContext::OpenAi(context)) = event.pricing_context.as_ref() else {
-        panic!("expected OpenAI billing");
+        panic!("expected OpenAI pricing context");
     };
     context
 }
 
-fn facts_mut(event: &mut UsageEvent) -> &mut OpenAiBilling {
+fn facts_mut(event: &mut UsageEvent) -> &mut OpenAiPricingContext {
     let Some(PricingContext::OpenAi(context)) = event.pricing_context.as_mut() else {
-        panic!("expected OpenAI billing");
+        panic!("expected OpenAI pricing context");
     };
     context
 }
