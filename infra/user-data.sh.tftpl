@@ -1,0 +1,50 @@
+#!/bin/bash
+set -euo pipefail
+exec >>/var/log/token-tracker-setup.log 2>&1
+
+volume_id="${volume_id}"
+serial=$(printf '%s' "$volume_id" | tr -d '-')
+device=""
+
+# The disk attachment may finish after the instance starts.
+for attempt in $(seq 1 120); do
+  device=$(lsblk -dn -o PATH,SERIAL |
+    awk -v serial="$serial" '$2 == serial { print $1; exit }')
+
+  if [ -n "$device" ]; then
+    break
+  fi
+
+  sleep 2
+done
+
+if [ -z "$device" ]; then
+  echo "Data volume $volume_id did not appear"
+  exit 1
+fi
+
+filesystem=$(blkid -p -s TYPE -o value "$device" || true)
+
+if [ "$filesystem" != "ext4" ]; then
+  signatures=$(wipefs --no-act --noheadings --output TYPE "$device")
+
+  if [ -n "$signatures" ]; then
+    echo "Refusing to format a disk with an unexpected existing format"
+    exit 1
+  fi
+
+  mkfs.ext4 "$device"
+fi
+
+uuid=$(blkid -s UUID -o value "$device")
+test -n "$uuid"
+
+mkdir -p /var/lib/token-tracker
+
+if ! grep -Fq "UUID=$uuid /var/lib/token-tracker " /etc/fstab; then
+  echo "UUID=$uuid /var/lib/token-tracker ext4 defaults,nofail 0 2" \
+    >>/etc/fstab
+fi
+
+mountpoint -q /var/lib/token-tracker || mount /var/lib/token-tracker
+findmnt /var/lib/token-tracker
