@@ -162,8 +162,20 @@ fn imports_pi_codex_and_claude_and_preserves_usage_privately_across_runs() {
     ] {
         assert!(partial.contains(warning), "{partial}");
     }
+    assert_eq!(partial.matches("final usage is missing.").count(), 1);
     assert_eq!(run(), partial);
     assert_no_content_persisted(&data_home.join("token-tracker"));
+
+    let unavailable = successful_report(
+        command(&home)
+            .env_remove("HOME")
+            .env("XDG_DATA_HOME", &data_home)
+            .output()
+            .unwrap(),
+    );
+    assert!(unavailable.contains("claude: could not configure adapter:"));
+    assert_eq!(unavailable.matches("final usage is missing.").count(), 1);
+    assert_totals(&unavailable, [165, 116, 341, 144], 3, 9);
 
     fs::remove_dir_all(&config).unwrap();
     fs::remove_dir_all(home.join(".pi")).unwrap();

@@ -1,10 +1,7 @@
 use std::{collections::HashSet, num::NonZeroU64, path::PathBuf};
 
 use super::{HERMES_AGENT_ID, HermesReadError, billing, reading::AccountingRow};
-use crate::application::{
-    ObservationRetention, ParseNotice, SessionData, SessionSnapshot, SnapshotCompletion,
-    SourceRevision,
-};
+use crate::application::{ObservationRetention, ParseNotice, SessionData, SnapshotCompletion};
 use crate::domain::{
     AgentId, ModelAttribution, ParentSession, SessionMetadata, TokenCounts, UsageEvent,
     UsageEventIdentity, UsageKind,
@@ -13,7 +10,7 @@ use crate::domain::{
 pub(super) fn normalize(
     session: &AccountingRow,
     usage: &[AccountingRow],
-) -> Result<SessionSnapshot, HermesReadError> {
+) -> Result<SessionData, HermesReadError> {
     let id = session.text("id")?;
     let started_at = session
         .timestamp("started_at")?
@@ -140,19 +137,12 @@ pub(super) fn normalize(
         ));
     }
 
-    Ok(SessionSnapshot {
-        // Sorted rows include only selected columns; absent optional columns remain distinguishable.
-        revision: SourceRevision(
-            serde_json::to_vec(&("hermes-snapshot-v1", session, usage))
-                .expect("accounting fields are serializable"),
-        ),
-        session: SessionData {
-            observation_retention: ObservationRetention::ReplaceSessionObservations,
-            metadata,
-            events,
-            completion: SnapshotCompletion::Complete,
-            notices,
-        },
+    Ok(SessionData {
+        observation_retention: ObservationRetention::ReplaceSessionObservations,
+        metadata,
+        events,
+        completion: SnapshotCompletion::Complete,
+        notices,
     })
 }
 

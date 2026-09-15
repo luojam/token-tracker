@@ -208,23 +208,23 @@ fn notices_persist_until_a_successful_replacement() {
     .unwrap();
     assert_eq!(first.counts.sources_imported, 1);
     assert_eq!(first.counts.partial_sources_imported, 0);
-    assert_eq!(first.warnings.len(), 2);
-    assert_eq!(first.warnings[0].path.as_ref(), Some(&path));
-    assert_eq!(
-        first.warnings[0].message,
-        "omitted 2 responses with incomplete usage"
-    );
-    assert_eq!(
-        first.warnings[1].message,
-        "omitted 3 responses with unsupported accounting (first affected line: 4)"
-    );
+    assert!(first.warnings.is_empty());
     let snapshot = store.usage_snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .diagnostics
+            .iter()
+            .map(|diagnostic| &diagnostic.notice)
+            .collect::<Vec<_>>(),
+        notices.iter().collect::<Vec<_>>()
+    );
 
     drop(store);
     let mut store = SqliteUsageStore::open(&database).unwrap();
     let reopened = synchronize(&root, &mut store, 3_000);
     assert_eq!(reopened.counts.sources_unchanged, 1);
-    assert_eq!(reopened.warnings, first.warnings);
+    assert!(reopened.warnings.is_empty());
+    assert_eq!(store.usage_snapshot().unwrap(), snapshot);
 
     fs::write(&path, session("partial", None, &[("final-response", 999)])).unwrap();
     let failed = synchronize_sessions_at(
@@ -237,13 +237,7 @@ fn notices_persist_until_a_successful_replacement() {
     )
     .unwrap();
     assert_eq!(failed.counts.sources_failed, 1);
-    assert_eq!(failed.warnings.len(), 3);
-    assert!(
-        first
-            .warnings
-            .iter()
-            .all(|warning| failed.warnings.contains(warning))
-    );
+    assert_eq!(failed.warnings.len(), 1);
     assert_eq!(store.usage_snapshot().unwrap(), snapshot);
 
     let moved = tree.root.join("unavailable");
@@ -252,12 +246,8 @@ fn notices_persist_until_a_successful_replacement() {
 
     let inaccessible = synchronize(&root, &mut store, 5_000);
     assert_eq!(inaccessible.counts.sources_discovered, 0);
-    assert!(
-        first
-            .warnings
-            .iter()
-            .all(|warning| inaccessible.warnings.contains(warning))
-    );
+    assert_eq!(inaccessible.warnings.len(), 1);
+    assert_eq!(store.usage_snapshot().unwrap(), snapshot);
     assert!(store.source_states(&"pi".into()).unwrap()[0].present);
 
     fs::remove_file(&root).unwrap();
@@ -265,7 +255,7 @@ fn notices_persist_until_a_successful_replacement() {
 
     fs::remove_file(&path).unwrap();
     let missing = synchronize(&root, &mut store, 6_000);
-    assert_eq!(missing.warnings, first.warnings);
+    assert!(missing.warnings.is_empty());
     assert!(!store.source_states(&"pi".into()).unwrap()[0].present);
     assert_eq!(store.usage_snapshot().unwrap(), snapshot);
 
@@ -274,6 +264,7 @@ fn notices_persist_until_a_successful_replacement() {
     assert_eq!(replaced.counts.sources_imported, 1);
     assert_eq!(replaced.counts.observations_updated, 1);
     assert!(replaced.warnings.is_empty());
+    assert!(store.usage_snapshot().unwrap().diagnostics.is_empty());
 
     drop(store);
     let mut store = SqliteUsageStore::open(&database).unwrap();

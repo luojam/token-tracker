@@ -1,4 +1,3 @@
-mod all_time_report;
 mod event_deduplication;
 pub mod exporting;
 mod import_validation;
@@ -7,7 +6,6 @@ mod reporting;
 mod synchronization;
 mod tracker;
 
-pub use all_time_report::{AllTimeReport, AllTimeReportError, run_all_time_report};
 pub use event_deduplication::{
     DeduplicatedEvent, DeduplicatedUsage, DeduplicationError, deduplicate_events,
 };

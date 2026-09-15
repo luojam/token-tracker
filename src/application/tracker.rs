@@ -153,7 +153,7 @@ impl TokenTracker {
         })
     }
 
-    /// Source failures and retained parse notices become warnings.
+    /// Source failures become warnings; retained parse notices are returned by `report()`.
     /// Storage failures abort the refresh.
     pub fn refresh(&mut self) -> Result<SynchronizationReport, ImportSynchronizationError> {
         let mut warnings = Vec::new();
@@ -167,7 +167,6 @@ impl TokenTracker {
                         "{}: could not configure adapter: {source}",
                         config.agent_id()
                     ),
-                    diagnostic: None,
                 }),
             }
         }

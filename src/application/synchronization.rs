@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{
-    CommitImportOutcome, DiscoveredSource, ImportStats, ParseNotice, ReportDiagnostic,
-    SessionImport, SessionSource, SnapshotCompletion, SourceState, UsageStore,
+    CommitImportOutcome, DiscoveredSource, ImportStats, SessionImport, SessionSource,
+    SnapshotCompletion, SourceState, UsageStore,
 };
 use crate::domain::{AgentId, Timestamp};
 
@@ -52,7 +52,6 @@ impl ImportCounts {
 pub struct ImportWarning {
     pub path: Option<PathBuf>,
     pub message: String,
-    pub diagnostic: Option<ReportDiagnostic>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -136,7 +135,6 @@ pub(crate) fn synchronize_adapters<S: UsageStore>(
                 result.warnings.push(ImportWarning {
                     path: None,
                     message: format!("{}: session discovery failed: {source}", adapter.agent_id()),
-                    diagnostic: None,
                 })
             }
             Err(error) => return Err(error),
@@ -205,7 +203,6 @@ where
             .map(|warning| ImportWarning {
                 path: warning.path,
                 message: warning.message,
-                diagnostic: None,
             })
             .collect(),
     };
@@ -225,7 +222,6 @@ where
                 report.warnings.push(ImportWarning {
                     path: discovered.path.clone(),
                     message: error.to_string(),
-                    diagnostic: None,
                 });
                 continue;
             }
@@ -249,7 +245,6 @@ where
                 report.warnings.push(ImportWarning {
                     path: discovered.path.clone(),
                     message: error.to_string(),
-                    diagnostic: None,
                 });
                 continue;
             }
@@ -268,7 +263,6 @@ where
                 report.warnings.push(ImportWarning {
                     path: discovered.path.clone(),
                     message: "session import was superseded by a newer scan".into(),
-                    diagnostic: None,
                 });
             }
             Ok(CommitImportOutcome::DeferredIncomplete) => {
@@ -276,7 +270,6 @@ where
                 report.warnings.push(ImportWarning {
                     path: discovered.path.clone(),
                     message: "import deferred until the session snapshot is complete".into(),
-                    diagnostic: None,
                 });
             }
             Err(error) => {
@@ -288,30 +281,6 @@ where
         }
     }
 
-    let retained_states =
-        store
-            .source_states(&agent)
-            .map_err(|source| ImportSynchronizationError::Storage {
-                operation: "loading retained parse notices",
-                source: Box::new(source),
-            })?;
-    for state in retained_states {
-        let Some(last_import) = state.last_import else {
-            continue;
-        };
-        for notice in last_import.notices {
-            report.warnings.push(ImportWarning {
-                path: state.path.clone(),
-                message: notice_message(&notice),
-                diagnostic: Some(ReportDiagnostic {
-                    agent: agent.clone(),
-                    path: state.path.clone(),
-                    notice,
-                }),
-            });
-        }
-    }
-
     report.warnings.sort_by(|left, right| {
         left.path
             .cmp(&right.path)
@@ -319,14 +288,6 @@ where
     });
     report.warnings.dedup();
     Ok(report)
-}
-
-fn notice_message(notice: &ParseNotice) -> String {
-    let mut message = notice.message.clone();
-    if let Some(line) = notice.line {
-        message.push_str(&format!(" (first affected line: {line})"));
-    }
-    message
 }
 
 fn source_import_is_current(

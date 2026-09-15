@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
-use token_tracker::application::{CostAmount, CostTotal, ImportWarning, UsageReport};
+use token_tracker::application::{
+    CostAmount, CostTotal, ImportWarning, ReportDiagnostic, UsageReport,
+};
 use token_tracker::domain::{
     EstimateTotals, EstimateUnavailableReason, ModelAttribution, ServiceTier, SummaryGroup,
     UsageKind,
@@ -10,6 +12,7 @@ use token_tracker::domain::{
 pub(super) fn render_terminal_report(
     report: &UsageReport,
     warnings: &[ImportWarning],
+    diagnostics: &[ReportDiagnostic],
     agent_labels: &[(&str, &str)],
 ) -> String {
     let mut output = String::new();
@@ -120,30 +123,30 @@ pub(super) fn render_terminal_report(
 
     render_estimate_diagnostics(&mut output, &totals.estimates);
 
-    if !warnings.is_empty() {
+    if !warnings.is_empty() || !diagnostics.is_empty() {
         let mut missing_usage_count = 0_u128;
         let mut missing_usage_files = BTreeSet::new();
         let mut warnings = warnings
             .iter()
-            .filter(|warning| {
-                if let Some(diagnostic) = &warning.diagnostic
-                    && diagnostic.agent.as_str() == "claude"
-                    && diagnostic.notice.code == "incomplete_response_usage"
-                    && let Some(path) = &diagnostic.path
-                {
-                    missing_usage_count += u128::from(diagnostic.notice.count.get());
-                    missing_usage_files.insert(path);
-                    false
-                } else {
-                    true
-                }
-            })
+            .map(|warning| (warning.path.as_ref(), warning.message.clone()))
             .collect::<Vec<_>>();
-        warnings.sort_by(|left, right| {
-            left.path
-                .cmp(&right.path)
-                .then_with(|| left.message.cmp(&right.message))
-        });
+        for diagnostic in diagnostics {
+            if diagnostic.agent.as_str() == "claude"
+                && diagnostic.notice.code == "incomplete_response_usage"
+                && let Some(path) = &diagnostic.path
+            {
+                missing_usage_count += u128::from(diagnostic.notice.count.get());
+                missing_usage_files.insert(path);
+                continue;
+            }
+            let mut message = format!("{}: {}", diagnostic.agent, diagnostic.notice.message);
+            if let Some(line) = diagnostic.notice.line {
+                write!(message, " (first affected line: {line})").unwrap();
+            }
+            warnings.push((diagnostic.path.as_ref(), message));
+        }
+        warnings.sort();
+        warnings.dedup();
 
         writeln!(output).unwrap();
         writeln!(
@@ -167,18 +170,16 @@ pub(super) fn render_terminal_report(
             )
             .unwrap();
         }
-        for warning in warnings {
-            match &warning.path {
+        for (path, message) in warnings {
+            match path {
                 Some(path) => writeln!(
                     output,
                     "- {}: {}",
                     escape_control_characters(&path.display().to_string()),
-                    escape_control_characters(&warning.message)
+                    escape_control_characters(&message)
                 )
                 .unwrap(),
-                None => {
-                    writeln!(output, "- {}", escape_control_characters(&warning.message)).unwrap()
-                }
+                None => writeln!(output, "- {}", escape_control_characters(&message)).unwrap(),
             }
         }
     }

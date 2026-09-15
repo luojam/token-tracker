@@ -4,7 +4,7 @@ use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use serde::Serialize;
 
 use super::{HermesDatabaseSnapshot, HermesReadError, HermesSessionSnapshot, parsing};
-use crate::application::SourceKey;
+use crate::application::{SessionSnapshot, SourceKey, SourceRevision};
 
 const SESSION_REQUIRED: &[&str] = &[
     "id",
@@ -102,7 +102,14 @@ pub fn read_snapshot(path: &Path) -> Result<HermesDatabaseSnapshot, HermesReadEr
                     key: SourceKey(
                         serde_json::to_vec(&("hermes-session-v1", &id)).expect("string identity"),
                     ),
-                    snapshot: parsing::normalize(&session, &usage),
+                    snapshot: parsing::normalize(&session, &usage).map(|data| SessionSnapshot {
+                        // Sorted rows include only selected columns; absent optional columns remain distinguishable.
+                        revision: SourceRevision(
+                            serde_json::to_vec(&("hermes-snapshot-v1", &session, &usage))
+                                .expect("accounting fields are serializable"),
+                        ),
+                        session: data,
+                    }),
                 }
             })
             .collect(),

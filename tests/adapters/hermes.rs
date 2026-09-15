@@ -555,8 +555,9 @@ fn cumulative_subscription_usage_is_estimated_with_disclosed_assumptions() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     for time in [1, 2] {
         let report = sync(&source, &mut store, time);
-        assert_eq!(report.warnings.len(), 1);
+        assert!(report.warnings.is_empty());
         let snapshot = store.usage_snapshot().unwrap();
+        assert_eq!(snapshot.diagnostics.len(), 2);
         let summary = calculate_usage_summary(&snapshot).unwrap();
         assert_eq!(summary.totals.estimates.priced_event_count, 2);
         assert_eq!(

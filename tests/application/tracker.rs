@@ -35,7 +35,7 @@ fn report_reads_stored_usage_and_notices_without_refreshing_or_changing_state() 
     let imported = tracker.refresh().unwrap();
     assert_eq!(imported.counts.sources_imported, 2);
     assert_eq!(imported.counts.event_identities_inserted, 2);
-    assert_eq!(imported.warnings.len(), 1);
+    assert!(imported.warnings.is_empty());
 
     let expected = tracker.report().unwrap();
     assert_eq!(expected.report.totals.tokens.input, 9);
@@ -52,11 +52,12 @@ fn report_reads_stored_usage_and_notices_without_refreshing_or_changing_state() 
 
     for sources in [
         vec![],
-        vec![LocalSourceConfig::Codex {
-            roots: Some(vec!["".into()]),
+        vec![LocalSourceConfig::Claude {
+            root: Some("".into()),
         }],
     ] {
-        let tracker = TokenTracker::open(TokenTrackerConfig {
+        let expected_warning_count = sources.len();
+        let mut tracker = TokenTracker::open(TokenTrackerConfig {
             database_path: Some(database.clone()),
             sources,
             ..Default::default()
@@ -65,6 +66,16 @@ fn report_reads_stored_usage_and_notices_without_refreshing_or_changing_state() 
         let stored = fs::read(&database).unwrap();
         assert_eq!(tracker.report().unwrap(), expected);
         assert_eq!(fs::read(&database).unwrap(), stored);
+        let refreshed = tracker.refresh().unwrap();
+        assert_eq!(refreshed.warnings.len(), expected_warning_count);
+        if expected_warning_count > 0 {
+            assert!(
+                refreshed.warnings[0]
+                    .message
+                    .starts_with("claude: session discovery failed:")
+            );
+        }
+        assert_eq!(tracker.report().unwrap(), expected);
     }
 }
 

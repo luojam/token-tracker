@@ -1,6 +1,6 @@
 use std::{collections::HashSet, io, path::Path, time::Duration};
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
 use crate::domain::export::EXPORT_FORMAT_VERSION;
 use crate::{ExportSink, ExportSnapshot, PublishError, PublishOutcome};
@@ -12,30 +12,55 @@ pub struct SqliteExportSink {
 }
 
 impl SqliteExportSink {
+    /// Opens an export database or initializes an empty database.
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
-        let mut connection = Connection::open(path)?;
+        Self::from_connection(Connection::open(path)?, true)
+    }
+
+    /// Opens only an existing, identified export database.
+    pub fn open_existing(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
+        Self::from_connection(
+            Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?,
+            false,
+        )
+    }
+
+    fn from_connection(mut connection: Connection, initialize: bool) -> rusqlite::Result<Self> {
         connection.busy_timeout(Duration::from_secs(5))?;
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let application_id: i32 =
-            transaction.pragma_query_value(None, "application_id", |row| row.get(0))?;
-        let empty: bool = transaction.query_row(
-            "SELECT NOT EXISTS (SELECT 1 FROM sqlite_master)",
-            [],
-            |row| row.get(0),
-        )?;
-        if application_id != APPLICATION_ID && !(application_id == 0 && empty) {
-            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "destination is not a token-tracker export database",
-                ),
-            )));
+        {
+            let transaction = connection.transaction()?;
+            validate_destination(&transaction, initialize)?;
+            transaction.commit()?;
         }
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        validate_destination(&transaction, initialize)?;
         transaction.execute_batch(include_str!("export_schema.sql"))?;
         transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
         transaction.commit()?;
         Ok(Self { connection })
     }
+}
+
+fn validate_destination(connection: &Connection, initialize: bool) -> rusqlite::Result<()> {
+    let application_id: i32 =
+        connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    let empty: bool = connection.query_row(
+        "SELECT NOT EXISTS (SELECT 1 FROM sqlite_master)",
+        [],
+        |row| row.get(0),
+    )?;
+    if application_id != APPLICATION_ID
+        && !(initialize && application_id == 0 && version == 0 && empty)
+    {
+        return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "destination is not a token-tracker export database",
+            ),
+        )));
+    }
+    Ok(())
 }
 
 impl ExportSink for SqliteExportSink {

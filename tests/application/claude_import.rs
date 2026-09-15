@@ -111,12 +111,12 @@ fn final_responses_and_pricing_context_corrections_survive_reopen() {
     ledger.write(&path, &prefix(&source, 3));
 
     let partial = ledger.sync();
-    assert_eq!(partial.warnings.len(), 1);
+    assert!(partial.warnings.is_empty());
     totals(&ledger, 1, 0, 0);
 
     let unchanged = ledger.sync();
     assert_eq!(unchanged.counts.sources_unchanged, 1);
-    assert_eq!(unchanged.warnings, partial.warnings);
+    assert!(unchanged.warnings.is_empty());
 
     ledger.write(&path, &prefix(&source, 6));
     assert!(ledger.sync().warnings.is_empty());

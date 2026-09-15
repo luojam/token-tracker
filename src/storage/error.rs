@@ -8,6 +8,7 @@ pub enum SqliteStoreError {
     InvalidDatabasePath(PathBuf),
     InvalidMachineStatePath(PathBuf),
     ResolveMachineStatePath { path: PathBuf, source: io::Error },
+    NotUsageDatabase,
     UnsupportedSchemaVersion(i64),
     ValueOutOfRange(&'static str),
     CorruptData(&'static str),
@@ -41,6 +42,7 @@ impl fmt::Display for SqliteStoreError {
                     path.display()
                 )
             }
+            Self::NotUsageDatabase => formatter.write_str("not a token-tracker usage database"),
             Self::UnsupportedSchemaVersion(version) => {
                 write!(
                     formatter,

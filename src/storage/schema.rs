@@ -1,26 +1,32 @@
 use super::SqliteStoreError;
 use rusqlite::Connection;
 
+const APPLICATION_ID: i32 = 0x54545553;
 // Changes to schema.sql require recreating existing databases.
-const INITIAL_SCHEMA_VERSION: i64 = 1;
-const MIGRATIONS: &[&str] = &[];
-pub(super) const SCHEMA_VERSION: i64 = INITIAL_SCHEMA_VERSION + MIGRATIONS.len() as i64;
+const SCHEMA_VERSION: i64 = 1;
 
-pub(super) fn migrate(connection: &mut Connection) -> Result<(), SqliteStoreError> {
+pub(super) fn initialize(connection: &mut Connection) -> Result<(), SqliteStoreError> {
     let transaction = connection.transaction()?;
-    let mut version: i64 =
-        transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if version == 0 {
+    let application_id: i32 =
+        transaction.pragma_query_value(None, "application_id", |row| row.get(0))?;
+    let version: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if application_id == APPLICATION_ID {
+        if version != SCHEMA_VERSION {
+            return Err(SqliteStoreError::UnsupportedSchemaVersion(version));
+        }
+    } else {
+        let empty: bool = transaction.query_row(
+            "SELECT NOT EXISTS (SELECT 1 FROM sqlite_schema)",
+            [],
+            |row| row.get(0),
+        )?;
+        if application_id != 0 || version != 0 || !empty {
+            return Err(SqliteStoreError::NotUsageDatabase);
+        }
         transaction.execute_batch(include_str!("schema.sql"))?;
-        version = INITIAL_SCHEMA_VERSION;
-    } else if !(INITIAL_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&version) {
-        return Err(SqliteStoreError::UnsupportedSchemaVersion(version));
+        transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
+        transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     }
-
-    for migration in &MIGRATIONS[(version - INITIAL_SCHEMA_VERSION) as usize..] {
-        transaction.execute_batch(migration)?;
-    }
-    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
 }

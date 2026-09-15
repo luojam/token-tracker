@@ -2,12 +2,9 @@ use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
 
-use rusqlite::{Connection, OpenFlags};
 use token_tracker::{ExportSink, ExportSnapshot, PublishError, SqliteExportSink};
 
 use super::CliError;
-
-const APPLICATION_ID: i32 = 0x54544558;
 
 pub(super) fn write_snapshot(
     path: &Path,
@@ -33,22 +30,12 @@ fn write_database(
     created: bool,
     snapshot: &ExportSnapshot,
 ) -> Result<(), PublishError<rusqlite::Error>> {
-    if !created {
-        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .map_err(PublishError::Destination)?;
-        let application_id: i32 = connection
-            .pragma_query_value(None, "application_id", |row| row.get(0))
-            .map_err(PublishError::Destination)?;
-        if application_id != APPLICATION_ID {
-            return Err(PublishError::Destination(
-                rusqlite::Error::ToSqlConversionFailure(Box::new(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "destination is not a token-tracker export database",
-                ))),
-            ));
-        }
+    let mut sink = if created {
+        SqliteExportSink::open(path)
+    } else {
+        SqliteExportSink::open_existing(path)
     }
-    let mut sink = SqliteExportSink::open(path).map_err(PublishError::Destination)?;
+    .map_err(PublishError::Destination)?;
     sink.publish(snapshot)?;
     Ok(())
 }

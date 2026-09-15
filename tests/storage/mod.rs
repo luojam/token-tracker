@@ -379,34 +379,46 @@ fn corrupt_state_is_rejected_without_exposing_contents() {
 }
 
 #[test]
+fn foreign_databases_are_rejected_without_changes() {
+    for sql in [
+        "CREATE TABLE preserved(value); INSERT INTO preserved VALUES (42)",
+        "CREATE TABLE preserved(value); PRAGMA user_version = 1",
+    ] {
+        let tree = TempTree::new();
+        let path = tree.root.join("foreign.db");
+        Connection::open(&path).unwrap().execute_batch(sql).unwrap();
+        let before = std::fs::read(&path).unwrap();
+
+        assert!(matches!(
+            SqliteUsageStore::open(&path),
+            Err(SqliteStoreError::NotUsageDatabase)
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
 fn unsupported_schema_is_left_untouched() {
     let tree = TempTree::new();
     let path = tree.root.join("usage.db");
-    let connection = Connection::open(&path).unwrap();
-    connection
-        .execute_batch("CREATE TABLE preserved(value); INSERT INTO preserved VALUES (42)")
+    drop(SqliteUsageStore::open(&path).unwrap());
+    Connection::open(&path)
+        .unwrap()
+        .pragma_update(None, "user_version", 99)
         .unwrap();
-    connection.pragma_update(None, "user_version", 99).unwrap();
+    let before = std::fs::read(&path).unwrap();
 
     assert!(matches!(
         SqliteUsageStore::open(&path),
         Err(SqliteStoreError::UnsupportedSchemaVersion(99))
     ));
-    assert_eq!(
-        connection
-            .query_row("SELECT value FROM preserved", [], |row| row
-                .get::<_, i64>(0))
-            .unwrap(),
-        42
-    );
+    assert_eq!(std::fs::read(&path).unwrap(), before);
 }
 
 #[test]
-fn commit_failure_rolls_back_and_stops_reporting() {
+fn commit_failure_rolls_back_and_aborts_synchronization() {
     use token_tracker::adapters::pi::{PiSessionDiscovery, PiSessionParser};
-    use token_tracker::application::{
-        AllTimeReportError, ImportSynchronizationError, run_all_time_report,
-    };
+    use token_tracker::application::{ImportSynchronizationError, synchronize_sessions};
 
     let tree = TempTree::new();
     tree.write(
@@ -426,13 +438,11 @@ fn commit_failure_rolls_back_and_stops_reporting() {
     let adapter =
         FileSessionSource::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
     assert!(matches!(
-        run_all_time_report(&[&adapter], &mut store, vec![]),
-        Err(AllTimeReportError::Synchronization(
-            ImportSynchronizationError::Storage {
-                operation: "committing session import",
-                ..
-            }
-        ))
+        synchronize_sessions(&adapter, &mut store),
+        Err(ImportSynchronizationError::Storage {
+            operation: "committing session import",
+            ..
+        })
     ));
 
     let snapshot = store.usage_snapshot().unwrap();

@@ -8,7 +8,7 @@ use token_tracker::adapters::files::{
 
 use token_tracker::adapters::pi::{PiSessionDiscovery, PiSessionParser};
 use token_tracker::application::{
-    SessionData, UsageReadStore, UsageStore, calculate_usage_summary, run_all_time_report,
+    SessionData, UsageReadStore, UsageStore, calculate_usage_summary, synchronize_sessions,
     synchronize_sessions_at,
 };
 use token_tracker::domain::{AgentId, Timestamp};
@@ -18,7 +18,6 @@ struct TestDiscovery {
     agent: &'static str,
     root: PathBuf,
     files: Vec<PathBuf>,
-    fail: bool,
 }
 impl SessionFileDiscovery for TestDiscovery {
     type Error = io::Error;
@@ -28,10 +27,6 @@ impl SessionFileDiscovery for TestDiscovery {
     }
 
     fn discover(&self) -> Result<FileDiscoveryReport, Self::Error> {
-        if self.fail {
-            return Err(io::Error::other("discovery unavailable"));
-        }
-
         let mut report = PiSessionDiscovery::new(&self.root)
             .discover()
             .map_err(io::Error::other)?;
@@ -83,41 +78,19 @@ fn invalid_imports_warn_without_preventing_reporting() {
     let pi = FileSessionSource::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
 
-    let report = run_all_time_report(&[&pi], &mut store, vec![]).unwrap();
-    assert_eq!(report.summary.totals.tokens.input, 7);
+    let report = synchronize_sessions(&pi, &mut store).unwrap();
+    let summary = calculate_usage_summary(&store.usage_snapshot().unwrap()).unwrap();
+    assert_eq!(summary.totals.tokens.input, 7);
     assert_eq!(report.warnings.len(), 2);
-    assert!(report.warnings.iter().any(|warning| {
-        warning.message == "pi: conflicting usage events with the same identity"
-    }));
-    assert!(report.warnings.iter().any(|warning| {
-        warning.message == "pi: token count exceeds the supported integer range"
-    }));
-}
-
-#[test]
-fn discovery_failure_does_not_prevent_other_adapters_from_importing() {
-    let tree = TempTree::new();
-    tree.write("pi.jsonl", pi_session(7));
-    let pi = FileSessionSource::new(PiSessionDiscovery::new(&tree.root), PiSessionParser::new());
-    let unavailable = FileSessionSource::new(
-        TestDiscovery {
-            agent: "test-agent",
-            root: tree.root.clone(),
-            files: vec![],
-            fail: true,
-        },
-        TestParser {
-            agent: "test-agent",
-        },
+    assert!(
+        report.warnings.iter().any(|warning| {
+            warning.message == "conflicting usage events with the same identity"
+        })
     );
-    let mut store = SqliteUsageStore::open_in_memory().unwrap();
-
-    let report = run_all_time_report(&[&unavailable, &pi], &mut store, vec![]).unwrap();
-    assert_eq!(report.summary.totals.tokens.input, 7);
-    assert_eq!(report.warnings.len(), 1);
-    assert_eq!(
-        report.warnings[0].message,
-        "test-agent: session discovery failed: discovery unavailable"
+    assert!(
+        report.warnings.iter().any(|warning| {
+            warning.message == "token count exceeds the supported integer range"
+        })
     );
 }
 
@@ -131,7 +104,6 @@ fn agents_have_independent_usage_revisions_and_presence_at_the_same_path() {
         agent,
         root: tree.root.clone(),
         files,
-        fail: false,
     };
     let first = discovery("first", vec![path.clone()]);
     let second = discovery("second", vec![path.clone()]);

@@ -45,8 +45,12 @@ fn execute() -> Result<(), CliError> {
     let imported = tracker.refresh().map_err(CliError::Import)?;
     let result = tracker.report().map_err(CliError::Report)?;
 
-    let output =
-        reporting::render_terminal_report(&result.report, &imported.warnings, AGENT_LABELS);
+    let output = reporting::render_terminal_report(
+        &result.report,
+        &imported.warnings,
+        &result.diagnostics,
+        AGENT_LABELS,
+    );
     io::stdout()
         .lock()
         .write_all(output.as_bytes())

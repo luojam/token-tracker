@@ -12,7 +12,7 @@ pub use exporting::SqliteExportSink;
 pub(crate) use machine_state::MachineState;
 pub use paths::default_database_path;
 
-use schema::migrate;
+use schema::initialize;
 use std::fs;
 use std::path::Path;
 
@@ -23,7 +23,7 @@ pub struct SqliteUsageStore {
 }
 
 impl SqliteUsageStore {
-    /// Opens (or creates) a database and applies schema migrations.
+    /// Opens an identified usage database or initializes an empty database.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SqliteStoreError> {
         let connection = Connection::open(path)?;
         Self::from_connection(connection)
@@ -46,8 +46,8 @@ impl SqliteUsageStore {
     }
 
     fn from_connection(mut connection: Connection) -> Result<Self, SqliteStoreError> {
+        initialize(&mut connection)?;
         connection.pragma_update(None, "foreign_keys", true)?;
-        migrate(&mut connection)?;
         Ok(Self { connection })
     }
 }
