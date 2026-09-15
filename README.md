@@ -25,6 +25,19 @@ To build a release binary at `target/release/token-tracker`:
 cargo build --release
 ```
 
+### SQLite export
+
+Export all locally retained usage to a SQLite database:
+
+```sh
+token-tracker export export.db
+token-tracker export export.db --force
+```
+
+Run `token-tracker` first to import current usage; export does not refresh sources.
+The parent directory must exist. Use `--force` to replace an existing export;
+unrelated files are never overwritten.
+
 ### Pi
 
 ### Codex
@@ -54,7 +67,7 @@ short-context rates, which may underestimate long-context usage.
 
 ## Local data
 
-Each run imports new or changed Pi, Codex, Claude Code, and Hermes sessions.
+Running without arguments imports new or changed Pi, Codex, Claude Code, and Hermes sessions.
 Tracks input, output, and cache tokens, counting shared fork history only once.
 
 Sessions are read from:

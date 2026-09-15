@@ -261,6 +261,158 @@ fn storage_failure_exits_without_a_report() {
 }
 
 #[test]
+fn export_round_trips_retained_usage_without_refreshing() {
+    use token_tracker::{TokenTracker, TokenTrackerConfig};
+
+    let tree = TempTree::new();
+    let source = tree.write(".pi/agent/sessions/history.jsonl", ALL_USAGE);
+    tree.write(".codex/sessions/rollout-history.jsonl", CODEX_USAGE);
+    successful_report(command(&tree.root).output().unwrap());
+    let tracker = TokenTracker::open(TokenTrackerConfig {
+        database_path: Some(tree.root.join(".local/share/token-tracker/usage.db")),
+        sources: vec![],
+        ..Default::default()
+    })
+    .unwrap();
+    let expected = tracker.export_snapshot().unwrap();
+    fs::write(source, "malformed source must not be refreshed\n").unwrap();
+
+    let path = tree.root.join("export.db");
+    let output = command(&tree.root)
+        .arg("export")
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let snapshot = read_export(&connection);
+    assert_eq!(snapshot.events, expected.events);
+    assert_eq!(snapshot.machine_id, expected.machine_id);
+    assert_eq!(snapshot.export_revision, expected.export_revision + 1);
+    assert_eq!(snapshot.format_version, expected.format_version);
+    assert!(!String::from_utf8_lossy(&fs::read(path).unwrap()).contains("SECRET_"));
+}
+
+#[test]
+fn export_replaces_both_tables_atomically_and_requires_force() {
+    let tree = TempTree::new();
+    tree.write(".pi/agent/sessions/history.jsonl", ALL_USAGE);
+    successful_report(command(&tree.root).output().unwrap());
+    let path = tree.root.join("export.db");
+    let run = |force: bool| {
+        let mut command = command(&tree.root);
+        command.arg("export").arg(&path);
+        if force {
+            command.arg("--force");
+        }
+        command.output().unwrap()
+    };
+    assert!(run(false).status.success());
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let original = read_export(&connection);
+    assert!(!original.events.is_empty());
+    let refused = run(false);
+    assert!(!refused.status.success());
+    assert!(refused.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("use --force to overwrite"));
+    assert_eq!(read_export(&connection), original);
+
+    connection
+        .execute_batch(
+            "CREATE TRIGGER fail_export BEFORE INSERT ON events
+         BEGIN SELECT RAISE(ABORT, 'injected write failure'); END;",
+        )
+        .unwrap();
+    let failed = run(true);
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("injected write failure"));
+    assert_eq!(read_export(&connection), original);
+    connection
+        .execute_batch("DROP TRIGGER fail_export")
+        .unwrap();
+
+    fs::remove_file(tree.root.join(".local/share/token-tracker/usage.db")).unwrap();
+    let forced = run(true);
+    assert!(forced.status.success(), "{forced:?}");
+    let replaced = read_export(&connection);
+    assert!(replaced.events.is_empty());
+    assert_eq!(replaced.machine_id, original.machine_id);
+    assert!(replaced.export_revision > original.export_revision);
+
+    let unrelated = tree.write("unrelated.db", "keep this file\n");
+    for destination in [unrelated.clone(), tree.root.join("missing/export.db")] {
+        let failed = command(&tree.root)
+            .arg("export")
+            .arg(destination)
+            .arg("--force")
+            .output()
+            .unwrap();
+        assert!(!failed.status.success());
+        assert!(failed.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&failed.stderr).contains("could not write export to"));
+    }
+    assert_eq!(fs::read_to_string(unrelated).unwrap(), "keep this file\n");
+    let storage = tree.root.join("unrelated-sqlite.db");
+    fs::copy(
+        tree.root.join(".local/share/token-tracker/usage.db"),
+        &storage,
+    )
+    .unwrap();
+    let before = fs::read(&storage).unwrap();
+    let failed = command(&tree.root)
+        .arg("export")
+        .arg(&storage)
+        .arg("--force")
+        .output()
+        .unwrap();
+    assert!(!failed.status.success());
+    assert!(
+        String::from_utf8_lossy(&failed.stderr).contains("not a token-tracker export database")
+    );
+    assert!(fs::read(storage).unwrap() == before);
+}
+
+fn read_export(connection: &rusqlite::Connection) -> token_tracker::ExportSnapshot {
+    let json: String = connection
+        .query_row(
+            "SELECT json_object(
+            'machine_id', machine_id, 'machine_name', machine_name,
+            'export_revision', json(export_revision), 'format_version', format_version,
+            'exported_at_unix_ms', exported_at_unix_ms,
+            'events', (SELECT json_group_array(json_object(
+                'agent', agent, 'event_key', event_key, 'timestamp_unix_ms', timestamp_unix_ms,
+                'usage_kind', usage_kind, 'provider', provider, 'model', model,
+                'tokens', json_object('input', json(input_tokens), 'output', json(output_tokens),
+                    'cache_read', json(cache_read_tokens), 'cache_write', json(cache_write_tokens)),
+                'recorded_cost_usd', recorded_cost_usd, 'estimate', json(estimate),
+                'pricing_context', json(pricing_context), 'sessions', json(sessions)
+            )) FROM (SELECT * FROM events ORDER BY rowid))
+        ) FROM snapshot",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    serde_json::from_str(&json).unwrap()
+}
+
+#[test]
+fn invalid_export_arguments_fail_before_opening_storage() {
+    let tree = TempTree::new();
+    for args in [
+        vec!["export"],
+        vec!["export", "export.db", "--unknown"],
+        vec!["export", "one.db", "two.db"],
+    ] {
+        let output = command(&tree.root).args(args).output().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
+    }
+    assert!(!tree.root.join(".local").exists());
+}
+
+#[test]
 fn adapter_setup_failure_still_reports_stored_usage() {
     let tree = TempTree::new();
     let home = tree.root.join("home");

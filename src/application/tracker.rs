@@ -129,7 +129,7 @@ impl TokenTracker {
             .machine_state_path
             .unwrap_or_else(|| database_path.with_file_name("machine-state.db"));
         if machine_state_path.as_os_str().is_empty()
-            || machine_state_path == PathBuf::from(":memory:")
+            || machine_state_path == std::path::Path::new(":memory:")
         {
             return Err(SqliteStoreError::InvalidMachineStatePath(
                 machine_state_path,
