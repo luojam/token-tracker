@@ -140,10 +140,10 @@ fn replace_contents(
                 usage_kind.as_str(),
                 event.provider,
                 event.model,
-                event.tokens.input.to_string(),
-                event.tokens.output.to_string(),
-                event.tokens.cache_read.to_string(),
-                event.tokens.cache_write.to_string(),
+                event.tokens.input,
+                event.tokens.output,
+                event.tokens.cache_read,
+                event.tokens.cache_write,
                 event.recorded_cost_usd.as_ref().map(|cost| cost.as_str()),
                 json(&event.estimate)?,
                 event.pricing_context.as_ref().map(json).transpose()?,
@@ -165,11 +165,11 @@ mod tests {
     use crate::domain::EstimatedCost;
 
     #[test]
-    fn preserves_unsigned_integer_and_decimal_money_precision() {
+    fn preserves_integer_tokens_and_decimal_money_precision() {
         let mut snapshot: ExportSnapshot =
             serde_json::from_str(include_str!("../../tests/fixtures/export-example.json")).unwrap();
         snapshot.export_revision = u64::MAX;
-        snapshot.events[0].tokens.input = u64::MAX;
+        snapshot.events[0].tokens.input = i64::MAX as u64;
         snapshot.events[0].recorded_cost_usd =
             Some(EstimatedCost::from_picodollars(u128::MAX).into());
         let mut connection = Connection::open_in_memory().unwrap();
@@ -179,7 +179,7 @@ mod tests {
             .unwrap();
         replace_contents(&transaction, &snapshot).unwrap();
         transaction.commit().unwrap();
-        let values: (String, String, String) = connection
+        let values: (String, i64, String) = connection
             .query_row(
                 "SELECT export_revision, input_tokens, recorded_cost_usd FROM snapshot, events",
                 [],
@@ -190,7 +190,7 @@ mod tests {
             values,
             (
                 "18446744073709551615".into(),
-                "18446744073709551615".into(),
+                i64::MAX,
                 "340282366920938463463374607.431768211455".into(),
             )
         );
