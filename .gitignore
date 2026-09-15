@@ -12,3 +12,9 @@ debug
 !.env.example
 
 AGENTS.md
+
+# Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.*
+infra/*.tfplan
