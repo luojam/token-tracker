@@ -197,6 +197,6 @@ pub struct ReportDiagnostic {
 pub trait UsageReadStore {
     type Error: Error + Send + Sync + 'static;
 
-    /// Loads unreconciled provenance, observations, and diagnostics from one consistent snapshot.
+    /// Loads provenance, observations before deduplication, and diagnostics from one consistent snapshot.
     fn usage_snapshot(&self) -> Result<UsageSnapshot, Self::Error>;
 }

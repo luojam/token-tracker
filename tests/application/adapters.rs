@@ -8,7 +8,7 @@ use token_tracker::adapters::files::{
 
 use token_tracker::adapters::pi::{PiSessionDiscovery, PiSessionParser};
 use token_tracker::application::{
-    SessionData, UsageReadStore, UsageStore, run_all_time_report, summarize_usage,
+    SessionData, UsageReadStore, UsageStore, calculate_usage_totals, run_all_time_report,
     synchronize_sessions_at,
 };
 use token_tracker::domain::{AgentId, Timestamp};
@@ -163,7 +163,7 @@ fn agents_have_independent_usage_revisions_and_presence_at_the_same_path() {
 
     fs::write(&path, pi_session(200)).unwrap();
     assert_eq!(sync(&mut store, &second, 3).sources_imported, 1);
-    let summary = summarize_usage(&store.usage_snapshot().unwrap()).unwrap();
+    let summary = calculate_usage_totals(&store.usage_snapshot().unwrap()).unwrap();
     assert_eq!(summary.totals.tokens.input, 210);
     assert_eq!(summary.totals.unique_usage_event_count, 2);
 
@@ -183,7 +183,7 @@ fn agents_have_independent_usage_revisions_and_presence_at_the_same_path() {
             .is_none()
     );
     assert_eq!(
-        summarize_usage(&store.usage_snapshot().unwrap()).unwrap(),
+        calculate_usage_totals(&store.usage_snapshot().unwrap()).unwrap(),
         summary
     );
 }

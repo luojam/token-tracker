@@ -8,7 +8,7 @@ use crate::support::TempTree;
 use token_tracker::adapters::files::{ParseContext, SessionParser};
 use token_tracker::application::{
     DiscoveredSource, DiscoveryReport, SessionSnapshot, SessionSource, SnapshotCompletion,
-    SourceKey, SourceRevision, SourceState, UsageReadStore, UsageStore, summarize_usage,
+    SourceKey, SourceRevision, SourceState, UsageReadStore, UsageStore, calculate_usage_totals,
     synchronize_sessions_at,
 };
 use token_tracker::domain::{AgentId, Timestamp};
@@ -95,7 +95,14 @@ fn pathless_sessions_persist_loaded_revisions_and_retry_partial_snapshots() {
             .iter()
             .all(|session| session.source_path.is_none())
     );
-    assert_eq!(summarize_usage(&snapshot).unwrap().totals.tokens.input, 30);
+    assert_eq!(
+        calculate_usage_totals(&snapshot)
+            .unwrap()
+            .totals
+            .tokens
+            .input,
+        30
+    );
     drop(store);
 
     let mut store = SqliteUsageStore::open(&database).unwrap();
@@ -111,7 +118,7 @@ fn pathless_sessions_persist_loaded_revisions_and_retry_partial_snapshots() {
     assert_eq!(report.counts.sources_unchanged, 1);
     assert_eq!(report.counts.observations_updated, 1);
     assert_eq!(source.loads.get(), 3);
-    let summary = summarize_usage(&store.usage_snapshot().unwrap()).unwrap();
+    let summary = calculate_usage_totals(&store.usage_snapshot().unwrap()).unwrap();
     assert_eq!(summary.totals.tokens.input, 40);
 
     let report =

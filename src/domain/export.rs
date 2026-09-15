@@ -16,7 +16,7 @@ pub struct ExportSnapshot {
     pub events: Vec<ExportEvent>,
 }
 
-/// One reconciled event, unique by (agent, event_key) within its machine snapshot.
+/// One deduplicated event, unique by (agent, event_key) within its machine snapshot.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportEvent {
     pub agent: String,

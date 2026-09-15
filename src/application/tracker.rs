@@ -1,8 +1,8 @@
 use std::error::Error;
 use std::path::PathBuf;
 
-use super::summarization::read_summary;
 use super::synchronization::import_adapters;
+use super::usage_totals::read_usage_totals;
 use super::{
     ImportAdapter, ImportSynchronizationError, ImportWarning, ReportDiagnostic, ReportError,
     SynchronizationReport, UsageReport, build_usage_report,
@@ -148,7 +148,7 @@ impl TokenTracker {
 
     /// Reads stored usage and diagnostics without refreshing or changing stored state.
     pub fn report(&self) -> Result<ReportResult, ReportError> {
-        let (summary, diagnostics) = read_summary(&self.store)?;
+        let (summary, diagnostics) = read_usage_totals(&self.store)?;
         Ok(ReportResult {
             report: build_usage_report(&summary),
             diagnostics,

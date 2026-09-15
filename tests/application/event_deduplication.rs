@@ -1,6 +1,6 @@
 use token_tracker::application::{
     CostAmount, CostTotal, SessionProvenance, SourceSessionKey, UsageObservation, UsageSnapshot,
-    build_usage_report, summarize_usage,
+    build_usage_report, calculate_usage_totals, deduplicate_events,
 };
 use token_tracker::domain::{
     AgentId, CacheDetail, EstimateTotal, EstimatedCost, ModelAttribution, OpenAiPricingContext,
@@ -145,9 +145,35 @@ fn snapshot(reverse: bool) -> UsageSnapshot {
 }
 
 #[test]
-fn summary_reconciles_independently_of_observation_order() {
-    let summary = summarize_usage(&snapshot(false)).unwrap();
-    assert_eq!(summary, summarize_usage(&snapshot(true)).unwrap());
+fn shared_event_deduplication_preserves_selected_observations_and_session_memberships() {
+    let mut data = snapshot(false);
+    let (empty, _) = session("/sessions/empty.jsonl", "empty-session", 300, None, vec![]);
+    data.sessions.push(empty);
+
+    let usage = deduplicate_events(&data).unwrap();
+    assert_eq!(usage.session_count, 3);
+    assert_eq!(
+        usage
+            .events
+            .iter()
+            .map(|event| event.canonical.event.identity.adapter_key.as_str())
+            .collect::<Vec<_>>(),
+        ["branch", "shared", "tool"]
+    );
+    let shared = &usage.events[1];
+    assert_eq!(shared.canonical, &data.observations[0]);
+    assert_eq!(shared.sessions, [&data.sessions[1], &data.sessions[0]]);
+
+    let mut reversed = data.clone();
+    reversed.sessions.reverse();
+    reversed.observations.reverse();
+    assert_eq!(deduplicate_events(&reversed).unwrap(), usage);
+}
+
+#[test]
+fn totals_deduplicate_independently_of_observation_order() {
+    let summary = calculate_usage_totals(&snapshot(false)).unwrap();
+    assert_eq!(summary, calculate_usage_totals(&snapshot(true)).unwrap());
     assert_eq!(
         summary.totals.tokens,
         TokenCounts {
@@ -216,10 +242,10 @@ fn canonical_estimates_keep_whole_observations_and_explicit_pricing_context_cove
     data.sessions.push(pi);
     data.observations.extend(observations);
 
-    let summary = summarize_usage(&data).unwrap();
+    let summary = calculate_usage_totals(&data).unwrap();
     data.sessions.reverse();
     data.observations.reverse();
-    assert_eq!(summarize_usage(&data).unwrap(), summary);
+    assert_eq!(calculate_usage_totals(&data).unwrap(), summary);
 
     let estimate = &summary
         .breakdown
@@ -268,17 +294,17 @@ fn typed_lineage_and_ambiguous_provenance_use_deterministic_precedence() {
     let child = data.sessions[1].key.clone();
     data.sessions[1].parent_session = Some(ParentSession::SessionId(original.session_id.clone()));
     assert_eq!(
-        summarize_usage(&data).unwrap(),
-        summarize_usage(&snapshot(false)).unwrap()
+        calculate_usage_totals(&data).unwrap(),
+        calculate_usage_totals(&snapshot(false)).unwrap()
     );
 
     data.sessions[0].parent_session = Some(ParentSession::SessionId(child.session_id));
-    let expected = summarize_usage(&data).unwrap();
+    let expected = calculate_usage_totals(&data).unwrap();
     assert_eq!(expected.totals.tokens.input, 1005);
 
     data.sessions.reverse();
     data.observations.reverse();
-    assert_eq!(summarize_usage(&data).unwrap(), expected);
+    assert_eq!(calculate_usage_totals(&data).unwrap(), expected);
 }
 
 #[test]
@@ -286,12 +312,21 @@ fn unrelated_copies_use_start_time_then_source_path() {
     let mut data = snapshot(false);
     data.sessions[1].parent_session = None;
     data.sessions[0].started_at = Timestamp::from_unix_milliseconds(50);
-    assert_eq!(summarize_usage(&data).unwrap().totals.tokens.input, 16);
+    assert_eq!(
+        calculate_usage_totals(&data).unwrap().totals.tokens.input,
+        16
+    );
 
     data.sessions[0].started_at = data.sessions[1].started_at;
-    assert_eq!(summarize_usage(&data).unwrap().totals.tokens.input, 1005);
+    assert_eq!(
+        calculate_usage_totals(&data).unwrap().totals.tokens.input,
+        1005
+    );
 
     data.sessions.reverse();
     data.observations.reverse();
-    assert_eq!(summarize_usage(&data).unwrap().totals.tokens.input, 1005);
+    assert_eq!(
+        calculate_usage_totals(&data).unwrap().totals.tokens.input,
+        1005
+    );
 }

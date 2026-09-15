@@ -1,25 +1,23 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
 use super::{
-    ReportDiagnostic, SessionProvenance, SourceSessionKey, UsageObservation, UsageReadStore,
-    UsageSnapshot,
+    DeduplicationError, ReportDiagnostic, UsageReadStore, UsageSnapshot, deduplicate_events,
 };
 use crate::domain::{
-    AgentId, EstimateTotal, EstimateTotals, ParentSession, RecordedCost, SummaryBreakdown,
-    SummaryGroup, SummaryTotals, TierEvidence, Timestamp, TokenCounts, UsageEvent,
-    UsageEventIdentity, UsageSummary,
+    AgentId, EstimateTotal, EstimateTotals, RecordedCost, SummaryBreakdown, SummaryGroup,
+    SummaryTotals, TierEvidence, TokenCounts, UsageEvent, UsageSummary,
 };
 use crate::pricing::EventEstimate;
 
-pub(crate) fn read_summary<S: UsageReadStore>(
+pub(crate) fn read_usage_totals<S: UsageReadStore>(
     store: &S,
 ) -> Result<(UsageSummary, Vec<ReportDiagnostic>), ReportError> {
     let snapshot = store
         .usage_snapshot()
         .map_err(|source| ReportError::Storage(Box::new(source)))?;
-    let summary = summarize_usage(&snapshot).map_err(ReportError::Summary)?;
+    let summary = calculate_usage_totals(&snapshot).map_err(ReportError::Summary)?;
 
     Ok((summary, snapshot.diagnostics))
 }
@@ -27,7 +25,7 @@ pub(crate) fn read_summary<S: UsageReadStore>(
 #[derive(Debug)]
 pub enum ReportError {
     Storage(Box<dyn Error + Send + Sync>),
-    Summary(SummaryError),
+    Summary(UsageTotalsError),
 }
 
 impl fmt::Display for ReportError {
@@ -48,136 +46,20 @@ impl Error for ReportError {
     }
 }
 
-/// Counts each event once, preferring ancestors, then session start, ID, and source key.
-/// Missing sources retain precedence, regardless of scan or import order.
-pub fn summarize_usage(snapshot: &UsageSnapshot) -> Result<UsageSummary, SummaryError> {
-    let mut sessions = HashMap::new();
-    for session in &snapshot.sessions {
-        if sessions.insert(session.key.clone(), session).is_some() {
-            return Err(SummaryError::InvalidData("duplicate session provenance"));
-        }
-    }
-
-    let session_count = sessions
-        .keys()
-        .map(|key| (&key.agent, &key.session_id))
-        .collect::<HashSet<_>>()
-        .len();
-    let parents = resolve_session_parents(&sessions);
-
-    let mut by_event = BTreeMap::<&UsageEventIdentity, Vec<&UsageObservation>>::new();
-    for observation in &snapshot.observations {
-        if !sessions.contains_key(&observation.session)
-            || observation.session.agent != observation.event.identity.agent
-        {
-            return Err(SummaryError::InvalidData("invalid observation provenance"));
-        }
-        by_event
-            .entry(&observation.event.identity)
-            .or_default()
-            .push(observation);
-    }
-
-    // Stable event order also makes floating-point cost accumulation deterministic.
-    summarize_canonical_usage(
-        count(session_count)?,
-        by_event.values().map(|observations| {
-            &select_canonical_observation(observations, &sessions, &parents).event
-        }),
+pub fn calculate_usage_totals(snapshot: &UsageSnapshot) -> Result<UsageSummary, UsageTotalsError> {
+    let usage = deduplicate_events(snapshot).map_err(|error| match error {
+        DeduplicationError::InvalidData(message) => UsageTotalsError::InvalidData(message),
+    })?;
+    calculate_event_totals(
+        count(usage.session_count)?,
+        usage.events.iter().map(|event| &event.canonical.event),
     )
 }
 
-fn resolve_session_parents(
-    sessions: &HashMap<SourceSessionKey, &SessionProvenance>,
-) -> HashMap<SourceSessionKey, SourceSessionKey> {
-    let mut by_path = HashMap::new();
-    let mut by_id = HashMap::new();
-    for (key, session) in sessions {
-        if let Some(path) = &session.source_path {
-            by_path
-                .entry((&key.agent, path))
-                .or_insert_with(Vec::new)
-                .push(key);
-        }
-        by_id
-            .entry((&key.agent, &key.session_id))
-            .or_insert_with(Vec::new)
-            .push(key);
-    }
-
-    sessions
-        .values()
-        .filter_map(|session| {
-            let candidates = match session.parent_session.as_ref()? {
-                ParentSession::SourcePath(path) => by_path.get(&(&session.key.agent, path))?,
-                ParentSession::SessionId(id) => by_id.get(&(&session.key.agent, id))?,
-            };
-            match candidates.as_slice() {
-                [parent] if **parent != session.key => {
-                    Some((session.key.clone(), (*parent).clone()))
-                }
-                // Multiple source copies are ambiguous; use the stable fallback.
-                _ => None,
-            }
-        })
-        .collect()
-}
-
-fn select_canonical_observation<'a>(
-    observations: &[&'a UsageObservation],
-    sessions: &HashMap<SourceSessionKey, &SessionProvenance>,
-    parents: &HashMap<SourceSessionKey, SourceSessionKey>,
-) -> &'a UsageObservation {
-    let mut candidates = observations
-        .iter()
-        .copied()
-        .filter(|candidate| {
-            !observations.iter().any(|other| {
-                other.session != candidate.session
-                    && observation_is_ancestor(other, candidate, parents)
-            })
-        })
-        .collect::<Vec<_>>();
-    if candidates.is_empty() {
-        candidates.extend_from_slice(observations);
-    }
-
-    candidates
-        .into_iter()
-        .min_by_key(|observation| fallback_key(sessions[&observation.session]))
-        .expect("event groups always contain an observation")
-}
-
-fn observation_is_ancestor(
-    ancestor: &UsageObservation,
-    descendant: &UsageObservation,
-    parents: &HashMap<SourceSessionKey, SourceSessionKey>,
-) -> bool {
-    let mut current = &descendant.session;
-    let mut visited = HashSet::new();
-    let mut found = false;
-    while let Some(parent) = parents.get(current) {
-        if !visited.insert(current) {
-            return false;
-        }
-        found |= *parent == ancestor.session;
-        current = parent;
-    }
-    found
-}
-
-fn fallback_key(session: &SessionProvenance) -> (Timestamp, &str, &super::SourceKey) {
-    (
-        session.started_at,
-        &session.key.session_id,
-        &session.key.source,
-    )
-}
-
-fn summarize_canonical_usage<'a>(
+fn calculate_event_totals<'a>(
     session_count: u64,
     events: impl IntoIterator<Item = &'a UsageEvent>,
-) -> Result<UsageSummary, SummaryError> {
+) -> Result<UsageSummary, UsageTotalsError> {
     let mut totals = SummaryTotals {
         session_count,
         ..SummaryTotals::default()
@@ -187,7 +69,7 @@ fn summarize_canonical_usage<'a>(
         totals.unique_usage_event_count = totals
             .unique_usage_event_count
             .checked_add(1)
-            .ok_or(SummaryError::Overflow("event count"))?;
+            .ok_or(UsageTotalsError::Overflow("event count"))?;
         totals.tokens = add_tokens(totals.tokens, event.tokens)?;
         add_cost(&mut totals.recorded_cost, event.recorded_cost)?;
 
@@ -210,7 +92,7 @@ fn summarize_canonical_usage<'a>(
         row.unique_usage_event_count = row
             .unique_usage_event_count
             .checked_add(1)
-            .ok_or(SummaryError::Overflow("event count"))?;
+            .ok_or(UsageTotalsError::Overflow("event count"))?;
 
         if let Some(estimate) = crate::pricing::calculate_estimate(event) {
             add_estimate(&mut totals.estimates, &estimate);
@@ -258,38 +140,38 @@ fn add_estimate(totals: &mut EstimateTotals, estimate: &EventEstimate) {
     }
 }
 
-fn add_tokens(current: TokenCounts, value: TokenCounts) -> Result<TokenCounts, SummaryError> {
+fn add_tokens(current: TokenCounts, value: TokenCounts) -> Result<TokenCounts, UsageTotalsError> {
     current
         .checked_add(value)
-        .ok_or(SummaryError::Overflow("token total"))
+        .ok_or(UsageTotalsError::Overflow("token total"))
 }
 
 fn add_cost(
     current: &mut Option<RecordedCost>,
     value: Option<RecordedCost>,
-) -> Result<(), SummaryError> {
+) -> Result<(), UsageTotalsError> {
     if let Some(value) = value {
         *current = Some(match *current {
             Some(current) => current
                 .checked_add(value)
-                .map_err(|_| SummaryError::Overflow("recorded cost"))?,
+                .map_err(|_| UsageTotalsError::Overflow("recorded cost"))?,
             None => value,
         });
     }
     Ok(())
 }
 
-fn count(value: usize) -> Result<u64, SummaryError> {
-    u64::try_from(value).map_err(|_| SummaryError::Overflow("count"))
+fn count(value: usize) -> Result<u64, UsageTotalsError> {
+    u64::try_from(value).map_err(|_| UsageTotalsError::Overflow("count"))
 }
 
 #[derive(Debug)]
-pub enum SummaryError {
+pub enum UsageTotalsError {
     InvalidData(&'static str),
     Overflow(&'static str),
 }
 
-impl fmt::Display for SummaryError {
+impl fmt::Display for UsageTotalsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidData(message) => write!(f, "invalid usage data: {message}"),
@@ -298,7 +180,7 @@ impl fmt::Display for SummaryError {
     }
 }
 
-impl Error for SummaryError {}
+impl Error for UsageTotalsError {}
 
 #[cfg(test)]
 mod tests {
