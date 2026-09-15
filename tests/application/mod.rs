@@ -3,6 +3,7 @@ mod claude_import;
 mod codex_import;
 mod estimates;
 mod event_deduplication;
+mod exporting;
 mod reporting;
 mod sources;
 mod synchronization;

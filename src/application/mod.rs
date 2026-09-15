@@ -1,5 +1,6 @@
 mod all_time_report;
 mod event_deduplication;
+pub mod exporting;
 mod importing;
 mod ports;
 mod reporting;
@@ -11,6 +12,7 @@ pub use all_time_report::{AllTimeReport, AllTimeReportError, run_all_time_report
 pub use event_deduplication::{
     DeduplicatedEvent, DeduplicatedUsage, DeduplicationError, deduplicate_events,
 };
+pub use exporting::ExportError;
 pub use reporting::{
     CostAmount, CostTotal, ReportRow, ReportTotals, UsageReport, build_usage_report,
 };

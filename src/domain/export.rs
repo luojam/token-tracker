@@ -10,6 +10,7 @@ pub const EXPORT_FORMAT_VERSION: u32 = 1;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExportSnapshot {
     pub machine_id: String,
+    pub machine_name: Option<String>,
     pub export_revision: u64,
     pub format_version: u32,
     pub exported_at_unix_ms: i64,

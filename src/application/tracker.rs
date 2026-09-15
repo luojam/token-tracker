@@ -4,14 +4,15 @@ use std::path::PathBuf;
 use super::synchronization::import_adapters;
 use super::usage_totals::read_usage_totals;
 use super::{
-    ImportAdapter, ImportSynchronizationError, ImportWarning, ReportDiagnostic, ReportError,
-    SynchronizationReport, UsageReport, build_usage_report,
+    ExportError, ImportAdapter, ImportSynchronizationError, ImportWarning, ReportDiagnostic,
+    ReportError, SynchronizationReport, UsageReport, build_usage_report,
 };
 use crate::adapters::claude::{CLAUDE_AGENT_ID, ClaudeSessionDiscovery, ClaudeSessionParser};
 use crate::adapters::codex::{CODEX_AGENT_ID, CodexSessionDiscovery, CodexSessionParser};
 use crate::adapters::files::FileSessionSource;
 use crate::adapters::hermes::{HERMES_AGENT_ID, HermesSessionSource};
 use crate::adapters::pi::{PI_AGENT_ID, PiSessionDiscovery, PiSessionParser};
+use crate::domain::export::ExportSnapshot;
 use crate::storage::{SqliteStoreError, SqliteUsageStore};
 
 /// Agent identifiers and display names for the bundled sources.
@@ -24,9 +25,12 @@ pub const AGENT_LABELS: &[(&str, &str)] = &[
 
 #[derive(Clone, Debug)]
 pub struct TokenTrackerConfig {
-    /// `None` uses the default database path and creates its parent directories.
-    /// Parent directories are not created for explicit paths.
+    /// Defaults to the app data directory. Explicit paths require an existing parent.
     pub database_path: Option<PathBuf>,
+    /// Defaults to `machine-state.db` beside usage storage. Explicit paths require an existing parent.
+    pub machine_state_path: Option<PathBuf>,
+    /// Optional display name included in exports; does not affect machine identity.
+    pub machine_name: Option<String>,
     /// `refresh()` does nothing when this list is empty.
     pub sources: Vec<LocalSourceConfig>,
 }
@@ -35,6 +39,8 @@ impl Default for TokenTrackerConfig {
     fn default() -> Self {
         Self {
             database_path: None,
+            machine_state_path: None,
+            machine_name: None,
             sources: vec![
                 LocalSourceConfig::Hermes { databases: None },
                 LocalSourceConfig::Pi { root: None },
@@ -101,6 +107,8 @@ impl LocalSourceConfig {
 pub struct TokenTracker {
     store: SqliteUsageStore,
     sources: Vec<LocalSourceConfig>,
+    machine_state_path: PathBuf,
+    machine_name: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -113,6 +121,26 @@ pub struct ReportResult {
 impl TokenTracker {
     /// Opens or creates storage without accessing local sources.
     pub fn open(config: TokenTrackerConfig) -> Result<Self, SqliteStoreError> {
+        let database_path = match &config.database_path {
+            Some(path) => path.clone(),
+            None => crate::storage::default_database_path()?,
+        };
+        let machine_state_path = config
+            .machine_state_path
+            .unwrap_or_else(|| database_path.with_file_name("machine-state.db"));
+        if machine_state_path.as_os_str().is_empty()
+            || machine_state_path == PathBuf::from(":memory:")
+        {
+            return Err(SqliteStoreError::InvalidMachineStatePath(
+                machine_state_path,
+            ));
+        }
+        let machine_state_path = std::path::absolute(&machine_state_path).map_err(|source| {
+            SqliteStoreError::ResolveMachineStatePath {
+                path: machine_state_path,
+                source,
+            }
+        })?;
         let store = match config.database_path {
             Some(path) => SqliteUsageStore::open(path)?,
             None => SqliteUsageStore::open_default()?,
@@ -120,6 +148,8 @@ impl TokenTracker {
         Ok(Self {
             store,
             sources: config.sources,
+            machine_state_path,
+            machine_name: config.machine_name,
         })
     }
 
@@ -153,5 +183,14 @@ impl TokenTracker {
             report: build_usage_report(&summary),
             diagnostics,
         })
+    }
+
+    /// Exports retained usage without refreshing sources. Persists a new export revision.
+    pub fn export_snapshot(&self) -> Result<ExportSnapshot, ExportError> {
+        super::exporting::export_snapshot(
+            &self.store,
+            &self.machine_state_path,
+            self.machine_name.clone(),
+        )
     }
 }

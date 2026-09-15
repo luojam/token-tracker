@@ -27,6 +27,7 @@ fn report_reads_stored_usage_and_notices_without_refreshing_or_changing_state() 
                 root: Some(tree.root.join("claude")),
             },
         ],
+        ..Default::default()
     })
     .unwrap();
     assert_eq!(tracker.report().unwrap().report.totals.session_count, 0);
@@ -58,6 +59,7 @@ fn report_reads_stored_usage_and_notices_without_refreshing_or_changing_state() 
         let tracker = TokenTracker::open(TokenTrackerConfig {
             database_path: Some(database.clone()),
             sources,
+            ..Default::default()
         })
         .unwrap();
         let stored = fs::read(&database).unwrap();
@@ -82,6 +84,7 @@ fn refresh_recovers_from_source_failures_but_storage_failures_are_fatal() {
                 root: Some(tree.root.join("pi")),
             },
         ],
+        ..Default::default()
     })
     .unwrap();
 

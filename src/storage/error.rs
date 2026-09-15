@@ -6,6 +6,8 @@ pub enum SqliteStoreError {
     CreateDataDirectory { path: PathBuf, source: io::Error },
     HomeDirectoryUnavailable,
     InvalidDatabasePath(PathBuf),
+    InvalidMachineStatePath(PathBuf),
+    ResolveMachineStatePath { path: PathBuf, source: io::Error },
     UnsupportedSchemaVersion(i64),
     ValueOutOfRange(&'static str),
     CorruptData(&'static str),
@@ -24,6 +26,20 @@ impl fmt::Display for SqliteStoreError {
             ),
             Self::InvalidDatabasePath(path) => {
                 write!(formatter, "database path has no parent: {}", path.display())
+            }
+            Self::InvalidMachineStatePath(path) => {
+                write!(
+                    formatter,
+                    "machine state requires a persistent file path: {}",
+                    path.display()
+                )
+            }
+            Self::ResolveMachineStatePath { path, source } => {
+                write!(
+                    formatter,
+                    "could not resolve machine state path {}: {source}",
+                    path.display()
+                )
             }
             Self::UnsupportedSchemaVersion(version) => {
                 write!(
@@ -46,6 +62,7 @@ impl Error for SqliteStoreError {
             Self::Sqlite(source) => Some(source),
             Self::Serialization(source) => Some(source),
             Self::CreateDataDirectory { source, .. } => Some(source),
+            Self::ResolveMachineStatePath { source, .. } => Some(source),
             _ => None,
         }
     }

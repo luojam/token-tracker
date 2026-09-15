@@ -167,6 +167,8 @@ pub struct SourceSessionKey {
 pub struct SessionProvenance {
     pub key: SourceSessionKey,
     pub source_path: Option<PathBuf>,
+    pub name: Option<String>,
+    pub working_directory: Option<PathBuf>,
     pub started_at: Timestamp,
     pub parent_session: Option<ParentSession>,
 }

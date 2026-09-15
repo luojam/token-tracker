@@ -39,7 +39,8 @@ pub(super) fn load_stored_sessions(
 ) -> Result<HashMap<i64, SessionProvenance>, SqliteStoreError> {
     let mut statement = connection.prepare(
         "SELECT session.id, session.agent, session.session_id,
-                session.started_at_ms, session.parent_session, source.source_key, session.parent_kind, source.path
+                session.started_at_ms, session.parent_session, source.source_key, session.parent_kind, source.path,
+                session.name, session.working_directory
          FROM sessions session JOIN import_sources source ON source.id = session.source_id",
     )?;
     let rows = statement.query_map([], |row| {
@@ -52,6 +53,8 @@ pub(super) fn load_stored_sessions(
                     source: SourceKey(row.get(5)?),
                 },
                 source_path: row.get::<_, Option<Vec<u8>>>(7)?.map(decode_path),
+                name: row.get(8)?,
+                working_directory: row.get::<_, Option<Vec<u8>>>(9)?.map(decode_path),
                 started_at: Timestamp::from_unix_milliseconds(row.get(3)?),
                 parent_session: decode_parent(row.get(6)?, row.get(4)?)
                     .map_err(to_sql_conversion_error)?,

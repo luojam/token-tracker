@@ -46,6 +46,8 @@ fn session(
     };
     let provenance = SessionProvenance {
         source_path: Some(path.into()),
+        name: None,
+        working_directory: None,
         key: key.clone(),
         started_at: Timestamp::from_unix_milliseconds(started_at),
         parent_session: parent_session.map(|path| ParentSession::SourcePath(path.into())),

@@ -1,10 +1,12 @@
 mod codec;
 mod error;
+mod machine_state;
 mod paths;
 mod pricing_context;
 
 use codec::*;
 pub use error::SqliteStoreError;
+pub(crate) use machine_state::MachineState;
 pub use paths::default_database_path;
 mod importing;
 mod parse_notices;

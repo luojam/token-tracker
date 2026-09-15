@@ -46,6 +46,8 @@ fn add_session(snapshot: &mut UsageSnapshot, agent: &str, id: &str, events: Vec<
     };
     snapshot.sessions.push(SessionProvenance {
         source_path: None,
+        name: None,
+        working_directory: None,
         key: key.clone(),
         started_at: Timestamp::from_unix_milliseconds(snapshot.sessions.len() as i64),
         parent_session: None,

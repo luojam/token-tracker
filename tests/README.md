@@ -1,7 +1,7 @@
 The suite starts at `integration.rs`, grouped by component:
 
 - `adapters/`: discovery and parsing.
-- `application/`: sync, event deduplication, and reports.
+- `application/`: sync, event deduplication, reports, and snapshot exports.
 - `pricing/`: rates, costs, and precision.
 - `storage/`: persistence and failure handling.
 - `cli/`: command wiring, rendered output, privacy, and failures.
