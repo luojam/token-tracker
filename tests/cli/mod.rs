@@ -18,7 +18,8 @@ fn command(home: &Path) -> Command {
         .env_remove("CODEX_HOME")
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("HERMES_HOME")
-        .env_remove("XDG_DATA_HOME");
+        .env_remove("XDG_DATA_HOME")
+        .env_remove("XDG_CONFIG_HOME");
     command
 }
 
@@ -287,11 +288,70 @@ fn export_round_trips_retained_usage_without_refreshing() {
     assert!(output.stdout.is_empty() && output.stderr.is_empty());
     let connection = rusqlite::Connection::open(&path).unwrap();
     let snapshot = read_export(&connection);
+    assert_eq!(snapshot.machine_name, None);
     assert_eq!(snapshot.events, expected.events);
     assert_eq!(snapshot.machine_id, expected.machine_id);
     assert_eq!(snapshot.export_revision, expected.export_revision + 1);
     assert_eq!(snapshot.format_version, expected.format_version);
     assert!(!String::from_utf8_lossy(&fs::read(path).unwrap()).contains("SECRET_"));
+}
+
+#[test]
+fn config_sets_export_name_with_xdg_precedence_and_home_fallback() {
+    let tree = TempTree::new();
+    tree.write(
+        ".config/token-tracker/config.toml",
+        "machine_name = 'laptop'\n",
+    );
+    tree.write(
+        "config/token-tracker/config.toml",
+        "machine_name = 'work'\n",
+    );
+    let path = tree.root.join("export.db");
+    let run = |config_home: &Path| {
+        let output = command(&tree.root)
+            .env("XDG_CONFIG_HOME", config_home)
+            .arg("export")
+            .arg(&path)
+            .arg("--force")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        read_export(&rusqlite::Connection::open(&path).unwrap())
+    };
+
+    let home = run(Path::new("relative-config"));
+    assert_eq!(home.machine_name.as_deref(), Some("laptop"));
+    let xdg = run(&tree.root.join("config"));
+    assert_eq!(xdg.machine_name.as_deref(), Some("work"));
+    assert_eq!(xdg.machine_id, home.machine_id);
+}
+
+#[test]
+fn invalid_config_fails_before_opening_storage_but_help_still_works() {
+    let tree = TempTree::new();
+    for content in [
+        "machine_name = [",
+        "machine_name = 42",
+        "machine_nam = 'typo'",
+    ] {
+        let path = tree.write(".config/token-tracker/config.toml", content);
+        let output = command(&tree.root).output().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("could not load config"), "{error}");
+        assert!(error.contains(path.to_str().unwrap()), "{error}");
+    }
+    assert!(!tree.root.join(".local").exists());
+    assert!(
+        command(&tree.root)
+            .arg("--help")
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
 }
 
 #[test]

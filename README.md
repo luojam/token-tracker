@@ -38,6 +38,21 @@ Run `token-tracker` first to import current usage; export does not refresh sourc
 The parent directory must exist. Use `--force` to replace an existing export;
 unrelated files are never overwritten.
 
+### Configuration
+
+Optionally create `~/.config/token-tracker/config.toml` (or
+`$XDG_CONFIG_HOME/token-tracker/config.toml` when `XDG_CONFIG_HOME` is an absolute
+path):
+
+```toml
+machine_name = "my-computer"
+```
+
+`machine_name` is an optional display name included in exports; it does not change
+machine identity. Missing files or an omitted name use the default (no name).
+Invalid TOML, unknown options, and unreadable files produce an error. The CLI
+never creates or rewrites this file.
+
 ### Pi
 
 ### Codex

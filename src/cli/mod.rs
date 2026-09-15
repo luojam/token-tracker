@@ -1,3 +1,4 @@
+mod config;
 mod exporting;
 mod reporting;
 
@@ -29,7 +30,12 @@ fn execute() -> Result<(), CliError> {
             .write_all(USAGE.as_bytes())
             .map_err(CliError::Output);
     }
-    let mut tracker = TokenTracker::open(TokenTrackerConfig::default()).map_err(CliError::Open)?;
+    let config = config::Config::load()?;
+    let mut tracker = TokenTracker::open(TokenTrackerConfig {
+        machine_name: config.machine_name,
+        ..Default::default()
+    })
+    .map_err(CliError::Open)?;
 
     if let Command::Export { path, force } = command {
         let snapshot = tracker.export_snapshot().map_err(CliError::Export)?;
@@ -92,6 +98,10 @@ fn parse_command() -> Result<Command, CliError> {
 #[derive(Debug)]
 enum CliError {
     Arguments,
+    Config {
+        path: PathBuf,
+        source: io::Error,
+    },
     Open(SqliteStoreError),
     Import(ImportSynchronizationError),
     Report(ReportError),
@@ -111,6 +121,13 @@ impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Arguments => write!(formatter, "invalid arguments\n{USAGE}"),
+            Self::Config { path, source } => {
+                write!(
+                    formatter,
+                    "could not load config {}: {source}",
+                    path.display()
+                )
+            }
             Self::Open(source) => write!(formatter, "could not open usage storage: {source}"),
             Self::Import(source) => write!(formatter, "session synchronization failed: {source}"),
             Self::Report(source) => write!(formatter, "all-time summary failed: {source}"),
