@@ -1,13 +1,14 @@
 CREATE TABLE IF NOT EXISTS snapshot (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    machine_id TEXT NOT NULL,
+    machine_id TEXT PRIMARY KEY NOT NULL,
     machine_name TEXT,
     export_revision TEXT NOT NULL,
     format_version INTEGER NOT NULL,
-    exported_at_unix_ms INTEGER NOT NULL
+    exported_at_unix_ms INTEGER NOT NULL,
+    payload TEXT NOT NULL CHECK (json_valid(payload))
 );
 
 CREATE TABLE IF NOT EXISTS events (
+    machine_id TEXT NOT NULL,
     agent TEXT NOT NULL,
     event_key TEXT NOT NULL,
     timestamp_unix_ms INTEGER NOT NULL,
@@ -22,5 +23,5 @@ CREATE TABLE IF NOT EXISTS events (
     estimate TEXT NOT NULL CHECK (json_valid(estimate)),
     pricing_context TEXT CHECK (json_valid(pricing_context)),
     sessions TEXT NOT NULL CHECK (json_valid(sessions)),
-    PRIMARY KEY (agent, event_key)
+    PRIMARY KEY (machine_id, agent, event_key)
 );

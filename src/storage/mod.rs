@@ -1,3 +1,5 @@
+mod exporting;
+pub use exporting::SqliteExportSink;
 mod codec;
 mod error;
 mod machine_state;

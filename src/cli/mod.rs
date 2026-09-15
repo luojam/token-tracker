@@ -103,7 +103,7 @@ enum CliError {
     },
     ExportDatabase {
         path: PathBuf,
-        source: rusqlite::Error,
+        source: token_tracker::PublishError<rusqlite::Error>,
     },
 }
 

@@ -10,4 +10,4 @@ pub use application::{
     SynchronizationReport, TokenTracker, TokenTrackerConfig, UsageReport,
 };
 pub use domain::export::ExportSnapshot;
-pub use storage::SqliteStoreError;
+pub use storage::{SqliteExportSink, SqliteStoreError};

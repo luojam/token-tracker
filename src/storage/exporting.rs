@@ -1,0 +1,198 @@
+use std::{collections::HashSet, io, path::Path, time::Duration};
+
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+
+use crate::domain::export::EXPORT_FORMAT_VERSION;
+use crate::{ExportSink, ExportSnapshot, PublishError, PublishOutcome};
+
+const APPLICATION_ID: i32 = 0x54544558;
+
+pub struct SqliteExportSink {
+    connection: Connection,
+}
+
+impl SqliteExportSink {
+    pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
+        let mut connection = Connection::open(path)?;
+        connection.busy_timeout(Duration::from_secs(5))?;
+        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let application_id: i32 =
+            transaction.pragma_query_value(None, "application_id", |row| row.get(0))?;
+        let empty: bool = transaction.query_row(
+            "SELECT NOT EXISTS (SELECT 1 FROM sqlite_master)",
+            [],
+            |row| row.get(0),
+        )?;
+        if application_id != APPLICATION_ID && !(application_id == 0 && empty) {
+            return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "destination is not a token-tracker export database",
+                ),
+            )));
+        }
+        transaction.execute_batch(include_str!("export_schema.sql"))?;
+        transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
+        transaction.commit()?;
+        Ok(Self { connection })
+    }
+}
+
+impl ExportSink for SqliteExportSink {
+    type Error = rusqlite::Error;
+
+    fn publish(
+        &mut self,
+        snapshot: &ExportSnapshot,
+    ) -> Result<PublishOutcome, PublishError<Self::Error>> {
+        let mut identities = HashSet::new();
+        if snapshot.format_version != EXPORT_FORMAT_VERSION
+            || snapshot.export_revision == 0
+            || snapshot.machine_id.is_empty()
+            || snapshot.events.iter().any(|event| {
+                event.agent.is_empty()
+                    || event.event_key.is_empty()
+                    || !identities.insert((&event.agent, &event.event_key))
+            })
+        {
+            return Err(PublishError::InvalidSnapshot {
+                reason: "unsupported format, invalid identity or revision, or duplicate event"
+                    .into(),
+            });
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(PublishError::Destination)?;
+        let stored: Option<String> = transaction
+            .query_row(
+                "SELECT payload FROM snapshot WHERE machine_id = ?1",
+                [&snapshot.machine_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(PublishError::Destination)?;
+        if let Some(stored) = stored {
+            let current: ExportSnapshot = serde_json::from_str(&stored).map_err(|error| {
+                PublishError::Destination(rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                ))
+            })?;
+            if snapshot.export_revision < current.export_revision {
+                return Err(PublishError::StaleRevision {
+                    incoming_revision: snapshot.export_revision,
+                    published_revision: current.export_revision,
+                });
+            }
+            if snapshot.export_revision == current.export_revision {
+                return if snapshot == &current {
+                    Ok(PublishOutcome::AlreadyPublished)
+                } else {
+                    Err(PublishError::RevisionConflict {
+                        revision: snapshot.export_revision,
+                    })
+                };
+            }
+        }
+        replace_contents(&transaction, snapshot).map_err(PublishError::Destination)?;
+        transaction.commit().map_err(PublishError::Destination)?;
+        Ok(PublishOutcome::Published)
+    }
+}
+
+fn replace_contents(
+    transaction: &rusqlite::Transaction<'_>,
+    snapshot: &ExportSnapshot,
+) -> rusqlite::Result<()> {
+    transaction.execute(
+        "DELETE FROM events WHERE machine_id = ?1",
+        [&snapshot.machine_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM snapshot WHERE machine_id = ?1",
+        [&snapshot.machine_id],
+    )?;
+    transaction.execute(
+        "INSERT INTO snapshot VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            snapshot.machine_id,
+            snapshot.machine_name,
+            snapshot.export_revision.to_string(),
+            snapshot.format_version,
+            snapshot.exported_at_unix_ms,
+            json(snapshot)?,
+        ],
+    )?;
+    {
+        let mut insert = transaction.prepare(
+            "INSERT INTO events VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        )?;
+        for event in &snapshot.events {
+            let usage_kind = serde_json::to_value(event.usage_kind)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            insert.execute(params![
+                snapshot.machine_id,
+                event.agent,
+                event.event_key,
+                event.timestamp_unix_ms,
+                usage_kind.as_str(),
+                event.provider,
+                event.model,
+                event.tokens.input.to_string(),
+                event.tokens.output.to_string(),
+                event.tokens.cache_read.to_string(),
+                event.tokens.cache_write.to_string(),
+                event.recorded_cost_usd.as_ref().map(|cost| cost.as_str()),
+                json(&event.estimate)?,
+                event.pricing_context.as_ref().map(json).transpose()?,
+                json(&event.sessions)?,
+            ])?;
+        }
+    }
+    Ok(())
+}
+
+fn json(value: &impl serde::Serialize) -> rusqlite::Result<String> {
+    serde_json::to_string(value)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::EstimatedCost;
+
+    #[test]
+    fn preserves_unsigned_integer_and_decimal_money_precision() {
+        let mut snapshot: ExportSnapshot =
+            serde_json::from_str(include_str!("../../tests/fixtures/export-example.json")).unwrap();
+        snapshot.export_revision = u64::MAX;
+        snapshot.events[0].tokens.input = u64::MAX;
+        snapshot.events[0].recorded_cost_usd =
+            Some(EstimatedCost::from_picodollars(u128::MAX).into());
+        let mut connection = Connection::open_in_memory().unwrap();
+        let transaction = connection.transaction().unwrap();
+        transaction
+            .execute_batch(include_str!("export_schema.sql"))
+            .unwrap();
+        replace_contents(&transaction, &snapshot).unwrap();
+        transaction.commit().unwrap();
+        let values: (String, String, String) = connection
+            .query_row(
+                "SELECT export_revision, input_tokens, recorded_cost_usd FROM snapshot, events",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            values,
+            (
+                "18446744073709551615".into(),
+                "18446744073709551615".into(),
+                "340282366920938463463374607.431768211455".into(),
+            )
+        );
+    }
+}
