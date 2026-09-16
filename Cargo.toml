@@ -2,10 +2,21 @@
 name = "token-tracker"
 version = "0.1.0"
 edition = "2024"
+default-run = "token-tracker"
+
+[features]
+server = ["dep:axum", "dep:tokio"]
+
+[[bin]]
+name = "token-tracker-server"
+path = "src/bin/server.rs"
+required-features = ["server"]
 
 [dependencies]
+axum = { version = "0.8", optional = true }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"], optional = true }
 toml = { version = "1.1", default-features = false, features = ["std", "serde", "parse"] }

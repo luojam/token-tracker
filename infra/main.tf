@@ -183,6 +183,11 @@ resource "aws_instance" "server" {
   })
 
   user_data_replace_on_change = true
+
+  lifecycle {
+    # The provider reports true after the Elastic IP is attached.
+    ignore_changes = [associate_public_ip_address]
+  }
 }
 
 resource "aws_eip" "server" {
@@ -198,6 +203,23 @@ resource "aws_eip_association" "server" {
   allocation_id = aws_eip.server.id
 
   depends_on = [aws_internet_gateway.main]
+}
+
+resource "aws_s3_bucket" "deployments" {
+  bucket_prefix = "token-tracker-deployments-"
+}
+
+resource "aws_s3_bucket_public_access_block" "deployments" {
+  bucket = aws_s3_bucket.deployments.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+output "deployment_bucket_name" {
+  value = aws_s3_bucket.deployments.id
 }
 
 output "aws_account_id" {
