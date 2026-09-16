@@ -117,6 +117,20 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+resource "aws_iam_role_policy" "deployment_downloads" {
+  name = "token-tracker-deployment-downloads"
+  role = aws_iam_role.server.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "s3:GetObject"
+      Resource = "${aws_s3_bucket.deployments.arn}/*"
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "server" {
   name = "token-tracker-server"
   role = aws_iam_role.server.name

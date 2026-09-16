@@ -99,6 +99,54 @@ Usage is stored in SQLite at `~/.local/share/token-tracker/usage.db` (or under
 Only usage and session metadata are stored. Imported usage is kept even after
 session files or Hermes sessions/databases are deleted.
 
+## Server (in progress...) 
+
+Axum server is available behind the optional `server` feature:
+
+```sh
+cargo run --features server --bin token-tracker-server
+```
+
+### Musl build for EC2 Amazon Linux compatibility
+
+Install requirements:
+
+```sh
+sudo dnf install musl-gcc
+rustup target add x86_64-unknown-linux-musl
+```
+
+Build the compatible binary locally before moving it onto the EC2 instance:
+
+```sh
+CC_x86_64_unknown_linux_musl=musl-gcc \
+CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
+cargo build --locked --release \
+  --target x86_64-unknown-linux-musl \
+  --features server \
+  --bin token-tracker-server
+```
+
+### Copy the binary onto ec2
+
+Make sure it is executable:
+
+```sh
+chmod +x /tmp/token-tracker-server
+```
+
+Run from `/tmp/` during dev:
+
+```sh
+nohup /tmp/token-tracker-server > /tmp/token-tracker-server.log 2>&1 < /dev/null &
+```
+
+## Infra
+
+`infra/main.tf` uses Terraform to define the EC2 instance, networking,
+SSM access, and an encrypted 10 GB data volume mounted at `/var/lib/token-tracker`
+by the startup script. Caddy was installed manually on EC2.
+
 ## Development
 
 See [tests/README.md](tests/README.md) for test layout and conventions.
