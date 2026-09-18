@@ -6,6 +6,7 @@ The suite starts at `integration.rs`, grouped by component:
 - `storage/`: persistence and failure handling.
 - `cli/`: command wiring, rendered output, privacy, and failures.
 - `export/`: serialized contract, money precision, and destination publication semantics.
+- `server/`: authenticated uploads, validation, and persistence (requires `--features server`).
 
 Reuse `support/` and fixtures. Name tests after behavior and keep expected values
 independent of the implementation. Test lifecycles at the application layer, not
@@ -16,4 +17,5 @@ Run all tests with `cargo test`, or filter by module:
 ```sh
 cargo test --test integration adapters::codex
 cargo test --test integration storage::
+cargo test --features server --test integration server::
 ```

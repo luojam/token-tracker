@@ -101,11 +101,26 @@ session files or Hermes sessions/databases are deleted.
 
 ## Server (in progress...) 
 
-Axum server is available behind the optional `server` feature:
+Run the server on `127.0.0.1:3000`:
 
 ```sh
 cargo run --features server --bin token-tracker-server
 ```
+
+Create `/etc/token-tracker/auth.token` with a random token (`openssl rand -hex 32`),
+owned by the server user with permissions `600`. Restart after changing it.
+
+`POST /snapshots` accepts [snapshot JSON](tests/fixtures/export-example.json) with
+`Content-Type: application/json` and `Authorization: Bearer <token>`.
+Duplicate uploads succeed; stale or conflicting revisions return HTTP 409.
+`GET /health` is public.
+
+| Environment variable | Default |
+| --- | --- |
+| `TOKEN_TRACKER_SERVER_DATABASE` | `/var/lib/token-tracker/snapshots.db` |
+| `TOKEN_TRACKER_MAX_UPLOAD_BYTES` | `33554432` (32 MiB) |
+
+The database directory must exist and be writable by the server user.
 
 ### Musl build for EC2 Amazon Linux compatibility
 

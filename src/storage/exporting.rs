@@ -78,10 +78,18 @@ impl ExportSink for SqliteExportSink {
                 event.agent.is_empty()
                     || event.event_key.is_empty()
                     || !identities.insert((&event.agent, &event.event_key))
+                    || [
+                        event.tokens.input,
+                        event.tokens.output,
+                        event.tokens.cache_read,
+                        event.tokens.cache_write,
+                    ]
+                    .into_iter()
+                    .any(|count| count > i64::MAX as u64)
             })
         {
             return Err(PublishError::InvalidSnapshot {
-                reason: "unsupported format, invalid identity or revision, or duplicate event"
+                reason: "unsupported format, invalid identity, revision or token count, or duplicate event"
                     .into(),
             });
         }

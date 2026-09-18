@@ -2,6 +2,8 @@ pub mod adapters;
 pub mod application;
 pub mod domain;
 pub mod pricing;
+#[cfg(feature = "server")]
+pub mod server;
 pub mod storage;
 
 pub use application::{
