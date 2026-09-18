@@ -1,8 +1,7 @@
-use std::{collections::HashSet, io, path::Path, time::Duration};
+use std::{io, path::Path, time::Duration};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
-use crate::domain::export::EXPORT_FORMAT_VERSION;
 use crate::{ExportSink, ExportSnapshot, PublishError, PublishOutcome};
 
 const APPLICATION_ID: i32 = 0x54544558;
@@ -70,27 +69,23 @@ impl ExportSink for SqliteExportSink {
         &mut self,
         snapshot: &ExportSnapshot,
     ) -> Result<PublishOutcome, PublishError<Self::Error>> {
-        let mut identities = HashSet::new();
-        if snapshot.format_version != EXPORT_FORMAT_VERSION
-            || snapshot.export_revision == 0
-            || snapshot.machine_id.is_empty()
-            || snapshot.events.iter().any(|event| {
-                event.agent.is_empty()
-                    || event.event_key.is_empty()
-                    || !identities.insert((&event.agent, &event.event_key))
-                    || [
-                        event.tokens.input,
-                        event.tokens.output,
-                        event.tokens.cache_read,
-                        event.tokens.cache_write,
-                    ]
-                    .into_iter()
-                    .any(|count| count > i64::MAX as u64)
-            })
-        {
+        snapshot
+            .validate()
+            .map_err(|reason| PublishError::InvalidSnapshot {
+                reason: reason.into(),
+            })?;
+        if snapshot.events.iter().any(|event| {
+            [
+                event.tokens.input,
+                event.tokens.output,
+                event.tokens.cache_read,
+                event.tokens.cache_write,
+            ]
+            .into_iter()
+            .any(|count| count > i64::MAX as u64)
+        }) {
             return Err(PublishError::InvalidSnapshot {
-                reason: "unsupported format, invalid identity, revision or token count, or duplicate event"
-                    .into(),
+                reason: "token count exceeds SQLite signed 64-bit integer range".into(),
             });
         }
         let transaction = self

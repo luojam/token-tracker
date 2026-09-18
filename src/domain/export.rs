@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -15,6 +17,30 @@ pub struct ExportSnapshot {
     pub format_version: u32,
     pub exported_at_unix_ms: i64,
     pub events: Vec<ExportEvent>,
+}
+
+impl ExportSnapshot {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.format_version != EXPORT_FORMAT_VERSION {
+            return Err("unsupported snapshot format version");
+        }
+        if self.export_revision == 0 {
+            return Err("snapshot revision must be nonzero");
+        }
+        if self.machine_id.is_empty() {
+            return Err("snapshot machine ID must be nonempty");
+        }
+        let mut identities = HashSet::new();
+        for event in &self.events {
+            if event.agent.is_empty() || event.event_key.is_empty() {
+                return Err("event agent and key must be nonempty");
+            }
+            if !identities.insert((&event.agent, &event.event_key)) {
+                return Err("duplicate event identity");
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One deduplicated event, unique by (agent, event_key) within its machine snapshot.

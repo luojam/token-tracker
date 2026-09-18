@@ -16,22 +16,28 @@ impl ServerConfig {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let database_path = environment_path("TOKEN_TRACKER_SERVER_DATABASE")?
             .unwrap_or_else(|| PathBuf::from("/var/lib/token-tracker/snapshots.db"));
-        let max_upload_bytes = match env::var("TOKEN_TRACKER_MAX_UPLOAD_BYTES") {
-            Ok(value) => value
-                .parse::<usize>()
-                .ok()
-                .filter(|size| *size > 0)
-                .ok_or_else(|| {
-                    io::Error::other("TOKEN_TRACKER_MAX_UPLOAD_BYTES must be a positive integer")
-                })?,
-            Err(env::VarError::NotPresent) => 32 * 1024 * 1024,
-            Err(error) => return Err(error.into()),
-        };
         Ok(Self {
-            auth_file: PathBuf::from("/etc/token-tracker/auth.token"),
+            auth_file: environment_path("TOKEN_TRACKER_SERVER_AUTH_FILE")?
+                .unwrap_or_else(|| PathBuf::from("/etc/token-tracker/auth.token")),
             database_path,
-            max_upload_bytes,
+            max_upload_bytes: environment_size("TOKEN_TRACKER_MAX_UPLOAD_BYTES", 32 * 1024 * 1024)?,
         })
+    }
+
+    pub fn read_token(&self) -> io::Result<String> {
+        read_token(&self.auth_file)
+    }
+}
+
+fn environment_size(name: &str, default: usize) -> Result<usize, Box<dyn std::error::Error>> {
+    match env::var(name) {
+        Ok(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|size| *size > 0)
+            .ok_or_else(|| io::Error::other(format!("{name} must be a positive integer")).into()),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -47,7 +53,14 @@ fn environment_path(name: &str) -> io::Result<Option<PathBuf>> {
         .transpose()
 }
 
-pub(super) fn read_token(path: &Path) -> io::Result<String> {
+pub(super) fn valid_token(token: &str) -> bool {
+    (32..=4096).contains(&token.len())
+        && token
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-._~+/=".contains(&byte))
+}
+
+fn read_token(path: &Path) -> io::Result<String> {
     let invalid = |message| {
         io::Error::new(
             io::ErrorKind::InvalidData,
@@ -69,12 +82,7 @@ pub(super) fn read_token(path: &Path) -> io::Result<String> {
     let mut contents = String::new();
     file.take(4097).read_to_string(&mut contents)?;
     let token = contents.trim_end_matches(['\r', '\n']);
-    if contents.len() > 4096
-        || token.len() < 32
-        || !token
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"-._~+/=".contains(&byte))
-    {
+    if contents.len() > 4096 || !valid_token(token) {
         return Err(invalid(
             "must contain one bearer token of at least 32 characters, at most 4096 bytes including its newline",
         ));

@@ -107,7 +107,8 @@ Run the server on `127.0.0.1:3000`:
 cargo run --features server --bin token-tracker-server
 ```
 
-Create `/etc/token-tracker/auth.token` with a random token (`openssl rand -hex 32`),
+Create `/etc/token-tracker/auth.token` (or the path set by `TOKEN_TRACKER_SERVER_AUTH_FILE`)
+with a random token (`openssl rand -hex 32`),
 owned by the server user with permissions `600`. Restart after changing it.
 
 `POST /snapshots` accepts [snapshot JSON](tests/fixtures/export-example.json) with
@@ -117,6 +118,7 @@ Duplicate uploads succeed; stale or conflicting revisions return HTTP 409.
 
 | Environment variable | Default |
 | --- | --- |
+| `TOKEN_TRACKER_SERVER_AUTH_FILE` | `/etc/token-tracker/auth.token` |
 | `TOKEN_TRACKER_SERVER_DATABASE` | `/var/lib/token-tracker/snapshots.db` |
 | `TOKEN_TRACKER_MAX_UPLOAD_BYTES` | `33554432` (32 MiB) |
 

@@ -13,34 +13,35 @@ use axum::{
 use serde_json::json;
 use subtle::ConstantTimeEq;
 
-use crate::{ExportSink, ExportSnapshot, PublishError, PublishOutcome, SqliteExportSink};
+use crate::{ExportSink, ExportSnapshot, PublishError, PublishOutcome};
 
 pub use config::ServerConfig;
 
-struct ServerState {
+pub fn router<S: ExportSink + Send + 'static>(
     token: String,
-    sink: Mutex<SqliteExportSink>,
-}
-
-pub fn router(config: ServerConfig) -> Result<Router, Box<dyn std::error::Error>> {
-    let token = config::read_token(&config.auth_file)?;
-    if config.max_upload_bytes == 0 {
+    sink: S,
+    max_upload_bytes: usize,
+) -> Result<Router, Box<dyn std::error::Error>> {
+    if !config::valid_token(&token) {
+        return Err("authentication token must be 32-4096 ASCII bearer-token characters".into());
+    }
+    if max_upload_bytes == 0 {
         return Err("maximum upload size must be positive".into());
     }
-    let state = Arc::new(ServerState {
-        token,
-        sink: Mutex::new(SqliteExportSink::open(config.database_path)?),
-    });
+    let state = Arc::new(Mutex::new(sink));
     Ok(Router::new()
-        .route("/snapshots", post(upload))
-        .layer(DefaultBodyLimit::max(config.max_upload_bytes))
-        .route_layer(middleware::from_fn_with_state(state.clone(), authenticate))
+        .route("/snapshots", post(upload::<S>))
+        .layer(DefaultBodyLimit::max(max_upload_bytes))
+        .route_layer(middleware::from_fn_with_state(
+            Arc::<str>::from(token),
+            authenticate,
+        ))
         .route("/health", get(|| async { "ok\n" }))
         .with_state(state))
 }
 
 async fn authenticate(
-    State(state): State<Arc<ServerState>>,
+    State(expected_token): State<Arc<str>>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -52,7 +53,7 @@ async fn authenticate(
         .filter(|(scheme, _)| scheme.eq_ignore_ascii_case("Bearer"))
         .map(|(_, token)| token.as_bytes());
     if headers.next().is_some()
-        || !token.is_some_and(|token| bool::from(token.ct_eq(state.token.as_bytes())))
+        || !token.is_some_and(|token| bool::from(token.ct_eq(expected_token.as_bytes())))
     {
         let mut response = error(StatusCode::UNAUTHORIZED, "unauthorized");
         response
@@ -63,8 +64,8 @@ async fn authenticate(
     next.run(request).await
 }
 
-async fn upload(
-    State(state): State<Arc<ServerState>>,
+async fn upload<S: ExportSink + Send + 'static>(
+    State(sink): State<Arc<Mutex<S>>>,
     payload: Result<Json<ExportSnapshot>, JsonRejection>,
 ) -> Response {
     let snapshot = match payload {
@@ -85,9 +86,12 @@ async fn upload(
     let machine_id = snapshot.machine_id.clone();
     let export_revision = snapshot.export_revision;
     let result = tokio::task::spawn_blocking(move || {
-        state
-            .sink
-            .lock()
+        snapshot
+            .validate()
+            .map_err(|reason| PublishError::InvalidSnapshot {
+                reason: reason.into(),
+            })?;
+        sink.lock()
             .expect("snapshot storage lock poisoned")
             .publish(&snapshot)
     })

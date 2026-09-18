@@ -1,4 +1,4 @@
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::{fs, io, os::unix::fs::PermissionsExt};
 
 use axum::{
     Router,
@@ -7,19 +7,19 @@ use axum::{
     response::Response,
 };
 use serde_json::{Value, json};
-use token_tracker::server::{ServerConfig, router};
+use token_tracker::{
+    ExportSink, ExportSnapshot, PublishError, PublishOutcome, SqliteExportSink,
+    server::{ServerConfig, router},
+};
 use tower::ServiceExt;
 
 use crate::support::TempTree;
 
 const TOKEN: &str = "test-token-with-at-least-32-characters";
 
-fn config(tree: &TempTree, limit: usize) -> ServerConfig {
-    ServerConfig {
-        auth_file: tree.root.join("auth.token"),
-        database_path: tree.root.join("snapshots.db"),
-        max_upload_bytes: limit,
-    }
+fn sqlite_router(tree: &TempTree, limit: usize) -> Router {
+    let sink = SqliteExportSink::open(tree.root.join("snapshots.db")).unwrap();
+    router(TOKEN.into(), sink, limit).unwrap()
 }
 
 fn auth_file(tree: &TempTree) {
@@ -51,31 +51,31 @@ async fn body(response: Response) -> Value {
 #[test]
 fn startup_requires_a_private_valid_auth_file() {
     let tree = TempTree::new();
-    assert!(router(config(&tree, 4096)).is_err());
+    let config = ServerConfig {
+        auth_file: tree.root.join("auth.token"),
+        database_path: tree.root.join("snapshots.db"),
+        max_upload_bytes: 4096,
+    };
+    assert!(config.read_token().is_err());
     auth_file(&tree);
-    fs::set_permissions(
-        tree.root.join("auth.token"),
-        fs::Permissions::from_mode(0o644),
-    )
-    .unwrap();
-    assert!(router(config(&tree, 4096)).is_err());
-    fs::set_permissions(
-        tree.root.join("auth.token"),
-        fs::Permissions::from_mode(0o600),
-    )
-    .unwrap();
+    assert_eq!(config.read_token().unwrap(), TOKEN);
+    fs::set_permissions(&config.auth_file, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(config.read_token().is_err());
+    auth_file(&tree);
     tree.write("auth.token", "");
-    assert!(router(config(&tree, 4096)).is_err());
-    assert!(!tree.root.join("snapshots.db").exists());
-    auth_file(&tree);
-    assert!(router(config(&tree, 4096)).is_ok());
+    assert!(config.read_token().is_err());
+}
+
+#[test]
+fn router_rejects_invalid_authentication_tokens() {
+    let sink = SqliteExportSink::open(":memory:").unwrap();
+    assert!(router(format!("{TOKEN}\n"), sink, 4096).is_err());
 }
 
 #[tokio::test]
 async fn authentication_precedes_body_processing_and_health_stays_public() {
     let tree = TempTree::new();
-    auth_file(&tree);
-    let app = router(config(&tree, 16)).unwrap();
+    let app = sqlite_router(&tree, 16);
     for credentials in [None, Some("Bearer wrong-token")] {
         let mut request = Request::post("/snapshots");
         if let Some(credentials) = credentials {
@@ -97,11 +97,41 @@ async fn authentication_precedes_body_processing_and_health_stays_public() {
 }
 
 #[tokio::test]
+async fn uploads_validate_independently_of_storage_and_hide_storage_errors() {
+    struct FailingSink;
+
+    impl ExportSink for FailingSink {
+        type Error = io::Error;
+
+        fn publish(
+            &mut self,
+            _: &ExportSnapshot,
+        ) -> Result<PublishOutcome, PublishError<Self::Error>> {
+            Err(PublishError::Destination(io::Error::other(
+                "private storage detail",
+            )))
+        }
+    }
+
+    let app = router(TOKEN.into(), FailingSink, 4096).unwrap();
+    let mut snapshot = snapshot();
+    snapshot["events"][0]["tokens"]["input"] = json!(u64::MAX);
+    let response = upload(&app, &snapshot).await;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body(response).await, json!({"error": "storage_error"}));
+
+    snapshot["format_version"] = json!(0);
+    assert_eq!(
+        upload(&app, &snapshot).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+}
+
+#[tokio::test]
 async fn uploads_persist_across_restarts_and_keep_revision_rules() {
     let tree = TempTree::new();
-    auth_file(&tree);
     let first = snapshot();
-    let app = router(config(&tree, 4096)).unwrap();
+    let app = sqlite_router(&tree, 4096);
     let response = upload(&app, &first).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -112,7 +142,7 @@ async fn uploads_persist_across_restarts_and_keep_revision_rules() {
     );
     drop(app);
 
-    let app = router(config(&tree, 4096)).unwrap();
+    let app = sqlite_router(&tree, 4096);
     assert_eq!(
         body(upload(&app, &first).await).await["status"],
         "already_published"
@@ -136,12 +166,11 @@ async fn uploads_persist_across_restarts_and_keep_revision_rules() {
 #[tokio::test]
 async fn invalid_snapshots_and_oversized_bodies_do_not_replace_stored_data() {
     let tree = TempTree::new();
-    auth_file(&tree);
     let first = snapshot();
     let mut invalid = first.clone();
     invalid["export_revision"] = json!(2);
     invalid["events"][0]["tokens"]["input"] = json!(u64::MAX);
-    let app = router(config(&tree, invalid.to_string().len())).unwrap();
+    let app = sqlite_router(&tree, invalid.to_string().len());
     assert_eq!(upload(&app, &first).await.status(), StatusCode::OK);
     assert_eq!(
         upload(&app, &invalid).await.status(),
@@ -163,8 +192,7 @@ async fn invalid_snapshots_and_oversized_bodies_do_not_replace_stored_data() {
 #[tokio::test]
 async fn upload_requires_json_with_the_snapshot_structure() {
     let tree = TempTree::new();
-    auth_file(&tree);
-    let app = router(config(&tree, 4096)).unwrap();
+    let app = sqlite_router(&tree, 4096);
     for (content_type, payload, status) in [
         ("text/plain", "{}", StatusCode::UNSUPPORTED_MEDIA_TYPE),
         ("application/json", "{", StatusCode::BAD_REQUEST),
