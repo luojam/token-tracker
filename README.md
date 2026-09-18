@@ -38,6 +38,18 @@ Run `token-tracker` first to import current usage; export does not refresh sourc
 The parent directory must exist. Use `--force` to replace an existing export;
 unrelated files are never overwritten.
 
+### Server upload
+
+Upload all locally retained usage to a server:
+
+```sh
+token-tracker upload https://tracker.example.com --auth-file /path/to/auth.token
+```
+
+Use the server's token in a file with permissions `600`. HTTPS is required except
+on loopback. Run `token-tracker` first to import current usage; upload does not
+refresh sources.
+
 ### Configuration
 
 Optionally create `~/.config/token-tracker/config.toml` (or

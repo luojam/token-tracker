@@ -4,6 +4,8 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output};
 
+mod uploading;
+
 const ALL_USAGE: &str = include_str!("../fixtures/pi/all-usage.jsonl");
 const CODEX_USAGE: &str = include_str!("../fixtures/codex/response-mirrors.jsonl");
 const CLAUDE_USAGE: &str = include_str!("../fixtures/claude/snapshots.jsonl");

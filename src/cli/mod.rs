@@ -1,6 +1,7 @@
 mod config;
 mod exporting;
 mod reporting;
+mod uploading;
 
 use std::fmt;
 use std::io::{self, Write};
@@ -31,11 +32,27 @@ fn execute() -> Result<(), CliError> {
             .map_err(CliError::Output);
     }
     let config = config::Config::load()?;
+    let uploader = if let Command::Upload { url, auth_file } = &command {
+        Some(uploading::Uploader::new(url, auth_file).map_err(CliError::Upload)?)
+    } else {
+        None
+    };
     let mut tracker = TokenTracker::open(TokenTrackerConfig {
         machine_name: config.machine_name,
         ..Default::default()
     })
     .map_err(CliError::Open)?;
+
+    if let Some(uploader) = uploader {
+        let snapshot = tracker.export_snapshot().map_err(CliError::Export)?;
+        let status = uploader.upload(&snapshot).map_err(CliError::Upload)?;
+        return writeln!(
+            io::stdout().lock(),
+            "Snapshot revision {} {status}.",
+            snapshot.export_revision
+        )
+        .map_err(CliError::Output);
+    }
 
     if let Command::Export { path, force } = command {
         let snapshot = tracker.export_snapshot().map_err(CliError::Export)?;
@@ -57,11 +74,20 @@ fn execute() -> Result<(), CliError> {
         .map_err(CliError::Output)
 }
 
-const USAGE: &str = "Usage: token-tracker\n       token-tracker export <path> [--force]\n\nWithout arguments, refresh sources and show the usage report.\nExport writes retained usage to SQLite without refreshing sources.\nExisting exports require --force. Use -- before paths beginning with '-'.\n";
+const USAGE: &str = "Usage: token-tracker
+       token-tracker export <path> [--force]
+       token-tracker upload <server-url> --auth-file <path>
+
+Without arguments, refresh sources and show the usage report.
+Export and upload use retained usage without refreshing sources.
+Existing exports require --force. Use -- before paths beginning with '-'.
+Upload requires HTTPS (HTTP is allowed for loopback addresses).
+";
 
 enum Command {
     Report,
     Export { path: PathBuf, force: bool },
+    Upload { url: String, auth_file: PathBuf },
     Help,
 }
 
@@ -72,6 +98,27 @@ fn parse_command() -> Result<Command, CliError> {
     };
     if (command == "--help" || command == "-h") && args.next().is_none() {
         return Ok(Command::Help);
+    }
+    if command == "upload" {
+        let url = args
+            .next()
+            .and_then(|arg| arg.into_string().ok())
+            .filter(|arg| !arg.is_empty())
+            .ok_or(CliError::Arguments)?;
+        if args.next().as_deref() != Some(std::ffi::OsStr::new("--auth-file")) {
+            return Err(CliError::Arguments);
+        }
+        let auth_file = args
+            .next()
+            .filter(|arg| !arg.is_empty())
+            .ok_or(CliError::Arguments)?;
+        if args.next().is_some() {
+            return Err(CliError::Arguments);
+        }
+        return Ok(Command::Upload {
+            url,
+            auth_file: auth_file.into(),
+        });
     }
     if command != "export" {
         return Err(CliError::Arguments);
@@ -111,6 +158,7 @@ enum CliError {
     Report(ReportError),
     Output(io::Error),
     Export(ExportError),
+    Upload(uploading::UploadError),
     ExportOutput {
         path: PathBuf,
         source: io::Error,
@@ -137,6 +185,7 @@ impl fmt::Display for CliError {
             Self::Report(source) => write!(formatter, "all-time summary failed: {source}"),
             Self::Output(source) => write!(formatter, "could not write report: {source}"),
             Self::Export(source) => write!(formatter, "could not build export: {source}"),
+            Self::Upload(source) => write!(formatter, "could not upload snapshot: {source}"),
             Self::ExportDatabase { path, source } => write!(
                 formatter,
                 "could not write export to {}: {source}",

@@ -22,7 +22,7 @@ pub fn router<S: ExportSink + Send + 'static>(
     sink: S,
     max_upload_bytes: usize,
 ) -> Result<Router, Box<dyn std::error::Error>> {
-    if !config::valid_token(&token) {
+    if !crate::auth::valid_token(&token) {
         return Err("authentication token must be 32-4096 ASCII bearer-token characters".into());
     }
     if max_upload_bytes == 0 {
