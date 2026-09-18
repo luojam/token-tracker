@@ -111,9 +111,56 @@ pub enum ExportParentSession {
 #[serde(try_from = "String")]
 pub struct UsdAmount(String);
 
+impl Default for UsdAmount {
+    fn default() -> Self {
+        Self("0".into())
+    }
+}
+
 impl UsdAmount {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub(crate) fn add(&self, other: &Self) -> Self {
+        let (left_whole, left_fraction) = self.0.split_once('.').unwrap_or((&self.0, ""));
+        let (right_whole, right_fraction) = other.0.split_once('.').unwrap_or((&other.0, ""));
+        let scale = left_fraction.len().max(right_fraction.len());
+        fn digits<'a>(
+            whole: &'a str,
+            fraction: &'a str,
+            scale: usize,
+        ) -> impl Iterator<Item = u8> + 'a {
+            std::iter::repeat_n(0, scale - fraction.len())
+                .chain(fraction.bytes().rev().map(|digit| digit - b'0'))
+                .chain(whole.bytes().rev().map(|digit| digit - b'0'))
+                .chain(std::iter::repeat(0))
+        }
+        let width = left_whole.len().max(right_whole.len()) + scale;
+        let mut result = Vec::with_capacity(width + 1);
+        let mut carry = 0;
+        for (left, right) in digits(left_whole, left_fraction, scale)
+            .zip(digits(right_whole, right_fraction, scale))
+            .take(width)
+        {
+            let sum = left + right + carry;
+            result.push(b'0' + sum % 10);
+            carry = sum / 10;
+        }
+        if carry != 0 {
+            result.push(b'0' + carry);
+        }
+        result.reverse();
+        if scale != 0 {
+            result.insert(result.len() - scale, b'.');
+            while result.last() == Some(&b'0') {
+                result.pop();
+            }
+            if result.last() == Some(&b'.') {
+                result.pop();
+            }
+        }
+        Self(String::from_utf8(result).expect("decimal addition produces ASCII"))
     }
 }
 
@@ -162,6 +209,30 @@ impl From<EstimatedCost> for UsdAmount {
                     .trim_end_matches('0')
                     .into(),
             )
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::UsdAmount;
+
+    #[test]
+    fn decimal_addition_preserves_precision_and_normalizes_totals() {
+        for (left, right, expected) in [
+            ("0.1", "0.02", "0.12"),
+            ("0.999", "0.0010", "1"),
+            ("0.000", "0", "0"),
+            (
+                "340282366920938463463374607.431768211455",
+                "0.00000000000000000001",
+                "340282366920938463463374607.43176821145500000001",
+            ),
+        ] {
+            let left = UsdAmount::try_from(left.to_owned()).unwrap();
+            let right = UsdAmount::try_from(right.to_owned()).unwrap();
+            assert_eq!(left.add(&right).as_str(), expected);
+            assert_eq!(right.add(&left).as_str(), expected);
         }
     }
 }

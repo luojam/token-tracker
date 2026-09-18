@@ -2,15 +2,23 @@ use std::{io, path::Path, time::Duration};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 
+use super::SqliteStoreError;
 use crate::{ExportSink, ExportSnapshot, PublishError, PublishOutcome};
+use crate::{
+    application::SummaryReadStore,
+    domain::{
+        ExportSummary, TokenCounts,
+        export::{ExportEstimate, UsdAmount},
+    },
+};
 
 const APPLICATION_ID: i32 = 0x54544558;
 
-pub struct SqliteExportSink {
+pub struct SqliteExportStore {
     connection: Connection,
 }
 
-impl SqliteExportSink {
+impl SqliteExportStore {
     /// Opens an export database or initializes an empty database.
     pub fn open(path: impl AsRef<Path>) -> rusqlite::Result<Self> {
         Self::from_connection(Connection::open(path)?, true)
@@ -62,7 +70,47 @@ fn validate_destination(connection: &Connection, initialize: bool) -> rusqlite::
     Ok(())
 }
 
-impl ExportSink for SqliteExportSink {
+impl SummaryReadStore for SqliteExportStore {
+    type Error = SqliteStoreError;
+
+    fn summary(&self) -> Result<ExportSummary, Self::Error> {
+        let mut statement = self.connection.prepare(
+            "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
+                    recorded_cost_usd, estimate FROM events",
+        )?;
+        let mut rows = statement.query([])?;
+        let mut summary = ExportSummary::default();
+        while let Some(row) = rows.next()? {
+            let tokens = TokenCounts {
+                input: row.get(0)?,
+                output: row.get(1)?,
+                cache_read: row.get(2)?,
+                cache_write: row.get(3)?,
+            };
+            summary.tokens = summary
+                .tokens
+                .checked_add(tokens)
+                .ok_or(SqliteStoreError::ValueOutOfRange("summary token total"))?;
+            let cost = match row.get::<_, Option<String>>(4)? {
+                Some(value) => {
+                    Some(UsdAmount::try_from(value).map_err(SqliteStoreError::CorruptData)?)
+                }
+                None => match serde_json::from_str::<ExportEstimate>(&row.get::<_, String>(5)?)
+                    .map_err(|_| SqliteStoreError::CorruptData("an invalid exported estimate"))?
+                {
+                    ExportEstimate::Available { cost_usd, .. } => Some(cost_usd),
+                    ExportEstimate::Unavailable { .. } | ExportEstimate::NotNeeded => None,
+                },
+            };
+            if let Some(cost) = cost {
+                summary.total_cost_usd = summary.total_cost_usd.add(&cost);
+            }
+        }
+        Ok(summary)
+    }
+}
+
+impl ExportSink for SqliteExportStore {
     type Error = rusqlite::Error;
 
     fn publish(
@@ -191,6 +239,22 @@ fn json(value: &impl serde::Serialize) -> rusqlite::Result<String> {
 mod tests {
     use super::*;
     use crate::domain::EstimatedCost;
+
+    #[test]
+    fn summary_rejects_token_overflow() {
+        let mut snapshot: ExportSnapshot =
+            serde_json::from_str(include_str!("../../tests/fixtures/export-example.json")).unwrap();
+        snapshot.events[0].tokens.input = i64::MAX as u64;
+        let mut sink = SqliteExportStore::open(":memory:").unwrap();
+        for machine in ["first", "second", "third"] {
+            snapshot.machine_id = machine.into();
+            sink.publish(&snapshot).unwrap();
+        }
+        assert!(matches!(
+            sink.summary(),
+            Err(SqliteStoreError::ValueOutOfRange("summary token total"))
+        ));
+    }
 
     #[test]
     fn preserves_integer_tokens_and_decimal_money_precision() {

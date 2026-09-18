@@ -202,3 +202,9 @@ pub trait UsageReadStore {
     /// Loads provenance, observations before deduplication, and diagnostics from one consistent snapshot.
     fn usage_snapshot(&self) -> Result<UsageSnapshot, Self::Error>;
 }
+
+pub trait SummaryReadStore {
+    type Error: Error + Send + Sync + 'static;
+
+    fn summary(&self) -> Result<crate::domain::ExportSummary, Self::Error>;
+}

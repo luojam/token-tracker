@@ -3,6 +3,12 @@ use super::{
 };
 use std::collections::BTreeMap;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ExportSummary {
+    pub total_cost_usd: super::export::UsdAmount,
+    pub tokens: TokenCounts,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SummaryTotals {
     pub tokens: TokenCounts,

@@ -2,7 +2,7 @@ use std::fs::OpenOptions;
 use std::io;
 use std::path::Path;
 
-use token_tracker::{ExportSink, ExportSnapshot, PublishError, SqliteExportSink};
+use token_tracker::{ExportSink, ExportSnapshot, PublishError, SqliteExportStore};
 
 use super::CliError;
 
@@ -31,9 +31,9 @@ fn write_database(
     snapshot: &ExportSnapshot,
 ) -> Result<(), PublishError<rusqlite::Error>> {
     let mut sink = if created {
-        SqliteExportSink::open(path)
+        SqliteExportStore::open(path)
     } else {
-        SqliteExportSink::open_existing(path)
+        SqliteExportStore::open_existing(path)
     }
     .map_err(PublishError::Destination)?;
     sink.publish(snapshot)?;

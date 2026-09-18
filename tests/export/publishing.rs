@@ -1,5 +1,5 @@
 use token_tracker::storage::SqliteUsageStore;
-use token_tracker::{ExportSink, ExportSnapshot, PublishError, PublishOutcome, SqliteExportSink};
+use token_tracker::{ExportSink, ExportSnapshot, PublishError, PublishOutcome, SqliteExportStore};
 
 use crate::support::TempTree;
 
@@ -7,15 +7,15 @@ use crate::support::TempTree;
 fn existing_export_policy_rejects_missing_and_empty_files() {
     let tree = TempTree::new();
     let path = tree.root.join("export.db");
-    assert!(SqliteExportSink::open_existing(&path).is_err());
+    assert!(SqliteExportStore::open_existing(&path).is_err());
     assert!(!path.exists());
 
     std::fs::write(&path, []).unwrap();
-    assert!(SqliteExportSink::open_existing(&path).is_err());
+    assert!(SqliteExportStore::open_existing(&path).is_err());
     assert!(std::fs::read(&path).unwrap().is_empty());
 
-    drop(SqliteExportSink::open(&path).unwrap());
-    assert!(SqliteExportSink::open_existing(&path).is_ok());
+    drop(SqliteExportStore::open(&path).unwrap());
+    assert!(SqliteExportStore::open_existing(&path).is_ok());
 }
 
 #[test]
@@ -24,12 +24,12 @@ fn usage_and_export_databases_cannot_be_opened_as_each_other() {
     let usage = tree.root.join("usage.db");
     drop(SqliteUsageStore::open(&usage).unwrap());
     let before = std::fs::read(&usage).unwrap();
-    assert!(SqliteExportSink::open(&usage).is_err());
-    assert!(SqliteExportSink::open_existing(&usage).is_err());
+    assert!(SqliteExportStore::open(&usage).is_err());
+    assert!(SqliteExportStore::open_existing(&usage).is_err());
     assert_eq!(std::fs::read(&usage).unwrap(), before);
 
     let export = tree.root.join("export.db");
-    drop(SqliteExportSink::open(&export).unwrap());
+    drop(SqliteExportStore::open(&export).unwrap());
     let before = std::fs::read(&export).unwrap();
     assert!(SqliteUsageStore::open(&export).is_err());
     assert_eq!(std::fs::read(&export).unwrap(), before);
@@ -39,7 +39,7 @@ fn usage_and_export_databases_cannot_be_opened_as_each_other() {
 fn publication_replaces_one_machine_and_handles_retries_and_ordering() {
     let tree = TempTree::new();
     let path = tree.root.join("export.db");
-    let mut sink = SqliteExportSink::open(&path).unwrap();
+    let mut sink = SqliteExportStore::open(&path).unwrap();
     let connection = rusqlite::Connection::open(&path).unwrap();
     let stored = |machine: &str| -> ExportSnapshot {
         let payload: String = connection
@@ -58,7 +58,7 @@ fn publication_replaces_one_machine_and_handles_retries_and_ordering() {
     sink.publish(&other).unwrap();
     assert_eq!(sink.publish(&first).unwrap(), PublishOutcome::Published);
     drop(sink);
-    let mut sink = SqliteExportSink::open(&path).unwrap();
+    let mut sink = SqliteExportStore::open(&path).unwrap();
     assert_eq!(
         sink.publish(&first).unwrap(),
         PublishOutcome::AlreadyPublished

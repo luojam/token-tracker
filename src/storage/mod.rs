@@ -8,7 +8,7 @@ mod reading;
 mod schema;
 
 pub use error::SqliteStoreError;
-pub use exporting::SqliteExportSink;
+pub use exporting::SqliteExportStore;
 pub(crate) use machine_state::MachineState;
 pub use paths::default_database_path;
 

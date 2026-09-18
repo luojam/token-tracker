@@ -1,5 +1,5 @@
 use token_tracker::{
-    SqliteExportSink,
+    SqliteExportStore,
     server::{ServerConfig, router},
 };
 
@@ -7,7 +7,7 @@ use token_tracker::{
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig::from_env()?;
     let token = config.read_token()?;
-    let sink = SqliteExportSink::open(&config.database_path)?;
+    let sink = SqliteExportStore::open(&config.database_path)?;
     let app = router(token, sink, config.max_upload_bytes)?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
 

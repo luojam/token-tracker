@@ -13,11 +13,12 @@ use axum::{
 use serde_json::json;
 use subtle::ConstantTimeEq;
 
+use crate::application::SummaryReadStore;
 use crate::{ExportSink, ExportSnapshot, PublishError, PublishOutcome};
 
 pub use config::ServerConfig;
 
-pub fn router<S: ExportSink + Send + 'static>(
+pub fn router<S: ExportSink + SummaryReadStore + Send + 'static>(
     token: String,
     sink: S,
     max_upload_bytes: usize,
@@ -31,6 +32,7 @@ pub fn router<S: ExportSink + Send + 'static>(
     let state = Arc::new(Mutex::new(sink));
     Ok(Router::new()
         .route("/snapshots", post(upload::<S>))
+        .route("/summary", get(summary::<S>))
         .layer(DefaultBodyLimit::max(max_upload_bytes))
         .route_layer(middleware::from_fn_with_state(
             Arc::<str>::from(token),
@@ -127,6 +129,29 @@ async fn upload<S: ExportSink + Send + 'static>(
         }
         Err(error) => {
             eprintln!("snapshot task failed: {error}");
+            self::error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
+        }
+    }
+}
+
+async fn summary<S: SummaryReadStore + Send + 'static>(
+    State(store): State<Arc<Mutex<S>>>,
+) -> Response {
+    let result = tokio::task::spawn_blocking(move || {
+        store
+            .lock()
+            .expect("snapshot storage lock poisoned")
+            .summary()
+    })
+    .await;
+    match result {
+        Ok(Ok(summary)) => Json(summary).into_response(),
+        Ok(Err(error)) => {
+            eprintln!("summary storage failed: {error}");
+            self::error(StatusCode::INTERNAL_SERVER_ERROR, "storage_error")
+        }
+        Err(error) => {
+            eprintln!("summary task failed: {error}");
             self::error(StatusCode::INTERNAL_SERVER_ERROR, "internal_error")
         }
     }

@@ -128,6 +128,21 @@ owned by the server user with permissions `600`. Restart after changing it.
 Duplicate uploads succeed; stale or conflicting revisions return HTTP 409.
 `GET /health` is public.
 
+`GET /summary` requires the same bearer token and returns all-time totals across
+the latest uploaded snapshot from every machine:
+
+```json
+{
+  "total_cost_usd": "123.456",
+  "tokens": {
+    "input": 1000,
+    "output": 200,
+    "cache_write": 300,
+    "cache_read": 400
+  }
+}
+```
+
 | Environment variable | Default |
 | --- | --- |
 | `TOKEN_TRACKER_SERVER_AUTH_FILE` | `/etc/token-tracker/auth.token` |
