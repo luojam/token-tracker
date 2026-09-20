@@ -6,7 +6,28 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ExportSummary {
     pub total_cost_usd: super::export::UsdAmount,
+    #[serde(serialize_with = "serialize_summary_tokens")]
     pub tokens: TokenCounts,
+}
+
+fn serialize_summary_tokens<S: serde::Serializer>(
+    tokens: &TokenCounts,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(serde::Serialize)]
+    struct SummaryTokens {
+        total: u128,
+        #[serde(flatten)]
+        counts: TokenCounts,
+    }
+
+    serde::Serialize::serialize(
+        &SummaryTokens {
+            total: tokens.total(),
+            counts: *tokens,
+        },
+        serializer,
+    )
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

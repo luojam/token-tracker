@@ -145,7 +145,12 @@ async fn summary<S: SummaryReadStore + Send + 'static>(
     })
     .await;
     match result {
-        Ok(Ok(summary)) => Json(summary).into_response(),
+        Ok(Ok(summary)) => {
+            let mut body = serde_json::to_string(&summary)
+                .expect("summary contains only JSON-compatible values");
+            body.push('\n');
+            ([(header::CONTENT_TYPE, "application/json")], body).into_response()
+        }
         Ok(Err(error)) => {
             eprintln!("summary storage failed: {error}");
             self::error(StatusCode::INTERNAL_SERVER_ERROR, "storage_error")
@@ -158,5 +163,10 @@ async fn summary<S: SummaryReadStore + Send + 'static>(
 }
 
 fn error(status: StatusCode, code: &'static str) -> Response {
-    (status, Json(json!({ "error": code }))).into_response()
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/json")],
+        format!("{}\n", json!({ "error": code })),
+    )
+        .into_response()
 }

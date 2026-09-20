@@ -51,7 +51,8 @@ async fn body(response: Response) -> Value {
 }
 
 async fn summary(app: &Router) -> Response {
-    app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::get("/summary")
                 .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
@@ -59,7 +60,12 @@ async fn summary(app: &Router) -> Response {
                 .unwrap(),
         )
         .await
-        .unwrap()
+        .unwrap();
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
+    let (parts, body) = response.into_parts();
+    let bytes = to_bytes(body, 4096).await.unwrap();
+    assert!(bytes.ends_with(b"\n"));
+    Response::from_parts(parts, Body::from(bytes))
 }
 
 #[test]
@@ -163,7 +169,7 @@ async fn summary_combines_known_costs_and_tracks_latest_machine_snapshots() {
         body(response).await,
         json!({
             "total_cost_usd": "0",
-            "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
+            "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "total": 0},
         })
     );
 
@@ -195,7 +201,7 @@ async fn summary_combines_known_costs_and_tracks_latest_machine_snapshots() {
         body(response).await,
         json!({
             "total_cost_usd": "0.12",
-            "tokens": {"input": 300, "output": 60, "cache_read": 90, "cache_write": 8},
+            "tokens": {"input": 300, "output": 60, "cache_read": 90, "cache_write": 8, "total": 458},
         })
     );
 
@@ -211,7 +217,7 @@ async fn summary_combines_known_costs_and_tracks_latest_machine_snapshots() {
         body(response).await,
         json!({
             "total_cost_usd": "0.1",
-            "tokens": {"input": 100, "output": 20, "cache_read": 30, "cache_write": 0},
+            "tokens": {"input": 100, "output": 20, "cache_read": 30, "cache_write": 0, "total": 150},
         })
     );
 }

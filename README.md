@@ -135,6 +135,7 @@ the latest uploaded snapshot from every machine:
 {
   "total_cost_usd": "123.456",
   "tokens": {
+    "total": 1900,
     "input": 1000,
     "output": 200,
     "cache_write": 300,
