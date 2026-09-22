@@ -1,14 +1,24 @@
 terraform {
+  required_version = ">= 1.11.0"
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 6.0"
     }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.7"
+    }
   }
 }
 
-provider "aws" {
+locals {
   region = "eu-north-1"
+}
+
+provider "aws" {
+  region = local.region
 }
 
 data "aws_caller_identity" "current" {}
@@ -131,6 +141,33 @@ resource "aws_iam_role_policy" "deployment_downloads" {
   })
 }
 
+ephemeral "random_password" "auth_token" {
+  length  = 64
+  special = false
+}
+
+resource "aws_ssm_parameter" "auth_token" {
+  name             = "/token-tracker/auth-token"
+  description      = "Token Tracker server authentication token"
+  type             = "SecureString"
+  value_wo         = ephemeral.random_password.auth_token.result
+  value_wo_version = 1
+}
+
+resource "aws_iam_role_policy" "auth_token" {
+  name = "token-tracker-auth-token"
+  role = aws_iam_role.server.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "ssm:GetParameter"
+      Resource = aws_ssm_parameter.auth_token.arn
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "server" {
   name = "token-tracker-server"
   role = aws_iam_role.server.name
@@ -194,6 +231,8 @@ resource "aws_instance" "server" {
 
   user_data_replace_on_change = true
 
+  depends_on = [aws_iam_role_policy_attachment.ssm]
+
   lifecycle {
     # The provider reports true after the Elastic IP is attached.
     ignore_changes = [associate_public_ip_address]
@@ -227,6 +266,24 @@ resource "aws_s3_bucket_public_access_block" "deployments" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "deployments" {
+  bucket = aws_s3_bucket.deployments.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+output "region" {
+  value = local.region
+}
+
+output "auth_parameter_name" {
+  value = aws_ssm_parameter.auth_token.name
 }
 
 output "deployment_bucket_name" {

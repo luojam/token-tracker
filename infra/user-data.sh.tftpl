@@ -5,6 +5,7 @@ exec >>/var/log/token-tracker-setup.log 2>&1
 volume_id="${volume_id}"
 serial=$(printf '%s' "$volume_id" | tr -d '-')
 device=""
+mount_dir=/var/lib/token-tracker
 
 # The disk attachment may finish after the instance starts.
 for attempt in $(seq 1 120); do
@@ -23,6 +24,14 @@ if [ -z "$device" ]; then
   exit 1
 fi
 
+if mountpoint -q "$mount_dir"; then
+  mounted_device=$(findmnt -nro SOURCE --mountpoint "$mount_dir")
+  if [ "$(readlink -f "$mounted_device")" != "$(readlink -f "$device")" ]; then
+    echo "Wrong volume mounted at $mount_dir; expected $volume_id"
+    exit 1
+  fi
+fi
+
 filesystem=$(blkid -p -s TYPE -o value "$device" || true)
 
 if [ "$filesystem" != "ext4" ]; then
@@ -39,7 +48,7 @@ fi
 uuid=$(blkid -s UUID -o value "$device")
 test -n "$uuid"
 
-mkdir -p /var/lib/token-tracker
+mkdir -p "$mount_dir"
 
 if ! grep -Fq "UUID=$uuid /var/lib/token-tracker " /etc/fstab; then
   echo "UUID=$uuid /var/lib/token-tracker ext4 defaults,nofail 0 2" \
@@ -47,4 +56,30 @@ if ! grep -Fq "UUID=$uuid /var/lib/token-tracker " /etc/fstab; then
 fi
 
 mountpoint -q /var/lib/token-tracker || mount /var/lib/token-tracker
-findmnt /var/lib/token-tracker
+mounted_device=$(findmnt -nro SOURCE --mountpoint "$mount_dir")
+test "$(readlink -f "$mounted_device")" = "$(readlink -f "$device")"
+findmnt --mountpoint "$mount_dir"
+
+retry() {
+  for attempt in $(seq 1 30); do
+    if "$@"; then
+      return 0
+    fi
+    sleep 10
+  done
+  echo "Failed after 30 attempts: $*"
+  return 1
+}
+
+packages=()
+command -v amazon-ssm-agent >/dev/null || packages+=(amazon-ssm-agent)
+command -v aws >/dev/null || packages+=(awscli-2)
+command -v curl >/dev/null || packages+=(curl-minimal)
+if [ "$${#packages[@]}" -gt 0 ]; then
+  retry timeout 60 dnf install -y "$${packages[@]}"
+fi
+
+retry systemctl enable --now amazon-ssm-agent
+systemctl is-active --quiet amazon-ssm-agent
+aws --version
+curl --version
