@@ -142,10 +142,6 @@ resource "aws_ebs_volume" "data" {
   size              = 10
   encrypted         = true
 
-  lifecycle {
-    prevent_destroy = true
-  }
-
   tags = {
     Name = "token-tracker-data"
   }
@@ -221,6 +217,7 @@ resource "aws_eip_association" "server" {
 
 resource "aws_s3_bucket" "deployments" {
   bucket_prefix = "token-tracker-deployments-"
+  force_destroy = true
 }
 
 resource "aws_s3_bucket_public_access_block" "deployments" {
