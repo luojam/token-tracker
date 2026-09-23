@@ -1,0 +1,23 @@
+[Unit]
+Description=Token Tracker server
+After=network.target var-lib-token\x2dtracker.mount
+RequiresMountsFor=/var/lib/token-tracker
+BindsTo=var-lib-token\x2dtracker.mount
+
+[Service]
+User=token-tracker
+Group=token-tracker
+EnvironmentFile=/etc/token-tracker/server.env
+ExecStartPre=/usr/bin/mountpoint -q /var/lib/token-tracker
+ExecStart=/opt/token-tracker/current/token-tracker-server
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/token-tracker/server
+
+[Install]
+WantedBy=multi-user.target

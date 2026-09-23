@@ -9,7 +9,7 @@ pub struct ServerConfig {
 impl ServerConfig {
     pub fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         let database_path = environment_path("TOKEN_TRACKER_SERVER_DATABASE")?
-            .unwrap_or_else(|| PathBuf::from("/var/lib/token-tracker/snapshots.db"));
+            .unwrap_or_else(|| PathBuf::from("/var/lib/token-tracker/server/snapshots.db"));
         Ok(Self {
             auth_file: environment_path("TOKEN_TRACKER_SERVER_AUTH_FILE")?
                 .unwrap_or_else(|| PathBuf::from("/etc/token-tracker/auth.token")),

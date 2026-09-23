@@ -147,7 +147,7 @@ the latest uploaded snapshot from every machine:
 | Environment variable | Default |
 | --- | --- |
 | `TOKEN_TRACKER_SERVER_AUTH_FILE` | `/etc/token-tracker/auth.token` |
-| `TOKEN_TRACKER_SERVER_DATABASE` | `/var/lib/token-tracker/snapshots.db` |
+| `TOKEN_TRACKER_SERVER_DATABASE` | `/var/lib/token-tracker/server/snapshots.db` |
 | `TOKEN_TRACKER_MAX_UPLOAD_BYTES` | `33554432` (32 MiB) |
 
 The database directory must exist and be writable by the server user.
@@ -172,25 +172,12 @@ cargo build --locked --release \
   --bin token-tracker-server
 ```
 
-### Copy the binary onto ec2
-
-Make sure it is executable:
-
-```sh
-chmod +x /tmp/token-tracker-server
-```
-
-Run from `/tmp/` during dev:
-
-```sh
-nohup /tmp/token-tracker-server > /tmp/token-tracker-server.log 2>&1 < /dev/null &
-```
-
 ## Infra
 
 `infra/main.tf` uses Terraform to define the EC2 instance, networking,
 SSM access, and an encrypted 10 GB data volume mounted at `/var/lib/token-tracker`
-by the startup script. Caddy was installed manually on EC2.
+by the startup script. `scripts/deploy.py` builds and installs the server and Caddy
+through SSM.
 
 ## Development
 
