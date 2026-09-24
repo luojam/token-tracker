@@ -3,6 +3,8 @@
 //! Rate snapshot sources:
 //! - https://developers.openai.com/api/docs/pricing.md (Standard and Fast tables)
 //! - https://developers.openai.com/api/docs/models/gpt-6-astra (request threshold)
+//! - https://developers.openai.com/api/docs/models/gpt-6-sol (request threshold)
+//! - https://developers.openai.com/api/docs/models/gpt-6-luna (request threshold)
 //! - https://developers.openai.com/api/docs/models/gpt-5.6-sol (threshold and alias)
 //! - https://developers.openai.com/api/docs/models/gpt-5.6-terra (threshold and cache writes)
 //! - https://developers.openai.com/api/docs/models/gpt-5.6-luna (threshold and cache writes)
@@ -16,8 +18,8 @@ use crate::domain::{
     UsageEvent,
 };
 
-pub const SNAPSHOT_ID: &str = "openai-api-2026-09-09";
-pub const RATE_DATE: &str = "2026-09-09";
+pub const SNAPSHOT_ID: &str = "openai-api-2026-09-24";
+pub const RATE_DATE: &str = "2026-09-24";
 
 /// Integer microdollars per million tokens. Multiplying by tokens gives picodollars.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +103,32 @@ const GPT_6_ASTRA: ModelRates = ModelRates {
     },
 };
 
+const GPT_6_SOL: ModelRates = ModelRates {
+    standard: ContextRates::Banded {
+        short_input_limit: 272_000,
+        short: TokenRates::new(2_000_000, 200_000, 2_500_000, 10_000_000),
+        long: Some(TokenRates::new(4_000_000, 400_000, 5_000_000, 15_000_000)),
+    },
+    fast: ContextRates::Banded {
+        short_input_limit: 272_000,
+        short: TokenRates::new(4_000_000, 400_000, 5_000_000, 20_000_000),
+        long: Some(TokenRates::new(8_000_000, 800_000, 10_000_000, 30_000_000)),
+    },
+};
+
+const GPT_6_LUNA: ModelRates = ModelRates {
+    standard: ContextRates::Banded {
+        short_input_limit: 272_000,
+        short: TokenRates::new(100_000, 10_000, 125_000, 500_000),
+        long: Some(TokenRates::new(200_000, 20_000, 250_000, 750_000)),
+    },
+    fast: ContextRates::Banded {
+        short_input_limit: 272_000,
+        short: TokenRates::new(200_000, 20_000, 250_000, 1_000_000),
+        long: Some(TokenRates::new(400_000, 40_000, 500_000, 1_500_000)),
+    },
+};
+
 const GPT_5_6_SOL: ModelRates = ModelRates {
     standard: ContextRates::Banded {
         short_input_limit: 272_000,
@@ -172,6 +200,8 @@ fn schedule(
 
     let model = match attribution.model.as_str() {
         "gpt-6-astra" => &GPT_6_ASTRA,
+        "gpt-6-sol" => &GPT_6_SOL,
+        "gpt-6-luna" => &GPT_6_LUNA,
         "gpt-5.6-sol" | "gpt-5.6" => &GPT_5_6_SOL,
         "gpt-5.6-terra" => &GPT_5_6_TERRA,
         "gpt-5.6-luna" => &GPT_5_6_LUNA,
