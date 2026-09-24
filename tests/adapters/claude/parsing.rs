@@ -8,12 +8,16 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 use token_tracker::adapters::claude::{ClaudeParseError, ClaudeSessionParser};
 use token_tracker::application::{SessionData, SnapshotCompletion};
-use token_tracker::domain::{ParentSession, Timestamp, TokenCounts, UsageKind};
+use token_tracker::domain::{
+    EstimateUnavailableReason, ParentSession, Timestamp, TokenCounts, UsageKind,
+};
+use token_tracker::pricing::anthropic::calculate_estimate;
 
 const SOURCE_PATH: &str =
     "/invented/claude/projects/fixture/11111111-1111-4111-8111-111111111111.jsonl";
 const SNAPSHOTS: &str = include_str!("../../fixtures/claude/snapshots.jsonl");
 const CHILD: &str = include_str!("../../fixtures/claude/child-a1b2c3d.jsonl");
+const ADVISOR: &str = include_str!("../../fixtures/claude/advisor.jsonl");
 
 fn parse(source: &[u8], path: &str) -> Result<SessionData, ClaudeParseError> {
     ClaudeSessionParser::new().parse(
@@ -182,6 +186,90 @@ fn final_record() -> Value {
 
 fn parse_record(record: &Value) -> Result<SessionData, ClaudeParseError> {
     parse(record.to_string().as_bytes(), SOURCE_PATH)
+}
+
+#[test]
+fn advisor_usage_is_priced_separately_from_executor_and_compaction() {
+    let parsed = parse(ADVISOR.as_bytes(), SOURCE_PATH).unwrap();
+    assert!(parsed.notices.is_empty());
+    assert_eq!(parsed.events.len(), 3);
+    for (event, (key, model, counts, cost)) in parsed.events.iter().zip([
+        (
+            "response-v1:msg_advisor",
+            "claude-sonnet-5",
+            [32, 15, 4, 15],
+            227_000_000,
+        ),
+        (
+            "advisor-v1:0:msg_advisor",
+            "claude-opus-5",
+            [100, 30, 8, 20],
+            1_095_000_000,
+        ),
+        (
+            "advisor-v1:1:msg_advisor",
+            "claude-opus-5",
+            [50, 60, 0, 10],
+            530_000_000,
+        ),
+    ]) {
+        assert_eq!(event.identity.adapter_key, key);
+        assert_eq!(event.attribution.as_ref().unwrap().model, model);
+        assert_eq!(tokens(event.tokens), json!(counts));
+        assert!(
+            event
+                .pricing_context
+                .as_ref()
+                .unwrap()
+                .usage_matches(event.tokens)
+        );
+        assert_eq!(
+            calculate_estimate(event).unwrap().cost.as_picodollars(),
+            cost
+        );
+    }
+
+    let mut record: Value = serde_json::from_str(ADVISOR).unwrap();
+    record["message"]["usage"]["input_tokens"] = json!(180);
+    assert!(matches!(
+        parse_record(&record),
+        Err(ClaudeParseError::InvalidField {
+            field: "non-compaction total mismatch",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn advisor_cache_and_service_evidence_are_independent() {
+    let mut record: Value = serde_json::from_str(ADVISOR).unwrap();
+    record["message"]["usage"]["iterations"][1]["cache_creation"] = Value::Null;
+    let parsed = parse_record(&record).unwrap();
+    assert!(calculate_estimate(&parsed.events[0]).is_ok());
+    assert_eq!(
+        calculate_estimate(&parsed.events[1]),
+        Err(EstimateUnavailableReason::IncompleteCacheDetail)
+    );
+
+    record["message"]["usage"]["service_tier"] = json!("priority");
+    record["message"]["usage"]["speed"] = json!("fast");
+    let parsed = parse_record(&record).unwrap();
+    assert_eq!(
+        calculate_estimate(&parsed.events[2]),
+        Err(EstimateUnavailableReason::UnresolvedTier)
+    );
+
+    let advisor = &mut record["message"]["usage"]["iterations"][3];
+    advisor["service_tier"] = json!("standard");
+    advisor["speed"] = json!("standard");
+    let parsed = parse_record(&record).unwrap();
+    assert_eq!(
+        calculate_estimate(&parsed.events[2])
+            .unwrap()
+            .cost
+            .as_picodollars(),
+        530_000_000
+    );
 }
 
 #[test]

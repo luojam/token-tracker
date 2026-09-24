@@ -8,4 +8,4 @@ pub use parsing::{ClaudeParseError, ClaudeSessionParser};
 
 pub(crate) const CLAUDE_AGENT_ID: &str = "claude";
 
-const NORMALIZATION_VERSION: NonZeroU32 = NonZeroU32::MIN;
+const NORMALIZATION_VERSION: NonZeroU32 = NonZeroU32::new(2).unwrap();

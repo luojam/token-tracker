@@ -70,28 +70,23 @@ impl SessionParser for ClaudeSessionParser {
         let mut events = Vec::new();
         for (id, response) in responses {
             match response.snapshot {
-                Some((tokens, pricing_context)) => events.push(UsageEvent {
-                    identity: UsageEventIdentity {
-                        agent: AgentId::from(CLAUDE_AGENT_ID),
-                        adapter_key: format!("response-v1:{id}"),
-                    },
-                    timestamp: response
+                Some(usage) => {
+                    let timestamp = response
                         .first_final
-                        .expect("final snapshot has a timestamp"),
-                    kind: UsageKind::Assistant,
-                    attribution: response.model.map(|model| ModelAttribution {
-                        provider: if model.starts_with("claude-") {
-                            "anthropic"
-                        } else {
-                            "unknown"
-                        }
-                        .into(),
-                        model,
-                    }),
-                    tokens,
-                    recorded_cost: None,
-                    pricing_context: Some(pricing_context),
-                }),
+                        .expect("final snapshot has a timestamp");
+                    events.push(usage.executor.into_event(
+                        format!("response-v1:{id}"),
+                        response.model,
+                        timestamp,
+                    ));
+                    for (index, advisor) in usage.advisors.into_iter().enumerate() {
+                        events.push(advisor.usage.into_event(
+                            format!("advisor-v1:{index}:{id}"),
+                            Some(advisor.model),
+                            timestamp,
+                        ));
+                    }
+                }
                 None => add_notice(
                     &mut notices,
                     if response.first_final.is_some() {
@@ -271,7 +266,7 @@ struct Response {
     model: Option<String>,
     request_id: Option<String>,
     first_final: Option<Timestamp>,
-    snapshot: Option<(TokenCounts, PricingContext)>,
+    snapshot: Option<ResponseUsage>,
     pending_final_usage: Option<(Value, usize)>,
     omission_line: usize,
 }
@@ -297,9 +292,13 @@ fn observe_response(
     });
     let accounting = parse_usage(&message.usage, response_model, line)?;
     if model == Some("<synthetic>")
-        && accounting
-            .as_ref()
-            .is_some_and(|(tokens, _)| tokens.total() == 0)
+        && accounting.as_ref().is_some_and(|usage| {
+            usage.executor.tokens.total() == 0
+                && usage
+                    .advisors
+                    .iter()
+                    .all(|advisor| advisor.usage.tokens.total() == 0)
+        })
     {
         return Ok(());
     }
@@ -364,10 +363,11 @@ fn parse_usage(
     usage: &Value,
     model: Option<&str>,
     line: usize,
-) -> Result<Option<(TokenCounts, PricingContext)>, ClaudeParseError> {
+) -> Result<Option<ResponseUsage>, ClaudeParseError> {
     let top = component(usage, line)?;
-    let (tokens, components) = match usage.get("iterations").filter(|value| !value.is_null()) {
-        None => (top.tokens, vec![top]),
+    let mut advisors = Vec::new();
+    let components = match usage.get("iterations").filter(|value| !value.is_null()) {
+        None => vec![top],
         Some(value) => {
             let Some(iterations) = value.as_array().filter(|items| !items.is_empty()) else {
                 return Ok(None);
@@ -375,12 +375,33 @@ fn parse_usage(
 
             let mut supported = true;
             let mut components = Vec::new();
-            let mut total = TokenCounts::default();
-            let mut non_compaction = TokenCounts::default();
+            let mut message_tokens = TokenCounts::default();
             for iteration in iterations {
                 let is_message = match iteration.get("type").and_then(Value::as_str) {
                     Some("message") => true,
                     Some("compaction") => false,
+                    Some("advisor_message") => {
+                        let component = component(iteration, line)?;
+                        let Some(advisor_model) = iteration
+                            .get("model")
+                            .and_then(Value::as_str)
+                            .filter(|model| !model.trim().is_empty())
+                        else {
+                            supported = false;
+                            continue;
+                        };
+
+                        let tier =
+                            served_tier(advisor_evidence(iteration, usage, "service_tier"), line)?;
+                        let speed =
+                            served_speed(advisor_evidence(iteration, usage, "speed"), line)?;
+                        let advisor_usage = account_usage(vec![component], tier, speed, line)?;
+                        advisors.push(AdvisorUsage {
+                            model: advisor_model.to_owned(),
+                            usage: advisor_usage,
+                        });
+                        continue;
+                    }
                     _ => {
                         supported = false;
                         continue;
@@ -395,11 +416,8 @@ fn parse_usage(
                     supported = false;
                 }
 
-                total = total
-                    .checked_add(component.tokens)
-                    .ok_or_else(|| invalid(line, "counter overflow"))?;
                 if is_message {
-                    non_compaction = non_compaction
+                    message_tokens = message_tokens
                         .checked_add(component.tokens)
                         .ok_or_else(|| invalid(line, "counter overflow"))?;
                 }
@@ -409,16 +427,49 @@ fn parse_usage(
             if !supported {
                 return Ok(None);
             }
-            if non_compaction != top.tokens {
+            if message_tokens != top.tokens {
                 return Err(invalid(line, "non-compaction total mismatch"));
             }
-            (total, components)
+            if components.is_empty() {
+                components.push(top);
+            }
+            components
         }
     };
 
+    Ok(Some(ResponseUsage {
+        executor: account_usage(
+            components,
+            served_tier(usage.get("service_tier"), line)?,
+            served_speed(usage.get("speed"), line)?,
+            line,
+        )?,
+        advisors,
+    }))
+}
+
+fn advisor_evidence<'a>(iteration: &'a Value, usage: &'a Value, field: &str) -> Option<&'a Value> {
+    // Priority and fast service on the executor do not establish advisor service.
+    iteration.get(field).or_else(|| {
+        usage
+            .get(field)
+            .filter(|value| value.as_str() == Some("standard"))
+    })
+}
+
+fn account_usage(
+    components: Vec<UsageComponent>,
+    tier: ServiceTier,
+    speed: ServiceSpeed,
+    line: usize,
+) -> Result<AccountedUsage, ClaudeParseError> {
+    let mut tokens = TokenCounts::default();
     let mut writes = BTreeMap::<u32, u64>::new();
     let mut complete_durations = true;
     for component in &components {
+        tokens = tokens
+            .checked_add(component.tokens)
+            .ok_or_else(|| invalid(line, "counter overflow"))?;
         match &component.cache_creation {
             Some(durations) => {
                 for duration in durations {
@@ -433,9 +484,9 @@ fn parse_usage(
         }
     }
 
-    let pricing = PricingContext::Anthropic(AnthropicPricingContext {
-        tier: served_tier(usage.get("service_tier"), line)?,
-        speed: served_speed(usage.get("speed"), line)?,
+    let pricing_context = AnthropicPricingContext {
+        tier,
+        speed,
         tier_evidence: TierEvidence::ServedResponse,
         requests: RequestBreakdown::KnownRequests(
             KnownRequests::from_vec(
@@ -455,8 +506,56 @@ fn parse_usage(
                 })
                 .collect()
         }),
-    });
-    Ok(Some((tokens, pricing)))
+    };
+    Ok(AccountedUsage {
+        tokens,
+        pricing_context,
+    })
+}
+
+struct ResponseUsage {
+    executor: AccountedUsage,
+    advisors: Vec<AdvisorUsage>,
+}
+
+struct AdvisorUsage {
+    model: String,
+    usage: AccountedUsage,
+}
+
+struct AccountedUsage {
+    tokens: TokenCounts,
+    pricing_context: AnthropicPricingContext,
+}
+
+impl AccountedUsage {
+    fn into_event(
+        self,
+        adapter_key: String,
+        model: Option<String>,
+        timestamp: Timestamp,
+    ) -> UsageEvent {
+        UsageEvent {
+            identity: UsageEventIdentity {
+                agent: AgentId::from(CLAUDE_AGENT_ID),
+                adapter_key,
+            },
+            timestamp,
+            kind: UsageKind::Assistant,
+            attribution: model.map(|model| ModelAttribution {
+                provider: if model.starts_with("claude-") {
+                    "anthropic"
+                } else {
+                    "unknown"
+                }
+                .into(),
+                model,
+            }),
+            tokens: self.tokens,
+            recorded_cost: None,
+            pricing_context: Some(PricingContext::Anthropic(self.pricing_context)),
+        }
+    }
 }
 
 fn component(usage: &Value, line: usize) -> Result<UsageComponent, ClaudeParseError> {

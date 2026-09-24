@@ -170,6 +170,25 @@ fn final_responses_and_pricing_context_corrections_survive_reopen() {
 }
 
 #[test]
+fn advisor_snapshots_deduplicate_across_imports() {
+    let mut ledger = Ledger::new();
+    let source = fixture("claude", "advisor.jsonl");
+    let path = fixture_path("snapshots.jsonl");
+    let mut placeholder: Value = serde_json::from_str(&source).unwrap();
+    placeholder["message"]["stop_reason"] = Value::Null;
+    ledger.write(&path, &format!("{placeholder}\n{source}{source}"));
+    assert!(ledger.sync().warnings.is_empty());
+    totals(&ledger, 1, 3, 344);
+
+    ledger.write(format!("copy/{MAIN}.jsonl"), &source);
+    assert!(ledger.sync().warnings.is_empty());
+    totals(&ledger, 1, 3, 344);
+    let snapshot = ledger.snapshot();
+    assert_eq!(ledger.sync().counts.sources_unchanged, 2);
+    assert_eq!(ledger.snapshot(), snapshot);
+}
+
+#[test]
 fn shared_history_and_children_are_counted_once() {
     let names = [
         "snapshots.jsonl",
