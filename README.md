@@ -1,185 +1,91 @@
-# Token Tracker
+# 🦀 Token Tracker
 
-A local CLI for tracking token usage and recorded/estimated costs.
+Track token usage and API-equivalent costs across Pi, Codex, Claude Code, and
+Hermes from one Rust CLI.
 
-## Usage
+- Track input, output, and cache tokens without double-counting shared fork history.
+- Keep usage history locally, even after deleting source sessions.
+- Export usage to SQLite for your own queries.
+- Optionally combine totals from multiple machines with a self-hosted server.
 
-Requires a Unix system. Building from source requires Rust 1.85+. Make sure `~/.cargo/bin` is on your `PATH`.
+## Quick start
 
-From the repository directory, install the executable into `~/.cargo/bin` and run with:
+Requires a Unix system and Rust 1.85+ to build. Make sure `~/.cargo/bin` is on your
+`PATH`.
 
 ```sh
+git clone https://github.com/luojam/token-tracker.git
+cd token-tracker
 cargo install --path .
 token-tracker
 ```
 
-Or run from the repository without installing:
-
-```sh
-cargo run --quiet
-```
-
-To build a release binary at `target/release/token-tracker`:
-
-```sh
-cargo build --release
-```
-
-### SQLite export
-
-Export all locally retained usage to a SQLite database:
-
-```sh
-token-tracker export export.db
-token-tracker export export.db --force
-```
-
-Run `token-tracker` first to import current usage; export does not refresh sources.
-The parent directory must exist. Use `--force` to replace an existing export;
-unrelated files are never overwritten.
-
-### Server upload
-
-Upload all locally retained usage to a server:
-
-```sh
-token-tracker upload https://tracker.example.com --auth-file /path/to/auth.token
-```
-
-Use the server's token in a file with permissions `600`. HTTPS is required except
-on loopback. Run `token-tracker` first to import current usage; upload does not
-refresh sources.
+Running without arguments imports new or changed sessions and shows a usage
+report. No server is needed.
 
 ### Configuration
 
 Optionally create `~/.config/token-tracker/config.toml` (or
-`$XDG_CONFIG_HOME/token-tracker/config.toml` when `XDG_CONFIG_HOME` is an absolute
-path):
+`$XDG_CONFIG_HOME/token-tracker/config.toml` when `XDG_CONFIG_HOME` is absolute):
 
 ```toml
 machine_name = "my-computer"
 ```
 
-`machine_name` is an optional display name included in exports; it does not change
-machine identity. Missing files or an omitted name use the default (no name).
-Invalid TOML, unknown options, and unreadable files produce an error. The CLI
-never creates or rewrites this file.
+This display name is included in exports and does not change machine identity.
+The default is no name.
 
-### Pi
+## Sources and local data
 
-### Codex
-
-Codex cost estimates use bundled API prices. Unknown service tiers use normal
-(standard) rates. Missing cache-write counts are priced as ordinary input, which
-can underestimate cost slightly.
-
-Supported models include `gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`,
-`gpt-5.6-luna`, `gpt-5.5`, and `gpt-5.4-mini`, with Standard and Fast pricing.
-
-### Claude Code
-
-Claude Code estimates use bundled API prices.
-
-Supported models are `claude-opus-5` (Standard and Fast), plus `claude-fable-5`,
-`claude-fable-5-1`, `claude-sonnet-5`, and `claude-haiku-4-5-20251001` (Standard).
-
-### Hermes
-
-Requires modern SQLite accounting with `sessions` and `session_model_usage`
-tables (version-30 shape). Includes auxiliary tasks; events count accounting
-buckets rather than API calls.
-
-Subscription costs use API-equivalent estimates. OpenAI aggregates assume
-short-context rates, which may underestimate long-context usage.
-
-## Local data
-
-Running without arguments imports new or changed Pi, Codex, Claude Code, and Hermes sessions.
-Tracks input, output, and cache tokens, counting shared fork history only once.
-
-Sessions are read from:
-
-- `~/.pi/agent/sessions`, respecting Pi's directory overrides.
-- `~/.codex/sessions` and `~/.codex/archived_sessions`, respecting `CODEX_HOME`.
-- `~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`.
-- `~/.hermes/state.db` and `~/.hermes/profiles/*/state.db`, or
-  `$HERMES_HOME/state.db` when set.
-
-Usage is stored in SQLite at `~/.local/share/token-tracker/usage.db` (or under
-`XDG_DATA_HOME` when set to an absolute path).
-
-Only usage and session metadata are stored. Imported usage is kept even after
-session files or Hermes sessions/databases are deleted.
-
-## Server (in progress...) 
-
-Run the server on `127.0.0.1:3000`:
-
-```sh
-cargo run --features server --bin token-tracker-server
-```
-
-Create `/etc/token-tracker/auth.token` (or the path set by `TOKEN_TRACKER_SERVER_AUTH_FILE`)
-with a random token (`openssl rand -hex 32`),
-owned by the server user with permissions `600`. Restart after changing it.
-
-`POST /snapshots` accepts [snapshot JSON](tests/fixtures/export-example.json) with
-`Content-Type: application/json` and `Authorization: Bearer <token>`.
-Duplicate uploads succeed; stale or conflicting revisions return HTTP 409.
-`GET /health` is public.
-
-`GET /summary` requires the same bearer token and returns all-time totals across
-the latest uploaded snapshot from every machine:
-
-```json
-{
-  "total_cost_usd": "123.456",
-  "tokens": {
-    "total": 1900,
-    "input": 1000,
-    "output": 200,
-    "cache_write": 300,
-    "cache_read": 400
-  }
-}
-```
-
-| Environment variable | Default |
+| Source | Session location |
 | --- | --- |
-| `TOKEN_TRACKER_SERVER_AUTH_FILE` | `/etc/token-tracker/auth.token` |
-| `TOKEN_TRACKER_SERVER_DATABASE` | `/var/lib/token-tracker/server/snapshots.db` |
-| `TOKEN_TRACKER_MAX_UPLOAD_BYTES` | `33554432` (32 MiB) |
+| Pi | `~/.pi/agent/sessions`, respecting Pi's directory overrides |
+| Codex | `~/.codex/sessions` and `~/.codex/archived_sessions`, respecting `CODEX_HOME` |
+| Claude Code | `~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects` |
+| Hermes | `~/.hermes/state.db` and `~/.hermes/profiles/*/state.db`, or `$HERMES_HOME/state.db` when set |
 
-The database directory must exist and be writable by the server user.
+Usage is stored at `~/.local/share/token-tracker/usage.db` (or under an absolute
+`XDG_DATA_HOME`). Only usage and session metadata are stored, and imported usage
+is retained after source sessions or databases are deleted.
 
-### Musl build for EC2 Amazon Linux compatibility
+### Cost estimates
 
-Install requirements:
+Costs use recorded values where available and API-price estimates otherwise.
+For subscription plans, these are API-equivalent costs, not your subscription bill.
+
+### SQLite export
+
+Export all locally retained usage:
 
 ```sh
-sudo dnf install musl-gcc
-rustup target add x86_64-unknown-linux-musl
+token-tracker export export.db
 ```
 
-Build the compatible binary locally before moving it onto the EC2 instance:
+Run `token-tracker` first to import current usage; export does not refresh sources.
+The parent directory must exist. Add `--force` to replace an existing export;
+unrelated files are never overwritten.
+
+## Optional server: combine usage across machines
+
+Upload usage to a self-hosted server for combined totals across the latest
+snapshot from each machine. Uploads are explicit, not automatic.
+
+Follow the [server guide](docs/server.md) to deploy and get an auth token, then
+import and upload from each machine:
 
 ```sh
-CC_x86_64_unknown_linux_musl=musl-gcc \
-CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
-cargo build --locked --release \
-  --target x86_64-unknown-linux-musl \
-  --features server \
-  --bin token-tracker-server
+chmod 600 /path/to/auth.token
+token-tracker
+token-tracker upload https://tracker.example.com --auth-file /path/to/auth.token
 ```
 
-## Infra
-
-`infra/main.tf` uses Terraform to define the EC2 instance, networking,
-SSM access, and an encrypted 10 GB data volume mounted at `/var/lib/token-tracker`
-by the startup script. `scripts/deploy.py` builds and installs the server and Caddy
-through SSM.
+Uploads include all locally retained usage without refreshing sources. HTTPS is
+required except on loopback.
 
 ## Development
+
+Run locally with `cargo run`, or build a release binary at
+`target/release/token-tracker` with `cargo build --release`.
 
 See [tests/README.md](tests/README.md) for test layout and conventions.
 
