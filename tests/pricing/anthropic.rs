@@ -128,6 +128,18 @@ fn bundled_models_use_exact_flat_rates() {
             9_000_000_000_000,
         ),
         (
+            "claude-opus-5-5",
+            ServiceSpeed::Standard,
+            690_000_000,
+            3_600_000_000_000,
+        ),
+        (
+            "claude-opus-5-5",
+            ServiceSpeed::Fast,
+            1_380_000_000,
+            7_200_000_000_000,
+        ),
+        (
             "claude-sonnet-5",
             ServiceSpeed::Standard,
             355_000_000,

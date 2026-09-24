@@ -7,8 +7,8 @@ use crate::domain::{
     ServiceSpeed, ServiceTier, TierEvidence, TokenCounts, UsageEstimate, UsageEvent,
 };
 
-pub const SNAPSHOT_ID: &str = "anthropic-api-2026-09-11";
-pub const RATE_DATE: &str = "2026-09-11";
+pub const SNAPSHOT_ID: &str = "anthropic-api-2026-09-25";
+pub const RATE_DATE: &str = "2026-09-25";
 
 /// Integer microdollars per million tokens; count times rate gives picodollars.
 #[derive(Clone, Copy)]
@@ -45,6 +45,20 @@ const OPUS_5_FAST: TokenRates = TokenRates {
     cache_write_5m: 12_500_000,
     cache_write_1h: 20_000_000,
 };
+const OPUS_5_5: TokenRates = TokenRates {
+    input: 4_000_000,
+    output: 20_000_000,
+    cache_read: 200_000,
+    cache_write_5m: 5_000_000,
+    cache_write_1h: 8_000_000,
+};
+const OPUS_5_5_FAST: TokenRates = TokenRates {
+    input: 8_000_000,
+    output: 40_000_000,
+    cache_read: 400_000,
+    cache_write_5m: 10_000_000,
+    cache_write_1h: 16_000_000,
+};
 const SONNET_5: TokenRates = TokenRates {
     input: 2_000_000,
     output: 10_000_000,
@@ -75,6 +89,7 @@ fn lookup_rates(
         "claude-fable-5" => FABLE_5,
         "claude-fable-5-1" => FABLE_5_1,
         "claude-opus-5" => OPUS_5,
+        "claude-opus-5-5" => OPUS_5_5,
         "claude-sonnet-5" => SONNET_5,
         "claude-haiku-4-5-20251001" => HAIKU_4_5,
         _ => return Err(Reason::UnsupportedModel),
@@ -91,6 +106,7 @@ fn lookup_rates(
         ServiceSpeed::Unknown => Err(Reason::UnknownSpeed),
         ServiceSpeed::Standard => Ok(standard),
         ServiceSpeed::Fast if attribution.model == "claude-opus-5" => Ok(OPUS_5_FAST),
+        ServiceSpeed::Fast if attribution.model == "claude-opus-5-5" => Ok(OPUS_5_5_FAST),
         _ => Err(Reason::UnsupportedSpeed),
     }
 }
