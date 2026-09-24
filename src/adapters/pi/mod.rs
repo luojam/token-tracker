@@ -8,4 +8,4 @@ pub use parsing::{PiParseError, PiSessionParser};
 
 pub(crate) const PI_AGENT_ID: &str = "pi";
 
-const NORMALIZATION_VERSION: NonZeroU32 = NonZeroU32::MIN;
+const NORMALIZATION_VERSION: NonZeroU32 = NonZeroU32::new(2).unwrap();

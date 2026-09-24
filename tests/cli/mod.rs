@@ -170,7 +170,7 @@ fn imports_pi_codex_and_claude_and_preserves_usage_privately_across_runs() {
 
     let unavailable = successful_report(
         command(&home)
-            .env_remove("HOME")
+            .env("HOME", "relative-home")
             .env("XDG_DATA_HOME", &data_home)
             .output()
             .unwrap(),
@@ -487,6 +487,34 @@ fn invalid_export_arguments_fail_before_opening_storage() {
 }
 
 #[test]
+fn pi_directory_settings_follow_precedence_and_resolve_file_urls() {
+    let tree = TempTree::new();
+    tree.write("sessions with spaces #/session.jsonl", ALL_USAGE);
+    tree.write(
+        "custom agent/settings.json",
+        r#"{"sessionDir":"sessions with spaces #"}"#,
+    );
+    let agent_url = reqwest::Url::from_directory_path(tree.root.join("custom agent")).unwrap();
+    let session_url =
+        reqwest::Url::from_directory_path(tree.root.join("sessions with spaces #")).unwrap();
+    let run = |name: &str, session_override: &str| {
+        successful_report(
+            command(&tree.root)
+                .current_dir(&tree.root)
+                .env("XDG_DATA_HOME", tree.root.join(name))
+                .env("PI_CODING_AGENT_DIR", agent_url.as_str())
+                .env("PI_CODING_AGENT_SESSION_DIR", session_override)
+                .output()
+                .unwrap(),
+        )
+    };
+    assert_totals(&run("global", ""), [25, 38, 51, 64], 1, 4);
+    tree.write(".pi/settings.json", r#"{"sessionDir":"empty-sessions"}"#);
+    assert_totals(&run("project", ""), [0; 4], 0, 0);
+    assert_totals(&run("env", session_url.as_str()), [25, 38, 51, 64], 1, 4);
+}
+
+#[test]
 fn adapter_setup_failure_still_reports_stored_usage() {
     let tree = TempTree::new();
     let home = tree.root.join("home");
@@ -502,7 +530,7 @@ fn adapter_setup_failure_still_reports_stored_usage() {
 
     let report = successful_report(
         command(&home)
-            .env_remove("HOME")
+            .env("HOME", "relative-home")
             .env("XDG_DATA_HOME", &data_home)
             .output()
             .unwrap(),

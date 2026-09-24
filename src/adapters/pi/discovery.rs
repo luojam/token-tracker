@@ -4,7 +4,7 @@ use crate::adapters::files::{FileDiscoveryReport, SessionFileDiscovery};
 
 use crate::domain::AgentId;
 use std::path::{Path, PathBuf};
-use std::{env, error::Error, ffi::OsStr, fmt, io};
+use std::{env, error::Error, ffi::OsStr, fmt, fs, io};
 
 const PI_AGENT_DIRECTORY_ENV: &str = "PI_CODING_AGENT_DIR";
 const PI_SESSION_DIRECTORY_ENV: &str = "PI_CODING_AGENT_SESSION_DIR";
@@ -14,11 +14,33 @@ const PI_SESSIONS_DIRECTORY: &str = "sessions";
 const SESSION_EXTENSION: &str = "jsonl";
 
 pub fn default_session_root() -> Result<PathBuf, PiDiscoveryError> {
-    default_session_root_from(
-        env::var_os(PI_SESSION_DIRECTORY_ENV).as_deref(),
+    let session_directory = env::var_os(PI_SESSION_DIRECTORY_ENV);
+    #[allow(deprecated)]
+    let home = env::var_os("HOME").or_else(|| env::home_dir().map(PathBuf::into_os_string));
+    let root = default_session_root_from(
+        session_directory.as_deref(),
         env::var_os(PI_AGENT_DIRECTORY_ENV).as_deref(),
-        env::var_os("HOME").as_deref(),
-    )
+        home.as_deref(),
+    )?;
+    if session_directory.is_some_and(|directory| !directory.is_empty()) {
+        return Ok(root);
+    }
+
+    let session_setting = session_directory_setting(Path::new(".pi/settings.json"))
+        .or_else(|| session_directory_setting(&root.parent().unwrap().join("settings.json")));
+    match session_setting.as_ref().and_then(serde_json::Value::as_str) {
+        Some(directory) if !directory.is_empty() => {
+            default_session_root_from(Some(OsStr::new(directory)), None, home.as_deref())
+        }
+        _ => Ok(root),
+    }
+}
+
+fn session_directory_setting(path: &Path) -> Option<serde_json::Value> {
+    let content = fs::read_to_string(path).ok()?;
+    let settings: serde_json::Value =
+        serde_json::from_str(content.trim_start_matches('\u{feff}')).ok()?;
+    settings.get("sessionDir").cloned()
 }
 
 fn default_session_root_from(
@@ -34,6 +56,20 @@ fn default_session_root_from(
     };
 
     let resolve_override = |directory: &OsStr| {
+        if let Some(url) = directory
+            .to_str()
+            .filter(|path| path.starts_with("file://"))
+        {
+            return reqwest::Url::parse(url)
+                .ok()
+                .and_then(|url| url.to_file_path().ok())
+                .ok_or_else(|| PiDiscoveryError::SessionRootResolution {
+                    source: io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid Pi directory file URL",
+                    ),
+                });
+        }
         let directory = PathBuf::from(directory);
         match directory.strip_prefix("~") {
             Ok(relative) => home_directory().map(|home| home.join(relative)),

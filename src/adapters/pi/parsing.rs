@@ -195,6 +195,7 @@ fn parse_entry_line(
 
     match entry.entry_type.as_str() {
         "message" => parse_message_entry(line, events),
+        "usage" => parse_usage_entry(line, events),
         "compaction" => parse_summary_entry(line, UsageKind::Compaction, events),
         "branch_summary" => parse_summary_entry(line, UsageKind::BranchSummary, events),
         "session_info" => {
@@ -242,6 +243,21 @@ fn parse_message_entry(line: &str, events: &mut Vec<UsageEvent>) -> Result<(), E
         _ => {}
     }
 
+    Ok(())
+}
+
+fn parse_usage_entry(line: &str, events: &mut Vec<UsageEvent>) -> Result<(), EntryError> {
+    let entry: UsageEntryWire = serde_json::from_str(line)?;
+    events.push(normalize_event(
+        entry.id,
+        entry.timestamp,
+        UsageKind::Other,
+        Some(ModelAttribution {
+            provider: entry.provider,
+            model: entry.model,
+        }),
+        entry.usage,
+    )?);
     Ok(())
 }
 
@@ -382,6 +398,15 @@ struct ToolUsageEntryWire {
 
 #[derive(Deserialize)]
 struct ToolUsageWire {
+    usage: UsageWire,
+}
+
+#[derive(Deserialize)]
+struct UsageEntryWire {
+    id: String,
+    timestamp: String,
+    provider: String,
+    model: String,
     usage: UsageWire,
 }
 

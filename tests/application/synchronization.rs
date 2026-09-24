@@ -160,6 +160,10 @@ struct NoticeParser(Vec<ParseNotice>);
 impl SessionParser for NoticeParser {
     type Error = PiParseError;
 
+    fn normalization_version(&self) -> std::num::NonZeroU32 {
+        PiSessionParser::new().normalization_version()
+    }
+
     fn parse(
         &self,
         input: &mut dyn BufRead,

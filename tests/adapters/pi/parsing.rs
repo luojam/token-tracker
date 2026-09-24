@@ -10,6 +10,7 @@ use token_tracker::domain::{
 };
 
 const ALL_USAGE: &str = include_str!("../../fixtures/pi/all-usage.jsonl");
+const CURRENT_USAGE: &str = include_str!("../../fixtures/pi/current-usage.jsonl");
 const INCOMPLETE_FINAL_LINE: &str = include_str!("../../fixtures/pi/incomplete-final-line.jsonl");
 const MALFORMED_COMPLETE_LINE: &str =
     include_str!("../../fixtures/pi/malformed-complete-line.jsonl");
@@ -132,6 +133,35 @@ fn parses_every_usage_location_without_exposing_session_content() {
             .map(|event| &event.identity)
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn current_pi_usage_includes_cache_warming_and_ignores_context_only_edits() {
+    let parsed = parse(CURRENT_USAGE).unwrap();
+    assert_eq!(parsed.events.len(), 2);
+    assert_eq!(parsed.events[0].tokens.total(), 100);
+    let event = &parsed.events[1];
+    assert_eq!(event.kind, UsageKind::Other);
+    assert_eq!(
+        event.tokens,
+        TokenCounts {
+            cache_read: 50_000,
+            ..TokenCounts::default()
+        }
+    );
+    assert_eq!(
+        event.attribution,
+        Some(ModelAttribution {
+            provider: "anthropic".into(),
+            model: "claude-sonnet-4-6".into(),
+        })
+    );
+    assert_eq!(
+        event.recorded_cost,
+        Some(RecordedCost::from_usd(0.015).unwrap())
+    );
+    let unknown_kind = CURRENT_USAGE.replace("cache_warm", "future_operation");
+    assert_eq!(parse(&unknown_kind).unwrap().events, parsed.events);
 }
 
 #[test]
