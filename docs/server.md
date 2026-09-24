@@ -5,19 +5,36 @@ latest snapshot from each machine.
 
 ## Deployment
 
-[scripts/deploy.py](../scripts/deploy.py) builds and deploys the server to AWS EC2
-through SSM. [Terraform](../infra/main.tf) provisions the infrastructure and auth
-token; deployment configures storage, services, and HTTPS through Caddy.
+[Terraform](../infra/main.tf) provisions EC2 and an auth token.
+[scripts/deploy.py](../scripts/deploy.py) builds and deploys through SSM, with
+Caddy providing HTTPS.
 
-Requires Python 3, Terraform, a configured AWS CLI, `musl-gcc`, and the Rust
-`x86_64-unknown-linux-musl` target. Run from the repository directory:
+Requires Python 3, Terraform 1.11+, AWS CLI v2, `musl-gcc`, and the Rust
+`x86_64-unknown-linux-musl` target, plus AWS credentials permitting Terraform,
+S3 uploads, and SSM commands. From the repository root:
 
 ```sh
-python3 scripts/deploy.py tracker.example.com --provision
+terraform -chdir=infra init
+terraform -chdir=infra apply
+terraform -chdir=infra output -raw public_ip
 ```
 
-Point the domain's DNS to Terraform's `public_ip` output for HTTPS to work.
-For subsequent deployments, omit `--provision`.
+Point your domain's DNS A record at that IP. Once it resolves, deploy:
+
+```sh
+python3 scripts/deploy.py tracker.example.com
+```
+
+Rerun to update and check HTTPS health. Options:
+
+- `--provision`: apply infrastructure changes first.
+- `--release SHA`: reuse an uploaded binary by SHA-256; rollback needs database compatibility.
+
+For Caddy upgrades, change the version and checksum in
+[caddy.env](../infra/deploy/caddy.env), then redeploy.
+
+Troubleshoot using the printed SSM command ID, `/var/log/token-tracker-setup.log`,
+or `journalctl -u token-tracker -u caddy`. Timed-out commands may still be running.
 
 ## Upload
 
