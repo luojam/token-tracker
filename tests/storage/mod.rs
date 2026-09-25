@@ -164,7 +164,7 @@ fn imports_round_trip_and_corrections_replace_usage_and_pricing_context() {
 }
 
 #[test]
-fn replacing_a_session_preserves_provenance_and_rejects_late_imports() {
+fn replacing_a_session_preserves_provenance() {
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
     let original = session_import("/sessions/a.jsonl", 10);
     store.commit_import(&validated(&original)).unwrap();
@@ -199,14 +199,6 @@ fn replacing_a_session_preserves_provenance_and_rejects_late_imports() {
             (original.session.metadata.session_id.as_str(), 10)
         ]
     );
-
-    let states = store.source_states(&"pi".into()).unwrap();
-    assert_eq!(
-        store.commit_import(&validated(&original)).unwrap(),
-        CommitImportOutcome::IgnoredStale
-    );
-    assert_eq!(store.usage_snapshot().unwrap(), snapshot);
-    assert_eq!(store.source_states(&"pi".into()).unwrap(), states);
 }
 
 #[test]

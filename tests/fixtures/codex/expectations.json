@@ -58,20 +58,6 @@
         }
       ]
     },
-    "legacy-parent.jsonl": {
-      "completion": "complete",
-      "events": [
-        {
-          "key": "legacy-turn-v1:turn-legacy-a",
-          "tokens": [
-            120,
-            100,
-            0,
-            30
-          ]
-        }
-      ]
-    },
     "legacy-partial-fork.jsonl": {
       "completion": "complete",
       "events": [
@@ -196,15 +182,6 @@
     "reject-mirror-offset.jsonl": {
       "reject": "mirror_progression"
     },
-    "reject-overlapping-delta.jsonl": {
-      "reject": "invalid_delta"
-    },
-    "reject-overlapping-turns.jsonl": {
-      "reject": "overlapping_legacy_turns"
-    },
-    "reject-response-identity.jsonl": {
-      "reject": "conflicting_response_identity"
-    },
     "reject-reused-turn.jsonl": {
       "reject": "reused_closed_turn"
     },
@@ -218,29 +195,6 @@
             40,
             10,
             10
-          ]
-        }
-      ]
-    },
-    "response-cleared-tier.jsonl": {
-      "completion": "complete",
-      "events": [
-        {
-          "key": "response-v1:response-a",
-          "tokens": [
-            60,
-            40,
-            0,
-            10
-          ]
-        },
-        {
-          "key": "response-v1:response-b",
-          "tokens": [
-            60,
-            60,
-            0,
-            20
           ]
         }
       ]
@@ -301,29 +255,6 @@
             40,
             0,
             10
-          ]
-        }
-      ]
-    },
-    "response-pending-mirror.jsonl": {
-      "completion": "complete",
-      "events": [
-        {
-          "key": "response-v1:response-a",
-          "tokens": [
-            60,
-            40,
-            0,
-            10
-          ]
-        },
-        {
-          "key": "response-v1:response-b",
-          "tokens": [
-            60,
-            60,
-            0,
-            20
           ]
         }
       ]

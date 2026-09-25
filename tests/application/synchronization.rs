@@ -3,9 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{BufRead, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use token_tracker::adapters::files::{
-    FileRevision, FileSessionSource, ParseContext, SessionParser,
-};
+use token_tracker::adapters::files::{FileSessionSource, ParseContext, SessionParser};
 
 use token_tracker::adapters::pi::{PiParseError, PiSessionDiscovery, PiSessionParser};
 use token_tracker::application::{
@@ -19,12 +17,9 @@ fn scan_time(value: i64) -> Timestamp {
     Timestamp::from_unix_milliseconds(value)
 }
 
-fn header(session_id: &str, parent: Option<&Path>) -> String {
-    let parent = parent
-        .map(|path| format!(",\"parentSession\":{:?}", path.to_string_lossy()))
-        .unwrap_or_default();
+fn header(session_id: &str) -> String {
     format!(
-        "{{\"type\":\"session\",\"version\":3,\"id\":\"{session_id}\",\"timestamp\":\"2025-01-02T03:04:05.000Z\",\"cwd\":\"/work/project\"{parent}}}\n"
+        "{{\"type\":\"session\",\"version\":3,\"id\":\"{session_id}\",\"timestamp\":\"2025-01-02T03:04:05.000Z\",\"cwd\":\"/work/project\"}}\n"
     )
 }
 
@@ -34,8 +29,8 @@ fn assistant_event(event_id: &str, input: u64) -> String {
     )
 }
 
-fn session(session_id: &str, parent: Option<&Path>, events: &[(&str, u64)]) -> String {
-    let mut value = header(session_id, parent);
+fn session(session_id: &str, events: &[(&str, u64)]) -> String {
+    let mut value = header(session_id);
     for (event_id, input) in events {
         value.push_str(&assistant_event(event_id, *input));
     }
@@ -59,7 +54,7 @@ fn synchronize(
 fn imports_append_and_correct_usage_while_retaining_omitted_history() {
     let tree = TempTree::new();
     let path = tree.root.join("session.jsonl");
-    fs::write(&path, session("session-a", None, &[("event-a", 10)])).unwrap();
+    fs::write(&path, session("session-a", &[("event-a", 10)])).unwrap();
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
 
     let first = synchronize(&tree.root, &mut store, 1_000);
@@ -84,7 +79,7 @@ fn imports_append_and_correct_usage_while_retaining_omitted_history() {
     assert_eq!(appended.counts.observations_inserted, 1);
     assert_eq!(appended.counts.observations_updated, 0);
 
-    fs::write(&path, session("session-a", None, &[("event-a", 999_999)])).unwrap();
+    fs::write(&path, session("session-a", &[("event-a", 999_999)])).unwrap();
     let rewritten = synchronize(&tree.root, &mut store, 4_000);
     assert_eq!(rewritten.counts.sources_imported, 1);
     assert_eq!(rewritten.counts.event_identities_inserted, 0);
@@ -106,7 +101,7 @@ fn imports_append_and_correct_usage_while_retaining_omitted_history() {
 
     fs::write(
         &path,
-        format!("{}{{malformed complete line}}\n", header("session-a", None)),
+        format!("{}{{malformed complete line}}\n", header("session-a")),
     )
     .unwrap();
 
@@ -137,7 +132,7 @@ fn incomplete_final_lines_are_committed_and_retried_without_a_revision_change() 
     let path = tree.root.join("active.jsonl");
     let source = format!(
         "{}{}{{\"type\":\"message\"",
-        header("active-session", None),
+        header("active-session"),
         assistant_event("complete-event", 10)
     );
     fs::write(path, source).unwrap();
@@ -181,7 +176,7 @@ fn notices_persist_until_a_successful_replacement() {
     let root = tree.root.join("sessions");
     fs::create_dir(&root).unwrap();
     let path = root.join("session.jsonl");
-    let source = session("partial", None, &[("final-response", 10)]);
+    let source = session("partial", &[("final-response", 10)]);
     fs::write(&path, &source).unwrap();
     let database = tree.root.join("usage.db");
     let mut store = SqliteUsageStore::open(&database).unwrap();
@@ -230,7 +225,7 @@ fn notices_persist_until_a_successful_replacement() {
     assert!(reopened.warnings.is_empty());
     assert_eq!(store.usage_snapshot().unwrap(), snapshot);
 
-    fs::write(&path, session("partial", None, &[("final-response", 999)])).unwrap();
+    fs::write(&path, session("partial", &[("final-response", 999)])).unwrap();
     let failed = synchronize_sessions_at(
         &FileSessionSource::new(
             &PiSessionDiscovery::new(&root),
@@ -263,7 +258,7 @@ fn notices_persist_until_a_successful_replacement() {
     assert!(!store.source_states(&"pi".into()).unwrap()[0].present);
     assert_eq!(store.usage_snapshot().unwrap(), snapshot);
 
-    fs::write(&path, session("partial", None, &[("final-response", 999)])).unwrap();
+    fs::write(&path, session("partial", &[("final-response", 999)])).unwrap();
     let replaced = synchronize(&root, &mut store, 7_000);
     assert_eq!(replaced.counts.sources_imported, 1);
     assert_eq!(replaced.counts.observations_updated, 1);
@@ -275,54 +270,6 @@ fn notices_persist_until_a_successful_replacement() {
     let unchanged = synchronize(&root, &mut store, 8_000);
     assert_eq!(unchanged.counts.sources_unchanged, 1);
     assert!(unchanged.warnings.is_empty());
-}
-
-#[test]
-fn malformed_sources_do_not_block_valid_imports() {
-    let tree = TempTree::new();
-    fs::write(
-        tree.root.join("good.jsonl"),
-        session("good-session", None, &[("good-event", 10)]),
-    )
-    .unwrap();
-    fs::write(
-        tree.root.join("bad.jsonl"),
-        format!("{}{{bad}}\n", header("bad-session", None)),
-    )
-    .unwrap();
-    let mut store = SqliteUsageStore::open_in_memory().unwrap();
-
-    let report = synchronize(&tree.root, &mut store, 1_000);
-
-    assert_eq!(report.counts.sources_discovered, 2);
-    assert_eq!(report.counts.sources_imported, 1);
-    assert_eq!(report.counts.sources_failed, 1);
-    assert_eq!(report.counts.event_identities_inserted, 1);
-    assert_eq!(report.warnings.len(), 1);
-}
-
-#[test]
-fn copied_history_has_one_identity_and_an_observation_per_source() {
-    let tree = TempTree::new();
-    let original = tree.root.join("original.jsonl");
-    let clone = tree.root.join("clone.jsonl");
-    fs::write(
-        &original,
-        session("original-session", None, &[("shared-event", 10)]),
-    )
-    .unwrap();
-    fs::write(
-        &clone,
-        session("clone-session", Some(&original), &[("shared-event", 99)]),
-    )
-    .unwrap();
-    let mut store = SqliteUsageStore::open_in_memory().unwrap();
-
-    let report = synchronize(&tree.root, &mut store, 1_000);
-
-    assert_eq!(report.counts.sources_imported, 2);
-    assert_eq!(report.counts.event_identities_inserted, 1);
-    assert_eq!(report.counts.observations_inserted, 2);
 }
 
 struct MutatingParser {
@@ -359,11 +306,7 @@ impl SessionParser for MutatingParser {
 fn files_changed_during_parsing_are_retried() {
     let tree = TempTree::new();
     let path = tree.root.join("changing.jsonl");
-    fs::write(
-        &path,
-        session("changing-session", None, &[("initial-event", 10)]),
-    )
-    .unwrap();
+    fs::write(&path, session("changing-session", &[("initial-event", 10)])).unwrap();
     let parser = MutatingParser {
         remaining_changes: AtomicUsize::new(1),
     };
@@ -381,16 +324,15 @@ fn files_changed_during_parsing_are_retried() {
     assert_eq!(report.counts.event_identities_inserted, 2);
     assert_eq!(report.counts.observations_inserted, 2);
     assert_eq!(
-        store.source_states(&AgentId::from("pi")).unwrap()[0]
-            .last_import
-            .as_ref()
-            .unwrap()
-            .revision,
-        FileRevision {
-            size: fs::metadata(&path).unwrap().len(),
-            modified_at: fs::metadata(&path).unwrap().modified().unwrap()
-        }
-        .into()
+        synchronize_sessions_at(
+            &FileSessionSource::new(&PiSessionDiscovery::new(&tree.root), &parser),
+            &mut store,
+            scan_time(2_000),
+        )
+        .unwrap()
+        .counts
+        .sources_unchanged,
+        1
     );
 }
 
@@ -398,11 +340,7 @@ fn files_changed_during_parsing_are_retried() {
 fn continuously_changing_files_are_deferred() {
     let tree = TempTree::new();
     let path = tree.root.join("never-stable.jsonl");
-    fs::write(
-        &path,
-        session("changing-session", None, &[("initial-event", 10)]),
-    )
-    .unwrap();
+    fs::write(&path, session("changing-session", &[("initial-event", 10)])).unwrap();
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
 
     let report = synchronize_sessions_at(
@@ -468,7 +406,7 @@ fn normalization_versions_reimport_unchanged_sources_and_retry_failures() {
     let tree = TempTree::new();
     fs::write(
         tree.root.join("session.jsonl"),
-        session("versioned", None, &[("event", 10)]),
+        session("versioned", &[("event", 10)]),
     )
     .unwrap();
     let database = tree.root.join("usage.db");

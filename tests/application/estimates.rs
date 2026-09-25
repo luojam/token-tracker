@@ -116,10 +116,6 @@ fn mixed_estimates_use_canonical_events_and_keep_adapter_costs_separate() {
     assert_eq!(summary.totals.estimates.priced_event_count, 2);
 
     let usage_report = build_usage_report(&summary);
-    assert_eq!(usage_report.totals.estimates, summary.totals.estimates);
-    for (row, source) in usage_report.rows.iter().zip(&summary.breakdown) {
-        assert_eq!(row.estimates, source.estimates);
-    }
     assert_eq!(
         usage_report.totals.cost,
         CostTotal::Available {

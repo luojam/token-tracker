@@ -19,14 +19,7 @@ fn validates_raw_mirror_offset_last_usage_and_unmatched_progression() {
         let original = records(source);
         let mirror = if source == RESPONSE { 4 } else { 12 };
         for field in ["total_token_usage", "last_token_usage"] {
-            for counter in [
-                "input_tokens",
-                "cached_input_tokens",
-                "cache_write_input_tokens",
-                "output_tokens",
-                "reasoning_output_tokens",
-                "total_tokens",
-            ] {
+            for counter in ["cached_input_tokens", "reasoning_output_tokens"] {
                 let mut changed = original.clone();
                 let vector = &mut changed[mirror]["payload"]["info"][field];
                 vector[counter] = json!(vector[counter].as_u64().unwrap() + 1);

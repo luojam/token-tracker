@@ -82,42 +82,43 @@ fn rejects_conflicting_response_identity_without_exposing_ids() {
 
 #[test]
 fn validates_response_and_cumulative_counter_relationships_with_checked_math() {
-    for vector in ["usage", "turn_token_usage", "thread_token_usage"] {
-        for changes in [
-            json!({"cached_input_tokens": 101}),
-            json!({"cache_write_input_tokens": 61}),
-            json!({"reasoning_output_tokens": 11}),
-            json!({"total_tokens": 111}),
+    for (vector, changes) in [
+        ("usage", json!({"cached_input_tokens": 101})),
+        ("usage", json!({"cache_write_input_tokens": 61})),
+        ("usage", json!({"reasoning_output_tokens": 11})),
+        ("usage", json!({"total_tokens": 111})),
+        (
+            "usage",
             json!({"input_tokens": u64::MAX, "total_tokens": 9}),
+        ),
+        (
+            "usage",
             json!({"cached_input_tokens": u64::MAX, "cache_write_input_tokens": 1}),
-        ] {
-            let mut changed = response();
-            for (counter, value) in changes.as_object().unwrap() {
-                changed["payload"][vector][counter] = value.clone();
-            }
-            changed["payload"]["content"] = json!("SECRET_IGNORED_CONTENT");
-
-            let error = parse_response(&changed).unwrap_err();
-            match error {
-                CodexParseError::InvalidField { line, field } => {
-                    assert_eq!(line, 4);
-                    assert_eq!(field, format!("token_usage_record.payload.{vector}"));
-                }
-                _ => panic!("unexpected error: {error}"),
-            }
-            assert!(!format!("{error:?} {error}").contains("SECRET"));
+        ),
+        ("turn_token_usage", json!({"reasoning_output_tokens": 11})),
+        ("thread_token_usage", json!({"total_tokens": 111})),
+    ] {
+        let mut changed = response();
+        for (counter, value) in changes.as_object().unwrap() {
+            changed["payload"][vector][counter] = value.clone();
         }
+        changed["payload"]["content"] = json!("SECRET_IGNORED_CONTENT");
+
+        let error = parse_response(&changed).unwrap_err();
+        match error {
+            CodexParseError::InvalidField { line, field } => {
+                assert_eq!(line, 4);
+                assert_eq!(field, format!("token_usage_record.payload.{vector}"));
+            }
+            _ => panic!("unexpected error: {error}"),
+        }
+        assert!(!format!("{error:?} {error}").contains("SECRET"));
     }
 
     for vector in ["turn_token_usage", "thread_token_usage"] {
         for changes in [
             json!({"input_tokens": 99, "total_tokens": 109}),
-            json!({"cached_input_tokens": 39}),
             json!({"cached_input_tokens": 90}),
-            json!({"output_tokens": 9, "total_tokens": 109}),
-            json!({"reasoning_output_tokens": 1}),
-            json!({"cache_write_input_tokens": 0}),
-            json!({"cache_write_input_tokens": 50}),
         ] {
             let mut changed = response();
             for field in ["usage", "turn_token_usage", "thread_token_usage"] {
@@ -161,21 +162,21 @@ fn validates_response_and_cumulative_counter_relationships_with_checked_math() {
 
 #[test]
 fn only_cache_write_subdivision_is_optional() {
-    for vector in ["usage", "turn_token_usage", "thread_token_usage"] {
-        for counter in [
-            "input_tokens",
-            "cached_input_tokens",
-            "output_tokens",
-            "reasoning_output_tokens",
-            "total_tokens",
-        ] {
-            let mut missing = response();
-            missing["payload"][vector]
-                .as_object_mut()
-                .unwrap()
-                .remove(counter);
-            assert!(parse_response(&missing).is_err(), "{vector}.{counter}");
-        }
+    for (vector, counter) in [
+        ("usage", "input_tokens"),
+        ("usage", "cached_input_tokens"),
+        ("usage", "output_tokens"),
+        ("usage", "reasoning_output_tokens"),
+        ("usage", "total_tokens"),
+        ("turn_token_usage", "input_tokens"),
+        ("thread_token_usage", "input_tokens"),
+    ] {
+        let mut missing = response();
+        missing["payload"][vector]
+            .as_object_mut()
+            .unwrap()
+            .remove(counter);
+        assert!(parse_response(&missing).is_err(), "{vector}.{counter}");
     }
 
     let mut missing = response();

@@ -238,7 +238,6 @@ fn json(value: &impl serde::Serialize) -> rusqlite::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::EstimatedCost;
 
     #[test]
     fn summary_rejects_token_overflow() {
@@ -254,37 +253,5 @@ mod tests {
             sink.summary(),
             Err(SqliteStoreError::ValueOutOfRange("summary token total"))
         ));
-    }
-
-    #[test]
-    fn preserves_integer_tokens_and_decimal_money_precision() {
-        let mut snapshot: ExportSnapshot =
-            serde_json::from_str(include_str!("../../tests/fixtures/export-example.json")).unwrap();
-        snapshot.export_revision = u64::MAX;
-        snapshot.events[0].tokens.input = i64::MAX as u64;
-        snapshot.events[0].recorded_cost_usd =
-            Some(EstimatedCost::from_picodollars(u128::MAX).into());
-        let mut connection = Connection::open_in_memory().unwrap();
-        let transaction = connection.transaction().unwrap();
-        transaction
-            .execute_batch(include_str!("export_schema.sql"))
-            .unwrap();
-        replace_machine_snapshot(&transaction, &snapshot).unwrap();
-        transaction.commit().unwrap();
-        let values: (String, i64, String) = connection
-            .query_row(
-                "SELECT export_revision, input_tokens, recorded_cost_usd FROM snapshot, events",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            values,
-            (
-                "18446744073709551615".into(),
-                i64::MAX,
-                "340282366920938463463374607.431768211455".into(),
-            )
-        );
     }
 }

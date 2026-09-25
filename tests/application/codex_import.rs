@@ -1,9 +1,11 @@
-use crate::support::{TempTree, prefix};
+use crate::support::{TempTree, jsonl, prefix, records};
+use serde_json::json;
 use token_tracker::adapters::codex::{CodexSessionDiscovery, CodexSessionParser};
 use token_tracker::adapters::files::FileSessionSource;
-use token_tracker::application::{UsageReadStore, synchronize_sessions_at};
-use token_tracker::domain::Timestamp;
+use token_tracker::application::{CostAmount, CostTotal, UsageReadStore, synchronize_sessions_at};
+use token_tracker::domain::{EstimatedCost, Timestamp, TokenCounts};
 use token_tracker::storage::SqliteUsageStore;
+use token_tracker::{LocalSourceConfig, TokenTracker, TokenTrackerConfig};
 
 #[test]
 fn switching_from_turn_totals_to_responses_keeps_imported_keys() {
@@ -55,4 +57,77 @@ fn switching_from_turn_totals_to_responses_keeps_imported_keys() {
         0
     );
     assert_eq!(store.usage_snapshot().unwrap(), snapshot);
+}
+
+#[test]
+fn request_pricing_corrections_survive_reopening_with_unchanged_token_totals() {
+    let tree = TempTree::new();
+    let mut records = records(include_str!("../fixtures/codex/legacy-fresh.jsonl"));
+    records[2]["payload"]["model"] = json!("gpt-5.5");
+    for record in &mut records {
+        if !record["payload"]["info"].is_object() {
+            continue;
+        }
+        for vector in ["total_token_usage", "last_token_usage"] {
+            if let Some(counters) = record["payload"]["info"][vector].as_object_mut() {
+                for counter in counters.values_mut() {
+                    *counter = json!(counter.as_u64().unwrap() * 2_000);
+                }
+            }
+        }
+    }
+    tree.write("rollout-legacy.jsonl", jsonl(&records));
+    let config = TokenTrackerConfig {
+        database_path: Some(tree.root.join("usage.db")),
+        sources: vec![LocalSourceConfig::Codex {
+            roots: Some(vec![tree.root.clone()]),
+        }],
+        ..Default::default()
+    };
+    let mut tracker = TokenTracker::open(config.clone()).unwrap();
+    tracker.refresh().unwrap();
+    let original = tracker.report().unwrap();
+    assert_eq!(
+        original.report.totals.cost,
+        CostTotal::Available {
+            amount: CostAmount::Estimated(EstimatedCost::from_picodollars(3_100_000_000_000)),
+            partial: false,
+        }
+    );
+    assert_eq!(
+        original.report.totals.tokens,
+        TokenCounts {
+            input: 240_000,
+            output: 60_000,
+            cache_read: 200_000,
+            cache_write: 0,
+        }
+    );
+    drop(tracker);
+
+    let mut tracker = TokenTracker::open(config.clone()).unwrap();
+    assert_eq!(tracker.report().unwrap(), original);
+    records[6]["payload"]["info"]["last_token_usage"] =
+        records[6]["payload"]["info"]["total_token_usage"].clone();
+    records.drain(4..6);
+    tree.write("rollout-legacy.jsonl", jsonl(&records));
+    tracker.refresh().unwrap();
+
+    let corrected = tracker.report().unwrap();
+    assert_eq!(
+        corrected.report.totals.tokens,
+        original.report.totals.tokens
+    );
+    assert_eq!(
+        corrected.report.totals.cost,
+        CostTotal::Available {
+            amount: CostAmount::Estimated(EstimatedCost::from_picodollars(5_300_000_000_000)),
+            partial: false,
+        }
+    );
+    drop(tracker);
+    assert_eq!(
+        TokenTracker::open(config).unwrap().report().unwrap(),
+        corrected
+    );
 }

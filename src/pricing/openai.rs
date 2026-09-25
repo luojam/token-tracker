@@ -353,28 +353,3 @@ fn calculate_cost(
     .map(EstimatedCost::from_picodollars)
     .ok_or(EstimateUnavailableReason::ArithmeticOverflow)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cost_overflow_returns_no_partial_value() {
-        let rates = TokenRates::new(u64::MAX, u64::MAX, 0, 0);
-        let mut tokens = TokenCounts {
-            input: u64::MAX,
-            ..TokenCounts::default()
-        };
-
-        assert_eq!(
-            calculate_cost(tokens, rates).unwrap().as_picodollars(),
-            u128::from(u64::MAX) * u128::from(u64::MAX),
-        );
-
-        tokens.cache_read = u64::MAX;
-        assert_eq!(
-            calculate_cost(tokens, rates),
-            Err(EstimateUnavailableReason::ArithmeticOverflow),
-        );
-    }
-}

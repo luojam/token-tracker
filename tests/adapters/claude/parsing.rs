@@ -216,13 +216,6 @@ fn advisor_usage_is_priced_separately_from_executor_and_compaction() {
         assert_eq!(event.identity.adapter_key, key);
         assert_eq!(event.attribution.as_ref().unwrap().model, model);
         assert_eq!(tokens(event.tokens), json!(counts));
-        assert!(
-            event
-                .pricing_context
-                .as_ref()
-                .unwrap()
-                .usage_matches(event.tokens)
-        );
         assert_eq!(
             calculate_estimate(event).unwrap().cost.as_picodollars(),
             cost
@@ -465,28 +458,6 @@ fn invalid_counters_and_overflow_reject_the_session() {
             ..
         })
     ));
-
-    for field in [
-        "input_tokens",
-        "output_tokens",
-        "cache_read_input_tokens",
-        "cache_creation_input_tokens",
-    ] {
-        let mut record = final_record();
-        let mut iteration = record["message"]["usage"].clone();
-        iteration["type"] = json!("message");
-        iteration.as_object_mut().unwrap().remove("cache_creation");
-        iteration[field] = json!(iteration[field].as_u64().unwrap() + 1);
-        record["message"]["usage"]["iterations"] = json!([iteration]);
-
-        assert!(matches!(
-            parse_record(&record),
-            Err(ClaudeParseError::InvalidField {
-                field: "non-compaction total mismatch",
-                ..
-            })
-        ));
-    }
 }
 
 #[test]

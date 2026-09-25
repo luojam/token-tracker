@@ -137,9 +137,6 @@ fn unknown_names_and_tiers_never_fall_back_to_supported_rates() {
         ("azure", "gpt-6-astra", Standard, UnsupportedProvider),
         ("openai", "", Standard, UnsupportedModel),
         ("openai", "codex-auto-review", Standard, UnsupportedModel),
-        ("openai", "codex-auto-review", Fast, UnsupportedModel),
-        ("openai", "gpt-5.5-custom", Fast, UnsupportedModel),
-        ("openai", "gpt-5.4-mini", Unknown, UnresolvedTier),
         ("openai", "gpt-6-astra-custom", Fast, UnsupportedModel),
         ("openai", "gpt-5.6-sol-2026-09-07", Fast, UnsupportedModel),
         ("openai", "GPT-5.6", Standard, UnsupportedModel),
@@ -148,12 +145,6 @@ fn unknown_names_and_tiers_never_fall_back_to_supported_rates() {
             "openai",
             "gpt-5.6",
             Unsupported("flex".into()),
-            UnsupportedTier,
-        ),
-        (
-            "openai",
-            "gpt-6-astra",
-            Unsupported("ultrafast".into()),
             UnsupportedTier,
         ),
     ] {

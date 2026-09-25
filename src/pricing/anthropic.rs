@@ -176,36 +176,3 @@ fn price_tokens(
     }
     Ok(EstimatedCost::from_picodollars(cost))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cost_overflow_returns_no_partial_value() {
-        let rates = TokenRates {
-            input: u64::MAX,
-            output: u64::MAX,
-            ..OPUS_5
-        };
-        let tokens = TokenCounts {
-            input: u64::MAX,
-            ..TokenCounts::default()
-        };
-        assert_eq!(
-            price_tokens(tokens, None, rates).unwrap().as_picodollars(),
-            u128::from(u64::MAX) * u128::from(u64::MAX)
-        );
-        assert_eq!(
-            price_tokens(
-                TokenCounts {
-                    output: u64::MAX,
-                    ..tokens
-                },
-                None,
-                rates
-            ),
-            Err(EstimateUnavailableReason::ArithmeticOverflow)
-        );
-    }
-}

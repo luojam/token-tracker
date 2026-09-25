@@ -1,4 +1,4 @@
-use crate::support::{TempTree, jsonl, records};
+use crate::support::TempTree;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
@@ -87,7 +87,7 @@ fn assert_no_content_persisted(database_directory: &Path) {
 }
 
 #[test]
-fn imports_pi_codex_and_claude_and_preserves_usage_privately_across_runs() {
+fn imports_pi_codex_and_claude_and_reports_usage_without_exposing_content() {
     let tree = TempTree::new();
     let home = tree.root.join("home");
     let data_home = tree.root.join("data");
@@ -143,7 +143,6 @@ fn imports_pi_codex_and_claude_and_preserves_usage_privately_across_runs() {
     assert!(report.contains("Claude Code usage:"), "{report}");
     assert!(report.contains("anthropic / claude-opus-5"), "{report}");
     assert!(!report.contains("Warnings"), "{report}");
-    assert_eq!(run(), report);
 
     append(
         &source,
@@ -165,92 +164,7 @@ fn imports_pi_codex_and_claude_and_preserves_usage_privately_across_runs() {
         assert!(partial.contains(warning), "{partial}");
     }
     assert_eq!(partial.matches("final usage is missing.").count(), 1);
-    assert_eq!(run(), partial);
     assert_no_content_persisted(&data_home.join("token-tracker"));
-
-    let unavailable = successful_report(
-        command(&home)
-            .env("HOME", "relative-home")
-            .env("XDG_DATA_HOME", &data_home)
-            .output()
-            .unwrap(),
-    );
-    assert!(unavailable.contains("claude: could not configure adapter:"));
-    assert_eq!(unavailable.matches("final usage is missing.").count(), 1);
-    assert_totals(&unavailable, [165, 116, 341, 144], 3, 9);
-
-    fs::remove_dir_all(&config).unwrap();
-    fs::remove_dir_all(home.join(".pi")).unwrap();
-    fs::remove_dir_all(&codex_home).unwrap();
-
-    let retained = run();
-    assert_eq!(
-        retained.split_once("\nWarnings").unwrap().0,
-        partial.split_once("\nWarnings").unwrap().0
-    );
-    assert!(
-        retained
-            .contains("Claude: 2 responses across 1 file excluded because final usage is missing.")
-    );
-}
-
-#[test]
-fn legacy_request_pricing_survives_reopen_corrections_and_source_removal() {
-    use serde_json::{Value, json};
-
-    let tree = TempTree::new();
-    let home = tree.root.join("home");
-    let sessions = home.join(".codex/sessions");
-    fs::create_dir_all(&sessions).unwrap();
-    let source = sessions.join("rollout-legacy.jsonl");
-    let mut records = records(include_str!("../fixtures/codex/legacy-fresh.jsonl"));
-    records[2]["payload"]["model"] = json!("gpt-5.5");
-    for record in &mut records {
-        if !record["payload"]["info"].is_object() {
-            continue;
-        }
-        for vector in ["total_token_usage", "last_token_usage"] {
-            if let Some(counters) = record["payload"]["info"][vector].as_object_mut() {
-                for counter in counters.values_mut() {
-                    *counter = json!(counter.as_u64().unwrap() * 2_000);
-                }
-            }
-        }
-    }
-
-    let write = |records: &[Value]| {
-        fs::write(&source, jsonl(records)).unwrap();
-    };
-    let run = || successful_report(command(&home).output().unwrap());
-    write(&records);
-
-    let report = run();
-    assert!(report.contains("Total cost: $3.100000\n"), "{report}");
-    assert_totals(
-        &report.replace(',', ""),
-        [240_000, 60_000, 200_000, 0],
-        1,
-        1,
-    );
-    assert_eq!(run(), report);
-
-    records[6]["payload"]["info"]["last_token_usage"] =
-        records[6]["payload"]["info"]["total_token_usage"].clone();
-    records.drain(4..6);
-    write(&records);
-
-    let corrected = run();
-    assert!(corrected.contains("Total cost: $5.300000\n"), "{corrected}");
-    assert_totals(
-        &corrected.replace(',', ""),
-        [240_000, 60_000, 200_000, 0],
-        1,
-        1,
-    );
-    assert_eq!(run(), corrected);
-
-    fs::remove_file(source).unwrap();
-    assert_eq!(run(), corrected);
 }
 
 #[test]

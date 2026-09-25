@@ -100,3 +100,36 @@ fn publication_replaces_one_machine_and_handles_retries_and_ordering() {
         .unwrap();
     assert_eq!(machines, vec![other.machine_id]);
 }
+
+#[test]
+fn preserves_integer_tokens_and_decimal_money_precision() {
+    let mut snapshot: ExportSnapshot =
+        serde_json::from_str(include_str!("../fixtures/export-example.json")).unwrap();
+    snapshot.export_revision = u64::MAX;
+    snapshot.events[0].tokens.input = i64::MAX as u64;
+    snapshot.events[0].recorded_cost_usd =
+        Some(token_tracker::domain::EstimatedCost::from_picodollars(u128::MAX).into());
+    let tree = TempTree::new();
+    let path = tree.root.join("export.db");
+    SqliteExportStore::open(&path)
+        .unwrap()
+        .publish(&snapshot)
+        .unwrap();
+
+    let values: (String, i64, String) = rusqlite::Connection::open(&path)
+        .unwrap()
+        .query_row(
+            "SELECT export_revision, input_tokens, recorded_cost_usd FROM snapshot, events",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        values,
+        (
+            "18446744073709551615".into(),
+            i64::MAX,
+            "340282366920938463463374607.431768211455".into(),
+        )
+    );
+}

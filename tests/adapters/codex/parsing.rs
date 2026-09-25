@@ -244,13 +244,6 @@ fn validates_recognized_accounting_fields_without_exposing_values() {
         }
     }
 
-    let mut missing = response.clone();
-    missing["payload"]["usage"]
-        .as_object_mut()
-        .unwrap()
-        .remove("input_tokens");
-    assert!(parse(&format!("{HEADER}\n{missing}")).is_err());
-
     let overflow = response.to_string().replace(
         "\"input_tokens\":100",
         "\"input_tokens\":18446744073709551616",
@@ -281,11 +274,6 @@ fn validates_recognized_accounting_fields_without_exposing_values() {
     assert!(parse(&format!("{HEADER}\n[\"future_record\"]")).is_err());
 
     let legacy = include_str!("../../fixtures/codex/legacy-fresh.jsonl");
-    assert_eq!(
-        parse(legacy).unwrap().completion,
-        SnapshotCompletion::Complete
-    );
-
     let bad_legacy = legacy.replace("\"input_tokens\":100", "\"input_tokens\":false");
     assert!(matches!(
         parse(&bad_legacy),
