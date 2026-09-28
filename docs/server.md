@@ -39,13 +39,18 @@ or `journalctl -u token-tracker -u caddy`. Timed-out commands may still be runni
 ## Upload
 
 Save the generated token from AWS SSM Parameter Store
-(`/token-tracker/auth-token`) to a local file on each machine. The file must be
-accessible only by its owner:
+(`/token-tracker/auth-token`) to a local file on each machine using AWS credentials
+with access to the parameter. The file must be accessible only by its owner:
 
 ```sh
-chmod 600 /path/to/auth.token
+umask 077
+mkdir -p ~/.config/token-tracker
+aws ssm get-parameter --region eu-north-1 \
+  --name /token-tracker/auth-token --with-decryption \
+  --query Parameter.Value --output text > ~/.config/token-tracker/auth.token
+chmod 600 ~/.config/token-tracker/auth.token
 token-tracker
-token-tracker upload https://tracker.example.com --auth-file /path/to/auth.token
+token-tracker upload https://tracker.example.com --auth-file ~/.config/token-tracker/auth.token
 ```
 
 Run `token-tracker` first to import current usage; upload includes all locally
