@@ -41,6 +41,7 @@ The default is no name.
 | --- | --- |
 | `token-tracker` | Refresh sources and show the full usage report. |
 | `token-tracker summary` | Refresh sources and show total, input, output, and cache tokens plus total cost. |
+| `token-tracker summary --server <server-url> --auth-file <path>` | Fetch combined usage totals from a server. |
 | `token-tracker export <path> [--force]` | Export retained usage to SQLite. |
 | `token-tracker upload <server-url> --auth-file <path>` | Upload retained usage to a server. |
 | `token-tracker --help` | Show command usage. |
@@ -51,7 +52,7 @@ Export and upload do not refresh sources. Run `token-tracker` or
 For exports, the parent directory must exist. Add `--force` to replace an existing
 export; unrelated files are never overwritten.
 
-For uploads, HTTPS is required except on loopback. See the
+For server requests, HTTPS is required except on loopback. See the
 [server guide](docs/server.md) for setup and authentication.
 
 ## Sources and local data

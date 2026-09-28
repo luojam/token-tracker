@@ -56,6 +56,14 @@ token-tracker upload https://tracker.example.com --auth-file ~/.config/token-tra
 Run `token-tracker` first to import current usage; upload includes all locally
 retained usage but does not refresh sources. HTTPS is required except on loopback.
 
+## Combined summary
+
+Fetch totals across the latest uploaded snapshot from each machine:
+
+```sh
+token-tracker summary --server https://tracker.example.com --auth-file ~/.config/token-tracker/auth.token
+```
+
 ## API
 
 - `POST /snapshots` accepts [snapshot JSON](../tests/fixtures/export-example.json)

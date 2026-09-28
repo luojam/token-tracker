@@ -1,6 +1,7 @@
 mod config;
 mod exporting;
 mod reporting;
+mod server;
 mod uploading;
 
 use std::fmt;
@@ -29,6 +30,15 @@ fn execute() -> Result<(), CliError> {
         return io::stdout()
             .lock()
             .write_all(USAGE.as_bytes())
+            .map_err(CliError::Output);
+    }
+    if let Command::ServerSummary { url, auth_file } = &command {
+        let summary = server::ServerClient::new(url, auth_file)
+            .and_then(|client| client.summary())
+            .map_err(CliError::ServerSummary)?;
+        return io::stdout()
+            .lock()
+            .write_all(reporting::render_server_summary(&summary).as_bytes())
             .map_err(CliError::Output);
     }
     let config = config::Config::load()?;
@@ -80,19 +90,22 @@ fn execute() -> Result<(), CliError> {
 
 const USAGE: &str = "Usage: token-tracker
        token-tracker summary
+       token-tracker summary --server <server-url> --auth-file <path>
        token-tracker export <path> [--force]
        token-tracker upload <server-url> --auth-file <path>
 
 Without arguments, refresh sources and show the usage report.
 Summary refreshes sources and shows token totals by type and total cost.
+Summary --server fetches combined totals without accessing local usage.
 Export and upload use retained usage without refreshing sources.
 Existing exports require --force. Use -- before paths beginning with '-'.
-Upload requires HTTPS (HTTP is allowed for loopback addresses).
+Server requests require HTTPS (HTTP is allowed for loopback addresses).
 ";
 
 enum Command {
     Report,
     Summary,
+    ServerSummary { url: String, auth_file: PathBuf },
     Export { path: PathBuf, force: bool },
     Upload { url: String, auth_file: PathBuf },
     Help,
@@ -107,13 +120,13 @@ fn parse_command() -> Result<Command, CliError> {
         return Ok(Command::Help);
     }
     if command == "summary" {
-        return if args.next().is_none() {
-            Ok(Command::Summary)
-        } else {
-            Err(CliError::Arguments)
-        };
+        match args.next() {
+            None => return Ok(Command::Summary),
+            Some(flag) if flag == "--server" => {}
+            _ => return Err(CliError::Arguments),
+        }
     }
-    if command == "upload" {
+    if command == "upload" || command == "summary" {
         let url = args
             .next()
             .and_then(|arg| arg.into_string().ok())
@@ -129,9 +142,11 @@ fn parse_command() -> Result<Command, CliError> {
         if args.next().is_some() {
             return Err(CliError::Arguments);
         }
-        return Ok(Command::Upload {
-            url,
-            auth_file: auth_file.into(),
+        let auth_file = auth_file.into();
+        return Ok(if command == "upload" {
+            Command::Upload { url, auth_file }
+        } else {
+            Command::ServerSummary { url, auth_file }
         });
     }
     if command != "export" {
@@ -173,6 +188,7 @@ enum CliError {
     Output(io::Error),
     Export(ExportError),
     Upload(uploading::UploadError),
+    ServerSummary(server::ServerError),
     ExportOutput {
         path: PathBuf,
         source: io::Error,
@@ -200,6 +216,9 @@ impl fmt::Display for CliError {
             Self::Output(source) => write!(formatter, "could not write report: {source}"),
             Self::Export(source) => write!(formatter, "could not build export: {source}"),
             Self::Upload(source) => write!(formatter, "could not upload snapshot: {source}"),
+            Self::ServerSummary(source) => {
+                write!(formatter, "could not fetch server summary: {source}")
+            }
             Self::ExportDatabase { path, source } => write!(
                 formatter,
                 "could not write export to {}: {source}",

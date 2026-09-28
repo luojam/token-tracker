@@ -1,77 +1,16 @@
 use std::{
     fs,
-    io::{BufRead, BufReader, Read, Write},
-    net::{TcpListener, TcpStream},
+    io::{Read, Write},
     os::unix::fs::PermissionsExt,
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use serde_json::json;
 use token_tracker::ExportSnapshot;
 
+use super::server::{TOKEN, auth_file, listener, request, respond};
 use crate::support::TempTree;
-
-const TOKEN: &str = "test-token-with-at-least-32-characters";
-
-fn auth_file(tree: &TempTree) -> std::path::PathBuf {
-    let path = tree.write("auth.token", format!("{TOKEN}\n"));
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-    path
-}
-
-fn listener() -> TcpListener {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    listener
-}
-
-fn request(listener: &TcpListener) -> (TcpStream, Vec<u8>) {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let stream = loop {
-        match listener.accept() {
-            Ok((stream, _)) => break stream,
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                assert!(Instant::now() < deadline, "upload did not arrive");
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => panic!("{error}"),
-        }
-    };
-    stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
-        .unwrap();
-    let mut reader = BufReader::new(stream);
-    let mut headers = String::new();
-    loop {
-        let mut line = String::new();
-        assert_ne!(reader.read_line(&mut line).unwrap(), 0);
-        if line == "\r\n" {
-            break;
-        }
-        headers.push_str(&line);
-    }
-    let headers = headers.to_ascii_lowercase();
-    assert!(
-        headers.starts_with("post /snapshots http/1.1\r\n"),
-        "{headers}"
-    );
-    assert!(headers.contains(&format!("authorization: bearer {TOKEN}\r\n")));
-    assert!(headers.contains("content-type: application/json\r\n"));
-    let length: usize = headers
-        .lines()
-        .find_map(|line| line.strip_prefix("content-length: "))
-        .unwrap()
-        .parse()
-        .unwrap();
-    let mut body = vec![0; length];
-    reader.read_exact(&mut body).unwrap();
-    (reader.into_inner(), body)
-}
-
-fn respond(mut stream: TcpStream, status: u16, body: &str) {
-    write!(stream, "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nContent-Type: application/json\r\nLocation: /redirected\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
-}
 
 #[test]
 fn upload_sends_retained_snapshot_and_bypasses_proxies_for_loopback_http() {
@@ -85,7 +24,7 @@ fn upload_sends_retained_snapshot_and_bypasses_proxies_for_loopback_http() {
     let listener = listener();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = thread::spawn(move || {
-        let (stream, body) = request(&listener);
+        let (stream, body) = request(&listener, "post /snapshots");
         let snapshot: ExportSnapshot = serde_json::from_slice(&body).unwrap();
         assert_eq!(snapshot.events.len(), 4);
         respond(
@@ -129,7 +68,7 @@ fn upload_deadline_covers_headers_and_streamed_body() {
     let listener = listener();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let server = thread::spawn(move || {
-        let (mut stalled, _) = request(&listener);
+        let (mut stalled, _) = request(&listener, "post /snapshots");
         thread::sleep(Duration::from_secs(10));
         write!(
             stalled,
@@ -167,7 +106,7 @@ fn upload_stops_on_rejections_redirects_invalid_acknowledgments_and_network_fail
         let listener = listener();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let server = thread::spawn(move || {
-            let (stream, _) = request(&listener);
+            let (stream, _) = request(&listener, "post /snapshots");
             if status == 0 {
                 drop(stream);
             } else {

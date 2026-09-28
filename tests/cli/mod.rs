@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output};
 
+mod server;
 mod uploading;
 
 const ALL_USAGE: &str = include_str!("../fixtures/pi/all-usage.jsonl");
@@ -415,6 +416,17 @@ fn invalid_arguments_fail_before_opening_storage() {
     let tree = TempTree::new();
     for args in [
         vec!["summary", "unexpected"],
+        vec!["summary", "--server"],
+        vec!["summary", "--server", "https://example.com"],
+        vec!["summary", "--auth-file", "auth.token"],
+        vec![
+            "summary",
+            "--server",
+            "https://example.com",
+            "--auth-file",
+            "auth.token",
+            "extra",
+        ],
         vec!["export"],
         vec!["export", "export.db", "--unknown"],
         vec!["export", "one.db", "two.db"],
