@@ -40,6 +40,7 @@ auth_file = ""
 | Command | Description |
 | --- | --- |
 | `token-tracker` | Refresh sources and show the full usage report. |
+| `token-tracker doctor` | Check resolved configuration, storage paths, source access, and import issues. |
 | `token-tracker summary` | Refresh sources and show total, input, output, and cache tokens plus total cost. |
 | `token-tracker summary --server [<server-url>] [--auth-file <path>]` | Fetch combined usage totals from a server. |
 | `token-tracker export <path> [--force]` | Export retained usage to SQLite. |

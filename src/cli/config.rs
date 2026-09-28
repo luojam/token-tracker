@@ -19,25 +19,32 @@ pub(super) struct Config {
 }
 
 impl Config {
-    pub fn load() -> Result<Self, CliError> {
+    pub fn path() -> Option<PathBuf> {
         let absolute_env_path = |name| {
             env::var_os(name)
                 .map(PathBuf::from)
                 .filter(|path| path.is_absolute())
         };
-        let Some(directory) = absolute_env_path("XDG_CONFIG_HOME")
+        absolute_env_path("XDG_CONFIG_HOME")
             .or_else(|| absolute_env_path("HOME").map(|home| home.join(".config")))
-        else {
+            .map(|directory| directory.join("token-tracker/config.toml"))
+    }
+
+    pub fn load() -> Result<Self, CliError> {
+        let Some(path) = Self::path() else {
             return Ok(Self::default());
         };
-        let path = directory.join("token-tracker/config.toml");
         let content = read_or_create(&path).map_err(|source| CliError::Config {
             path: path.clone(),
             source,
         })?;
-        let mut config: Self = toml::from_str(&content).map_err(|source| CliError::Config {
+        Self::parse(&content, path)
+    }
+
+    pub fn parse(content: &str, path: PathBuf) -> Result<Self, CliError> {
+        let mut config: Self = toml::from_str(content).map_err(|source| CliError::Config {
             path,
-            source: io::Error::new(io::ErrorKind::InvalidData, source),
+            source: io::Error::new(io::ErrorKind::InvalidData, source.message()),
         })?;
         config.machine_name = config.machine_name.filter(|value| !value.is_empty());
         config.server_url = config.server_url.filter(|value| !value.is_empty());

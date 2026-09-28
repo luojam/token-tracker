@@ -35,6 +35,20 @@ impl HermesSessionSource {
             snapshots: RefCell::default(),
         })
     }
+
+    /// Database paths or directories searched, including the default profiles directory.
+    pub fn search_paths(&self) -> Vec<PathBuf> {
+        match &self.locations {
+            DatabaseLocations::Explicit(paths) => paths.clone(),
+            DatabaseLocations::Home { root, profiles } => {
+                let mut paths = vec![root.clone()];
+                if *profiles {
+                    paths.push(root.join("profiles"));
+                }
+                paths
+            }
+        }
+    }
 }
 
 impl SessionSource for HermesSessionSource {

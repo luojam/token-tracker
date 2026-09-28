@@ -5,15 +5,26 @@ const APPLICATION_ID: i32 = 0x54545553;
 // Changes to schema.sql require recreating existing databases.
 const SCHEMA_VERSION: i64 = 1;
 
+pub(super) fn validate(connection: &Connection) -> Result<(), SqliteStoreError> {
+    let application_id: i32 =
+        connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if application_id != APPLICATION_ID {
+        return Err(SqliteStoreError::NotUsageDatabase);
+    }
+    if version != SCHEMA_VERSION {
+        return Err(SqliteStoreError::UnsupportedSchemaVersion(version));
+    }
+    Ok(())
+}
+
 pub(super) fn initialize(connection: &mut Connection) -> Result<(), SqliteStoreError> {
     let transaction = connection.transaction()?;
     let application_id: i32 =
         transaction.pragma_query_value(None, "application_id", |row| row.get(0))?;
     let version: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if application_id == APPLICATION_ID {
-        if version != SCHEMA_VERSION {
-            return Err(SqliteStoreError::UnsupportedSchemaVersion(version));
-        }
+        validate(&transaction)?;
     } else {
         let empty: bool = transaction.query_row(
             "SELECT NOT EXISTS (SELECT 1 FROM sqlite_schema)",

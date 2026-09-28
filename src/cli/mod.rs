@@ -1,4 +1,5 @@
 mod config;
+mod doctor;
 mod exporting;
 mod reporting;
 mod server;
@@ -31,6 +32,18 @@ fn execute() -> Result<(), CliError> {
             .lock()
             .write_all(USAGE.as_bytes())
             .map_err(CliError::Output);
+    }
+    if matches!(command, Command::Doctor) {
+        let report = doctor::inspect();
+        io::stdout()
+            .lock()
+            .write_all(report.output.as_bytes())
+            .map_err(CliError::Output)?;
+        return if report.has_issues {
+            Err(CliError::Doctor)
+        } else {
+            Ok(())
+        };
     }
     if let Command::ServerSummary(options) = &command {
         let config = if options.url.is_some() && options.auth_file.is_some() {
@@ -96,12 +109,14 @@ fn execute() -> Result<(), CliError> {
 }
 
 const USAGE: &str = "Usage: token-tracker
+       token-tracker doctor
        token-tracker summary
        token-tracker summary --server [<server-url>] [--auth-file <path>]
        token-tracker export <path> [--force]
        token-tracker upload [<server-url>] [--auth-file <path>]
 
 Without arguments, refresh sources and show the usage report.
+Doctor checks configuration, storage, and source imports without changing local data.
 Summary refreshes sources and shows token totals by type and total cost.
 Summary --server fetches combined totals without accessing local usage.
 Export and upload refresh sources before exporting or uploading retained usage.
@@ -113,6 +128,7 @@ Command-line values override these defaults.
 
 enum Command {
     Report,
+    Doctor,
     Summary,
     ServerSummary(ServerOptions),
     Export { path: PathBuf, force: bool },
@@ -150,6 +166,9 @@ fn parse_command() -> Result<Command, CliError> {
     };
     if (command == "--help" || command == "-h") && args.next().is_none() {
         return Ok(Command::Help);
+    }
+    if command == "doctor" && args.next().is_none() {
+        return Ok(Command::Doctor);
     }
     if command == "summary" {
         match args.next() {
@@ -220,6 +239,7 @@ fn parse_command() -> Result<Command, CliError> {
 #[derive(Debug)]
 enum CliError {
     Arguments,
+    Doctor,
     Config {
         path: PathBuf,
         source: io::Error,
@@ -245,6 +265,7 @@ impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Arguments => write!(formatter, "invalid arguments\n{USAGE}"),
+            Self::Doctor => formatter.write_str("doctor found issues (see report above)"),
             Self::Config { path, source } => {
                 write!(
                     formatter,

@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Output};
 
+mod doctor;
 mod server;
 mod uploading;
 
@@ -465,6 +466,7 @@ fn read_export(connection: &rusqlite::Connection) -> token_tracker::ExportSnapsh
 fn invalid_arguments_fail_before_opening_storage() {
     let tree = TempTree::new();
     for args in [
+        vec!["doctor", "unexpected"],
         vec!["summary", "unexpected"],
         vec!["summary", "--server"],
         vec!["summary", "--server", "https://example.com"],

@@ -18,28 +18,32 @@ pub(super) struct ServerClient {
     authorization: header::HeaderValue,
 }
 
+pub(super) fn parse_server_url(server_url: &str) -> Result<Url, ServerError> {
+    let endpoint = Url::parse(server_url).map_err(|_| ServerError::Config("invalid server URL"))?;
+    let loopback = endpoint.host_str().is_some_and(|host| {
+        host == "localhost"
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    });
+    if endpoint.host_str().is_none()
+        || !(endpoint.scheme() == "https" || endpoint.scheme() == "http" && loopback)
+        || !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err(ServerError::Config(
+            "server URL must use HTTPS (or loopback HTTP), without credentials, query, or fragment",
+        ));
+    }
+    Ok(endpoint)
+}
+
 impl ServerClient {
     pub fn new(server_url: &str, auth_file: &Path) -> Result<Self, ServerError> {
-        let endpoint =
-            Url::parse(server_url).map_err(|_| ServerError::Config("invalid server URL"))?;
-        let loopback = endpoint.host_str().is_some_and(|host| {
-            host == "localhost"
-                || host
-                    .trim_matches(['[', ']'])
-                    .parse::<std::net::IpAddr>()
-                    .is_ok_and(|ip| ip.is_loopback())
-        });
-        if endpoint.host_str().is_none()
-            || !(endpoint.scheme() == "https" || endpoint.scheme() == "http" && loopback)
-            || !endpoint.username().is_empty()
-            || endpoint.password().is_some()
-            || endpoint.query().is_some()
-            || endpoint.fragment().is_some()
-        {
-            return Err(ServerError::Config(
-                "server URL must use HTTPS (or loopback HTTP), without credentials, query, or fragment",
-            ));
-        }
+        let endpoint = parse_server_url(server_url)?;
         let token = token_tracker::auth::read_token(auth_file).map_err(ServerError::Auth)?;
         let mut authorization = header::HeaderValue::from_str(&format!("Bearer {token}"))
             .map_err(|_| ServerError::Config("invalid authentication token"))?;
@@ -48,7 +52,7 @@ impl ServerClient {
             .redirect(redirect::Policy::none())
             .retry(reqwest::retry::never())
             .connect_timeout(Duration::from_secs(10));
-        if loopback && endpoint.scheme() == "http" {
+        if endpoint.scheme() == "http" {
             client = client.no_proxy();
         }
         let client = client

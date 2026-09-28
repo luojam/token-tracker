@@ -369,7 +369,7 @@ fn group_label(group: &SummaryGroup) -> String {
     }
 }
 
-fn escape_control_characters(value: &str) -> String {
+pub(super) fn escape_control_characters(value: &str) -> String {
     value
         .chars()
         .flat_map(|character| match character {

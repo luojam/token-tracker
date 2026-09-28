@@ -10,6 +10,7 @@ mod schema;
 pub use error::SqliteStoreError;
 pub use exporting::SqliteExportStore;
 pub(crate) use machine_state::MachineState;
+pub use machine_state::validate_machine_state;
 pub use paths::default_database_path;
 
 use schema::initialize;
@@ -23,6 +24,14 @@ pub struct SqliteUsageStore {
 }
 
 impl SqliteUsageStore {
+    /// Opens existing usage storage without initializing or changing it.
+    pub fn open_read_only(path: impl AsRef<Path>) -> Result<Self, SqliteStoreError> {
+        let connection =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        schema::validate(&connection)?;
+        Ok(Self { connection })
+    }
+
     /// Opens an identified usage database or initializes an empty database.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, SqliteStoreError> {
         let connection = Connection::open(path)?;

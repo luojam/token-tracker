@@ -6,6 +6,59 @@ use super::SqliteStoreError;
 
 const APPLICATION_ID: i64 = 0x54544d53;
 
+/// Checks whether an existing database can supply the next export identity and revision.
+pub fn validate_machine_state(path: impl AsRef<Path>) -> Result<(), SqliteStoreError> {
+    let mut connection =
+        Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let transaction = connection.transaction()?;
+    if is_initialized(&transaction)? {
+        next_export(&transaction)?;
+    }
+    Ok(())
+}
+
+fn is_initialized(connection: &Connection) -> Result<bool, SqliteStoreError> {
+    let application_id: i64 =
+        connection.pragma_query_value(None, "application_id", |row| row.get(0))?;
+    let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if application_id == 0 && version == 0 {
+        let tables: i64 = connection.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get(0),
+        )?;
+        if tables != 0 {
+            return Err(SqliteStoreError::CorruptData(
+                "an invalid machine state schema",
+            ));
+        }
+        return Ok(false);
+    }
+    if application_id != APPLICATION_ID || version != 1 {
+        return Err(SqliteStoreError::CorruptData(
+            "an incompatible machine state schema",
+        ));
+    }
+    Ok(true)
+}
+
+fn next_export(connection: &Connection) -> Result<(String, u64), SqliteStoreError> {
+    let (machine_id, revision): (String, String) = connection.query_row(
+        "SELECT machine_id, export_revision FROM machine_state WHERE singleton = 1",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if machine_id.len() != 32 || !machine_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(SqliteStoreError::CorruptData("an invalid machine identity"));
+    }
+    let revision = revision
+        .parse::<u64>()
+        .map_err(|_| SqliteStoreError::CorruptData("an invalid export revision"))?
+        .checked_add(1)
+        .ok_or(SqliteStoreError::ValueOutOfRange("export revision"))?;
+    Ok((machine_id, revision))
+}
+
 pub(crate) struct MachineState {
     connection: Connection,
 }
@@ -31,21 +84,7 @@ impl MachineState {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let application_id: i64 =
-            transaction.pragma_query_value(None, "application_id", |row| row.get(0))?;
-        let version: i64 =
-            transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
-        if application_id == 0 && version == 0 {
-            let tables: i64 = transaction.query_row(
-                "SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'",
-                [],
-                |row| row.get(0),
-            )?;
-            if tables != 0 {
-                return Err(SqliteStoreError::CorruptData(
-                    "an invalid machine state schema",
-                ));
-            }
+        if !is_initialized(&transaction)? {
             transaction.execute_batch(
                 "CREATE TABLE machine_state (
                     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -56,24 +95,8 @@ impl MachineState {
             )?;
             transaction.pragma_update(None, "application_id", APPLICATION_ID)?;
             transaction.pragma_update(None, "user_version", 1)?;
-        } else if application_id != APPLICATION_ID || version != 1 {
-            return Err(SqliteStoreError::CorruptData(
-                "an incompatible machine state schema",
-            ));
         }
-        let (machine_id, revision): (String, String) = transaction.query_row(
-            "SELECT machine_id, export_revision FROM machine_state WHERE singleton = 1",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        if machine_id.len() != 32 || !machine_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err(SqliteStoreError::CorruptData("an invalid machine identity"));
-        }
-        let revision = revision
-            .parse::<u64>()
-            .map_err(|_| SqliteStoreError::CorruptData("an invalid export revision"))?
-            .checked_add(1)
-            .ok_or(SqliteStoreError::ValueOutOfRange("export revision"))?;
+        let (machine_id, revision) = next_export(&transaction)?;
         Ok(ExportRevisionTransaction {
             transaction,
             machine_id,
