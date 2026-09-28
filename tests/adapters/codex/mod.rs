@@ -5,6 +5,7 @@ mod discovery;
 mod legacy;
 mod mirrors;
 mod parsing;
+mod referenced;
 mod responses;
 mod review;
 

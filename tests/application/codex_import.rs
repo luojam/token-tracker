@@ -8,6 +8,35 @@ use token_tracker::storage::SqliteUsageStore;
 use token_tracker::{LocalSourceConfig, TokenTracker, TokenTrackerConfig};
 
 #[test]
+fn referenced_fork_imports_local_responses_without_parent_files() {
+    let tree = TempTree::new();
+    tree.write(
+        "rollout-child.jsonl",
+        include_str!("../fixtures/codex/referenced-fork.jsonl"),
+    );
+    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    synchronize_sessions_at(
+        &FileSessionSource::new(
+            &CodexSessionDiscovery::new([&tree.root]),
+            &CodexSessionParser::new(),
+        ),
+        &mut store,
+        Timestamp::from_unix_milliseconds(1),
+    )
+    .unwrap();
+    let snapshot = store.usage_snapshot().unwrap();
+    assert_eq!(snapshot.observations.len(), 2);
+    assert_eq!(
+        snapshot
+            .observations
+            .iter()
+            .map(|o| o.event.tokens.total())
+            .sum::<u128>(),
+        250
+    );
+}
+
+#[test]
 fn switching_from_turn_totals_to_responses_keeps_imported_keys() {
     let tree = TempTree::new();
     let source = include_str!("../fixtures/codex/upgrade-response-first.jsonl");

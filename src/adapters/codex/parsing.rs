@@ -148,6 +148,8 @@ struct SessionState {
     inherited_prefix: bool,
     inherited_history: bool,
     pending_fork_boundary: bool,
+    pending_inherited_abort: bool,
+    referenced_history: bool,
     responses: BTreeMap<String, ResponseObservation>,
     legacy: LegacyUsageState,
     turns: TurnLifecycle,
@@ -157,16 +159,24 @@ struct SessionState {
 
 impl SessionState {
     fn new(header: NormalizedHeader) -> Self {
+        let referenced_history = header.identity.history.is_referenced();
+        let copied_history = header.identity.forked_from_id.is_some() && !referenced_history;
         let mut context = ContextState::default();
         context.accept_header(
             &header.metadata.session_id,
             header.provider,
-            header.identity.forked_from_id.is_none(),
+            !copied_history,
         );
         Self {
-            inherited_history: header.identity.forked_from_id.is_some(),
+            inherited_history: copied_history,
             pending_fork_boundary: false,
-            expected_ancestor: header.identity.forked_from_id.clone(),
+            pending_inherited_abort: referenced_history,
+            referenced_history,
+            expected_ancestor: header
+                .identity
+                .forked_from_id
+                .clone()
+                .filter(|_| copied_history),
             headers: BTreeMap::from([(header.metadata.session_id.clone(), header.identity)]),
             metadata: header.metadata,
             inherited_prefix: true,
@@ -207,6 +217,13 @@ impl SessionState {
                             }
                             match &mut self.mirrors {
                                 Some(mirrors) => mirrors.accept_mirror(info.0, line)?,
+                                None if self.referenced_history => {
+                                    // Pre-request notifications describe inherited usage only.
+                                    info.0.total_token_usage.0.normalize(
+                                        line,
+                                        "event_msg.payload.info.total_token_usage",
+                                    )?;
+                                }
                                 None => self.legacy.accept_usage(
                                     info.0,
                                     &self.context,
@@ -232,6 +249,21 @@ impl SessionState {
                     }
                     "task_started" | "task_complete" | "turn_aborted" => {
                         let timestamp = validate_timestamp(text, line)?;
+                        if std::mem::take(&mut self.pending_inherited_abort)
+                            && event.entry_type == "turn_aborted"
+                        {
+                            let abort: InheritedAbortWire =
+                                payload(text, line, "event_msg.payload.turn_aborted")?;
+                            if abort.reason != "interrupted"
+                                || abort.turn_id.is_some_and(|id| id.trim().is_empty())
+                            {
+                                return Err(CodexParseError::InvalidField {
+                                    line,
+                                    field: "event_msg.payload.turn_aborted",
+                                });
+                            }
+                            return Ok(());
+                        }
                         let turn: TurnWire = payload(text, line, "event_msg.payload.turn_id")?;
                         if let Some(mirrors) = &self.mirrors {
                             mirrors.require_confirmed(line)?;
@@ -283,7 +315,7 @@ impl SessionState {
             }
             "compacted" => {
                 validate_timestamp(text, line)?;
-                if self.mirrors.is_none() {
+                if self.mirrors.is_none() && !self.referenced_history {
                     self.legacy.accept_compaction();
                 }
             }
@@ -299,6 +331,7 @@ impl SessionState {
         thread_id: Option<String>,
         line: usize,
     ) -> Result<(), CodexParseError> {
+        self.pending_inherited_abort = false;
         if thread_id
             .as_ref()
             .is_some_and(|id| !self.headers.contains_key(id))
@@ -405,7 +438,10 @@ impl SessionState {
 
             self.mirrors
                 .get_or_insert_with(|| {
-                    MirrorState::new(self.legacy.baseline(), response.thread_id.clone())
+                    MirrorState::new(
+                        (!self.referenced_history).then(|| self.legacy.baseline()),
+                        response.thread_id.clone(),
+                    )
                 })
                 .accept_response(&response, line)?;
 
@@ -464,9 +500,17 @@ impl SessionState {
                     field: "session_meta.payload.parent",
                 });
             }
+            if header.identity.history != original.history {
+                return Err(CodexParseError::InvalidField {
+                    line,
+                    field: "session_meta.payload.history",
+                });
+            }
 
             let scoped = id == &self.metadata.session_id
-                && (original.forked_from_id.is_none() || !self.inherited_prefix);
+                && (original.forked_from_id.is_none()
+                    || self.referenced_history
+                    || !self.inherited_prefix);
             if scoped {
                 self.inherited_history = false;
             }
@@ -512,6 +556,7 @@ struct HeaderIdentity {
     started_at: Timestamp,
     parent_session: Option<String>,
     forked_from_id: Option<String>,
+    history: HistoryWire,
 }
 
 struct NormalizedHeader {
@@ -573,6 +618,7 @@ impl HeaderWire {
                 started_at,
                 parent_session: parent,
                 forked_from_id: self.forked_from_id,
+                history: self.history,
             },
         })
     }
@@ -624,6 +670,44 @@ struct HeaderWire {
     parent_thread_id: Option<String>,
     forked_from_id: Option<String>,
     model_provider: Option<String>,
+    #[serde(flatten)]
+    history: HistoryWire,
+}
+
+#[derive(Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum HistoryMode {
+    #[default]
+    Legacy,
+    Paginated,
+}
+
+#[derive(Deserialize, PartialEq, Eq)]
+struct HistoryWire {
+    #[serde(default)]
+    history_mode: HistoryMode,
+    history_base: Option<HistoryBaseWire>,
+    forked_from_ordinal_exclusive: Option<u64>,
+}
+
+impl HistoryWire {
+    fn is_referenced(&self) -> bool {
+        self.history_mode == HistoryMode::Paginated && self.history_base.is_some()
+    }
+}
+
+#[derive(Deserialize, PartialEq, Eq)]
+struct HistoryBaseWire {
+    #[serde(deserialize_with = "nonempty_id")]
+    thread_id: String,
+    end_ordinal_exclusive: u64,
+    end_byte_offset: u64,
+}
+
+#[derive(Deserialize)]
+struct InheritedAbortWire {
+    turn_id: Option<String>,
+    reason: String,
 }
 
 #[derive(Deserialize)]
