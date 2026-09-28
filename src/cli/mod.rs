@@ -59,6 +59,7 @@ fn execute() -> Result<(), CliError> {
         ..Default::default()
     })
     .map_err(CliError::Open)?;
+    let imported = tracker.refresh().map_err(CliError::Import)?;
 
     if let Some(uploader) = uploader {
         let snapshot = tracker.export_snapshot().map_err(CliError::Export)?;
@@ -76,7 +77,6 @@ fn execute() -> Result<(), CliError> {
         return exporting::write_snapshot(&path, force, &snapshot);
     }
 
-    let imported = tracker.refresh().map_err(CliError::Import)?;
     let result = tracker.report().map_err(CliError::Report)?;
 
     let output = if matches!(command, Command::Summary) {
@@ -104,7 +104,7 @@ const USAGE: &str = "Usage: token-tracker
 Without arguments, refresh sources and show the usage report.
 Summary refreshes sources and shows token totals by type and total cost.
 Summary --server fetches combined totals without accessing local usage.
-Export and upload use retained usage without refreshing sources.
+Export and upload refresh sources before exporting or uploading retained usage.
 Existing exports require --force. Use -- before paths beginning with '-'.
 Server requests require HTTPS (HTTP is allowed for loopback addresses).
 Server URL and auth-file default to server_url and auth_file in config.toml.

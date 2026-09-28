@@ -13,11 +13,9 @@ use super::server::{TOKEN, auth_file, listener, request, respond};
 use crate::support::TempTree;
 
 #[test]
-fn upload_sends_retained_snapshot_and_bypasses_proxies_for_loopback_http() {
+fn upload_refreshes_usage_and_bypasses_proxies_for_loopback_http() {
     let tree = TempTree::new();
-    let source = tree.write(".pi/agent/sessions/history.jsonl", super::ALL_USAGE);
-    super::successful_report(super::command(&tree.root).output().unwrap());
-    fs::write(source, "invalid source must not be refreshed").unwrap();
+    tree.write(".pi/agent/sessions/history.jsonl", super::ALL_USAGE);
     tree.write(
         ".config/token-tracker/config.toml",
         "server_url = 'invalid URL'\nauth_file = 'missing.token'\n",

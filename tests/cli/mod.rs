@@ -217,13 +217,39 @@ fn storage_failure_exits_without_a_report() {
 }
 
 #[test]
-fn export_round_trips_retained_usage_without_refreshing() {
+fn export_refreshes_sources_and_round_trips_retained_usage() {
     use token_tracker::{TokenTracker, TokenTrackerConfig};
 
     let tree = TempTree::new();
     let source = tree.write(".pi/agent/sessions/history.jsonl", ALL_USAGE);
+    let path = tree.root.join("export.db");
+    successful_report(
+        command(&tree.root)
+            .arg("export")
+            .arg(&path)
+            .output()
+            .unwrap(),
+    );
+    let original = read_export(&rusqlite::Connection::open(&path).unwrap());
+    assert_eq!(original.events.len(), 4);
+
+    fs::remove_file(source).unwrap();
     tree.write(".codex/sessions/rollout-history.jsonl", CODEX_USAGE);
-    successful_report(command(&tree.root).output().unwrap());
+    let output = command(&tree.root)
+        .arg("export")
+        .arg(&path)
+        .arg("--force")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    let snapshot = read_export(&connection);
+    assert!(snapshot.events.len() > original.events.len());
+    for event in &original.events {
+        assert!(snapshot.events.contains(event));
+    }
+
     let tracker = TokenTracker::open(TokenTrackerConfig {
         database_path: Some(tree.root.join(".local/share/token-tracker/usage.db")),
         sources: vec![],
@@ -231,22 +257,10 @@ fn export_round_trips_retained_usage_without_refreshing() {
     })
     .unwrap();
     let expected = tracker.export_snapshot().unwrap();
-    fs::write(source, "malformed source must not be refreshed\n").unwrap();
-
-    let path = tree.root.join("export.db");
-    let output = command(&tree.root)
-        .arg("export")
-        .arg(&path)
-        .output()
-        .unwrap();
-    assert!(output.status.success(), "{output:?}");
-    assert!(output.stdout.is_empty() && output.stderr.is_empty());
-    let connection = rusqlite::Connection::open(&path).unwrap();
-    let snapshot = read_export(&connection);
     assert_eq!(snapshot.machine_name, None);
     assert_eq!(snapshot.events, expected.events);
     assert_eq!(snapshot.machine_id, expected.machine_id);
-    assert_eq!(snapshot.export_revision, expected.export_revision + 1);
+    assert_eq!(snapshot.export_revision, original.export_revision + 1);
     assert_eq!(snapshot.format_version, expected.format_version);
     assert!(!String::from_utf8_lossy(&fs::read(path).unwrap()).contains("SECRET_"));
 }
@@ -383,6 +397,7 @@ fn export_replaces_both_tables_atomically_and_requires_force() {
         .unwrap();
 
     fs::remove_file(tree.root.join(".local/share/token-tracker/usage.db")).unwrap();
+    fs::remove_file(tree.root.join(".pi/agent/sessions/history.jsonl")).unwrap();
     let forced = run(true);
     assert!(forced.status.success(), "{forced:?}");
     let replaced = read_export(&connection);

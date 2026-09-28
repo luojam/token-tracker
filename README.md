@@ -46,8 +46,8 @@ auth_file = ""
 | `token-tracker upload [<server-url>] [--auth-file <path>]` | Upload retained usage to a server. |
 | `token-tracker --help` | Show command usage. |
 
-Export and upload do not refresh sources. Run `token-tracker` or
-`token-tracker summary` first to import current usage.
+Export and upload refresh sources automatically before exporting or uploading
+all locally retained usage.
 
 For exports, the parent directory must exist. Add `--force` to replace an existing
 export; unrelated files are never overwritten.
@@ -81,15 +81,14 @@ Upload usage to a self-hosted server for combined totals across the latest
 snapshot from each machine. Uploads are explicit, not automatic.
 
 Follow the [server guide](docs/server.md) to deploy and get an auth token, then
-import and upload from each machine:
+upload from each machine:
 
 ```sh
 chmod 600 /path/to/auth.token
-token-tracker
 token-tracker upload https://tracker.example.com --auth-file /path/to/auth.token
 ```
 
-Uploads include all locally retained usage without refreshing sources. HTTPS is
+Uploads refresh sources and include all locally retained usage. HTTPS is
 required except on loopback.
 
 ## Development

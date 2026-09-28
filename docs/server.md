@@ -49,12 +49,11 @@ aws ssm get-parameter --region eu-north-1 \
   --name /token-tracker/auth-token --with-decryption \
   --query Parameter.Value --output text > ~/.config/token-tracker/auth.token
 chmod 600 ~/.config/token-tracker/auth.token
-token-tracker
 token-tracker upload https://tracker.example.com --auth-file ~/.config/token-tracker/auth.token
 ```
 
-Run `token-tracker` first to import current usage; upload includes all locally
-retained usage but does not refresh sources. HTTPS is required except on loopback.
+Upload refreshes sources automatically and includes all locally retained usage.
+HTTPS is required except on loopback.
 
 ## Combined summary
 
