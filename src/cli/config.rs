@@ -1,13 +1,21 @@
-use std::{env, fs, io, path::PathBuf};
+use std::{
+    env, fs,
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
 
 use serde::Deserialize;
 
 use super::CliError;
 
+const TEMPLATE: &str = "machine_name = \"\"\nserver_url = \"\"\nauth_file = \"\"\n";
+
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Config {
     pub machine_name: Option<String>,
+    pub server_url: Option<String>,
+    pub auth_file: Option<PathBuf>,
 }
 
 impl Config {
@@ -23,14 +31,40 @@ impl Config {
             return Ok(Self::default());
         };
         let path = directory.join("token-tracker/config.toml");
-        let content = match fs::read_to_string(&path) {
-            Ok(content) => content,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
-            Err(source) => return Err(CliError::Config { path, source }),
-        };
-        toml::from_str(&content).map_err(|source| CliError::Config {
+        let content = read_or_create(&path).map_err(|source| CliError::Config {
+            path: path.clone(),
+            source,
+        })?;
+        let mut config: Self = toml::from_str(&content).map_err(|source| CliError::Config {
             path,
             source: io::Error::new(io::ErrorKind::InvalidData, source),
-        })
+        })?;
+        config.machine_name = config.machine_name.filter(|value| !value.is_empty());
+        config.server_url = config.server_url.filter(|value| !value.is_empty());
+        config.auth_file = config
+            .auth_file
+            .filter(|value| !value.as_os_str().is_empty());
+        Ok(config)
+    }
+}
+
+fn read_or_create(path: &Path) -> io::Result<String> {
+    match fs::read_to_string(path) {
+        Ok(content) => return Ok(content),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+    fs::create_dir_all(path.parent().unwrap())?;
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut file) => {
+            file.write_all(TEMPLATE.as_bytes())?;
+            Ok(TEMPLATE.into())
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => fs::read_to_string(path),
+        Err(error) => Err(error),
     }
 }

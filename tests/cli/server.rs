@@ -73,6 +73,59 @@ pub(super) fn respond(mut stream: TcpStream, status: u16, body: &str) {
 }
 
 #[test]
+fn server_commands_use_saved_settings_and_independent_overrides() {
+    let tree = TempTree::new();
+    let auth = auth_file(&tree);
+    let listener = listener();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = thread::spawn(move || {
+        for target in [
+            "post /snapshots",
+            "get /summary",
+            "post /snapshots",
+            "get /summary",
+        ] {
+            let (stream, body) = request(&listener, target);
+            let response = if target.starts_with("post ") {
+                let snapshot: token_tracker::ExportSnapshot =
+                    serde_json::from_slice(&body).unwrap();
+                serde_json::json!({
+                    "status": "published",
+                    "machine_id": snapshot.machine_id,
+                    "export_revision": snapshot.export_revision,
+                })
+            } else {
+                serde_json::json!({
+                    "total_cost_usd": "0",
+                    "tokens": {"total": 0, "input": 0, "output": 0, "cache_read": 0, "cache_write": 0},
+                })
+            };
+            respond(stream, 200, &response.to_string());
+        }
+    });
+    for (args, saved_url, saved_auth) in [
+        (vec!["upload"], url.as_str(), auth.as_path()),
+        (vec!["summary", "--server"], url.as_str(), auth.as_path()),
+        (vec!["upload", &url], "invalid URL", auth.as_path()),
+        (
+            vec!["summary", "--server", "--auth-file", auth.to_str().unwrap()],
+            url.as_str(),
+            std::path::Path::new("missing.token"),
+        ),
+    ] {
+        tree.write(
+            ".config/token-tracker/config.toml",
+            format!(
+                "server_url = '{saved_url}'\nauth_file = '{}'\n",
+                saved_auth.display()
+            ),
+        );
+        super::successful_report(super::command(&tree.root).args(args).output().unwrap());
+    }
+    server.join().unwrap();
+}
+
+#[test]
 fn summary_fetches_authenticated_totals_without_local_state() {
     let tree = TempTree::new();
     tree.write(".config/token-tracker/config.toml", "invalid config");

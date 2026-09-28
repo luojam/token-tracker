@@ -6,7 +6,7 @@ mod uploading;
 
 use std::fmt;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use token_tracker::{
@@ -32,7 +32,13 @@ fn execute() -> Result<(), CliError> {
             .write_all(USAGE.as_bytes())
             .map_err(CliError::Output);
     }
-    if let Command::ServerSummary { url, auth_file } = &command {
+    if let Command::ServerSummary(options) = &command {
+        let config = if options.url.is_some() && options.auth_file.is_some() {
+            config::Config::default()
+        } else {
+            config::Config::load()?
+        };
+        let (url, auth_file) = options.resolve(&config)?;
         let summary = server::ServerClient::new(url, auth_file)
             .and_then(|client| client.summary())
             .map_err(CliError::ServerSummary)?;
@@ -42,7 +48,8 @@ fn execute() -> Result<(), CliError> {
             .map_err(CliError::Output);
     }
     let config = config::Config::load()?;
-    let uploader = if let Command::Upload { url, auth_file } = &command {
+    let uploader = if let Command::Upload(options) = &command {
+        let (url, auth_file) = options.resolve(&config)?;
         Some(uploading::Uploader::new(url, auth_file).map_err(CliError::Upload)?)
     } else {
         None
@@ -90,9 +97,9 @@ fn execute() -> Result<(), CliError> {
 
 const USAGE: &str = "Usage: token-tracker
        token-tracker summary
-       token-tracker summary --server <server-url> --auth-file <path>
+       token-tracker summary --server [<server-url>] [--auth-file <path>]
        token-tracker export <path> [--force]
-       token-tracker upload <server-url> --auth-file <path>
+       token-tracker upload [<server-url>] [--auth-file <path>]
 
 Without arguments, refresh sources and show the usage report.
 Summary refreshes sources and shows token totals by type and total cost.
@@ -100,19 +107,44 @@ Summary --server fetches combined totals without accessing local usage.
 Export and upload use retained usage without refreshing sources.
 Existing exports require --force. Use -- before paths beginning with '-'.
 Server requests require HTTPS (HTTP is allowed for loopback addresses).
+Server URL and auth-file default to server_url and auth_file in config.toml.
+Command-line values override these defaults.
 ";
 
 enum Command {
     Report,
     Summary,
-    ServerSummary { url: String, auth_file: PathBuf },
+    ServerSummary(ServerOptions),
     Export { path: PathBuf, force: bool },
-    Upload { url: String, auth_file: PathBuf },
+    Upload(ServerOptions),
     Help,
 }
 
+struct ServerOptions {
+    url: Option<String>,
+    auth_file: Option<PathBuf>,
+}
+
+impl ServerOptions {
+    fn resolve<'a>(&'a self, config: &'a config::Config) -> Result<(&'a str, &'a Path), CliError> {
+        let url = self
+            .url
+            .as_deref()
+            .or(config.server_url.as_deref())
+            .filter(|url| !url.is_empty())
+            .ok_or(CliError::Arguments)?;
+        let auth_file = self
+            .auth_file
+            .as_deref()
+            .or(config.auth_file.as_deref())
+            .filter(|path| !path.as_os_str().is_empty())
+            .ok_or(CliError::Arguments)?;
+        Ok((url, auth_file))
+    }
+}
+
 fn parse_command() -> Result<Command, CliError> {
-    let mut args = std::env::args_os().skip(1);
+    let mut args = std::env::args_os().skip(1).peekable();
     let Some(command) = args.next() else {
         return Ok(Command::Report);
     };
@@ -127,26 +159,36 @@ fn parse_command() -> Result<Command, CliError> {
         }
     }
     if command == "upload" || command == "summary" {
-        let url = args
-            .next()
-            .and_then(|arg| arg.into_string().ok())
-            .filter(|arg| !arg.is_empty())
-            .ok_or(CliError::Arguments)?;
-        if args.next().as_deref() != Some(std::ffi::OsStr::new("--auth-file")) {
-            return Err(CliError::Arguments);
-        }
-        let auth_file = args
-            .next()
-            .filter(|arg| !arg.is_empty())
-            .ok_or(CliError::Arguments)?;
+        let url = if args
+            .peek()
+            .is_some_and(|arg| !arg.as_encoded_bytes().starts_with(b"-"))
+        {
+            Some(
+                args.next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .filter(|arg| !arg.is_empty())
+                    .ok_or(CliError::Arguments)?,
+            )
+        } else {
+            None
+        };
+        let auth_file = match args.next() {
+            Some(flag) if flag == "--auth-file" => Some(PathBuf::from(
+                args.next()
+                    .filter(|arg| !arg.is_empty())
+                    .ok_or(CliError::Arguments)?,
+            )),
+            Some(_) => return Err(CliError::Arguments),
+            None => None,
+        };
         if args.next().is_some() {
             return Err(CliError::Arguments);
         }
-        let auth_file = auth_file.into();
+        let options = ServerOptions { url, auth_file };
         return Ok(if command == "upload" {
-            Command::Upload { url, auth_file }
+            Command::Upload(options)
         } else {
-            Command::ServerSummary { url, auth_file }
+            Command::ServerSummary(options)
         });
     }
     if command != "export" {

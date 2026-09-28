@@ -64,6 +64,10 @@ Fetch totals across the latest uploaded snapshot from each machine:
 token-tracker summary --server https://tracker.example.com --auth-file ~/.config/token-tracker/auth.token
 ```
 
+Save `server_url` and `auth_file` in [config.toml](../README.md#configuration)
+to use `token-tracker upload` and `token-tracker summary --server` without
+repeating the URL or auth-file path. Command-line values override saved defaults.
+
 ## API
 
 - `POST /snapshots` accepts [snapshot JSON](../tests/fixtures/export-example.json)

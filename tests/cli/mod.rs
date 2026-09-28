@@ -252,11 +252,44 @@ fn export_round_trips_retained_usage_without_refreshing() {
 }
 
 #[test]
+fn config_is_created_with_unset_options_and_preserves_user_settings() {
+    let tree = TempTree::new();
+    let config_home = tree.root.join("config");
+    let config_path = config_home.join("token-tracker/config.toml");
+    let export_path = tree.root.join("export.db");
+    let export = || {
+        successful_report(
+            command(&tree.root)
+                .env("XDG_CONFIG_HOME", &config_home)
+                .arg("export")
+                .arg(&export_path)
+                .arg("--force")
+                .output()
+                .unwrap(),
+        );
+        read_export(&rusqlite::Connection::open(&export_path).unwrap())
+    };
+
+    assert_eq!(export().machine_name, None);
+    let content = fs::read_to_string(&config_path).unwrap();
+    let config: toml::Table = toml::from_str(&content).unwrap();
+    for option in ["machine_name", "server_url", "auth_file"] {
+        assert_eq!(config[option].as_str(), Some(""));
+    }
+    assert_eq!(export().machine_name, None);
+
+    let content = "# My settings\nmachine_name = 'laptop'\n";
+    fs::write(&config_path, content).unwrap();
+    assert_eq!(export().machine_name.as_deref(), Some("laptop"));
+    assert_eq!(fs::read_to_string(config_path).unwrap(), content);
+}
+
+#[test]
 fn config_sets_export_name_with_xdg_precedence_and_home_fallback() {
     let tree = TempTree::new();
     tree.write(
         ".config/token-tracker/config.toml",
-        "machine_name = 'laptop'\n",
+        "machine_name = 'laptop'\nserver_url = 'unused'\nauth_file = 'missing.token'\n",
     );
     tree.write(
         "config/token-tracker/config.toml",
@@ -280,6 +313,8 @@ fn config_sets_export_name_with_xdg_precedence_and_home_fallback() {
     let xdg = run(&tree.root.join("config"));
     assert_eq!(xdg.machine_name.as_deref(), Some("work"));
     assert_eq!(xdg.machine_id, home.machine_id);
+    let summary = successful_report(command(&tree.root).arg("summary").output().unwrap());
+    assert!(summary.contains("Total tokens: 0\n"));
 }
 
 #[test]
@@ -419,6 +454,9 @@ fn invalid_arguments_fail_before_opening_storage() {
         vec!["summary", "--server"],
         vec!["summary", "--server", "https://example.com"],
         vec!["summary", "--auth-file", "auth.token"],
+        vec!["upload"],
+        vec!["upload", "--auth-file"],
+        vec!["summary", "--server", "--unknown"],
         vec![
             "summary",
             "--server",

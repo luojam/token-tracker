@@ -18,6 +18,10 @@ fn upload_sends_retained_snapshot_and_bypasses_proxies_for_loopback_http() {
     let source = tree.write(".pi/agent/sessions/history.jsonl", super::ALL_USAGE);
     super::successful_report(super::command(&tree.root).output().unwrap());
     fs::write(source, "invalid source must not be refreshed").unwrap();
+    tree.write(
+        ".config/token-tracker/config.toml",
+        "server_url = 'invalid URL'\nauth_file = 'missing.token'\n",
+    );
     let auth = auth_file(&tree);
     let proxy = listener();
     let proxy_url = format!("http://{}", proxy.local_addr().unwrap());
@@ -152,11 +156,14 @@ fn invalid_upload_configuration_fails_before_opening_storage() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("must use HTTPS"));
     fs::set_permissions(&auth, fs::Permissions::from_mode(0o644)).unwrap();
-    let output = super::command(&tree.root)
-        .args(["upload", "http://127.0.0.1:3000", "--auth-file"])
-        .arg(auth)
-        .output()
-        .unwrap();
+    tree.write(
+        ".config/token-tracker/config.toml",
+        format!(
+            "server_url = 'http://127.0.0.1:3000'\nauth_file = '{}'\n",
+            auth.display()
+        ),
+    );
+    let output = super::command(&tree.root).arg("upload").output().unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("chmod 600"));
     assert!(!tree.root.join(".local").exists());

@@ -25,15 +25,15 @@ report. No server is needed.
 
 ### Configuration
 
-Optionally create `~/.config/token-tracker/config.toml` (or
-`$XDG_CONFIG_HOME/token-tracker/config.toml` when `XDG_CONFIG_HOME` is absolute):
+Running `token-tracker` creates `~/.config/token-tracker/config.toml` (or
+`$XDG_CONFIG_HOME/token-tracker/config.toml` when `XDG_CONFIG_HOME` is absolute)
+if it is missing. All options start empty, which means unset:
 
 ```toml
-machine_name = "my-computer"
+machine_name = ""
+server_url = ""
+auth_file = ""
 ```
-
-This display name is included in exports and does not change machine identity.
-The default is no name.
 
 ## CLI commands
 
@@ -41,9 +41,9 @@ The default is no name.
 | --- | --- |
 | `token-tracker` | Refresh sources and show the full usage report. |
 | `token-tracker summary` | Refresh sources and show total, input, output, and cache tokens plus total cost. |
-| `token-tracker summary --server <server-url> --auth-file <path>` | Fetch combined usage totals from a server. |
+| `token-tracker summary --server [<server-url>] [--auth-file <path>]` | Fetch combined usage totals from a server. |
 | `token-tracker export <path> [--force]` | Export retained usage to SQLite. |
-| `token-tracker upload <server-url> --auth-file <path>` | Upload retained usage to a server. |
+| `token-tracker upload [<server-url>] [--auth-file <path>]` | Upload retained usage to a server. |
 | `token-tracker --help` | Show command usage. |
 
 Export and upload do not refresh sources. Run `token-tracker` or
@@ -54,6 +54,8 @@ export; unrelated files are never overwritten.
 
 For server requests, HTTPS is required except on loopback. See the
 [server guide](docs/server.md) for setup and authentication.
+With both server settings saved, use `token-tracker upload` and
+`token-tracker summary --server`. Plain `token-tracker summary` stays local.
 
 ## Sources and local data
 
