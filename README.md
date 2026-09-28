@@ -39,7 +39,9 @@ auth_file = ""
 
 | Command | Description |
 | --- | --- |
-| `token-tracker` | Refresh sources and show the full usage report. |
+| `token-tracker` | Refresh sources and show the full all-time usage report. |
+| `token-tracker day`, `week`, or `month` | Show local usage for the current calendar period. |
+| `token-tracker [day\|week\|month] --server [<server-url>] [--auth-file <path>]` | Fetch combined server totals for the period (all time if omitted). |
 | `token-tracker doctor` | Check resolved configuration, storage paths, source access, and import issues. |
 | `token-tracker summary` | Refresh sources and show total, input, output, and cache tokens plus total cost. |
 | `token-tracker summary --server [<server-url>] [--auth-file <path>]` | Fetch combined usage totals from a server. |

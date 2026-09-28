@@ -5,8 +5,8 @@ use token_tracker::application::{
     CostAmount, CostTotal, ImportWarning, ReportDiagnostic, UsageReport,
 };
 use token_tracker::domain::{
-    EstimateTotals, EstimateUnavailableReason, ExportSummary, ModelAttribution, ServiceTier,
-    SummaryGroup, TokenCounts, UsageKind,
+    EstimateTotals, EstimateUnavailableReason, ExportSummary, ModelAttribution, ReportingPeriod,
+    ServiceTier, SummaryGroup, TokenCounts, UsageKind,
 };
 
 pub(super) fn render_summary(report: &UsageReport) -> String {
@@ -16,11 +16,16 @@ pub(super) fn render_summary(report: &UsageReport) -> String {
     )
 }
 
-pub(super) fn render_server_summary(summary: &ExportSummary) -> String {
-    render_totals(
+pub(super) fn render_server_summary(summary: &ExportSummary, period: ReportingPeriod) -> String {
+    let totals = render_totals(
         &summary.tokens,
         &format!("${}", summary.total_cost_usd.as_str()),
-    )
+    );
+    if period == ReportingPeriod::AllTime {
+        totals
+    } else {
+        format!("Token Tracker — {}\n\n{totals}", period.label())
+    }
 }
 
 fn render_totals(tokens: &TokenCounts, cost: &str) -> String {
@@ -37,6 +42,7 @@ fn render_totals(tokens: &TokenCounts, cost: &str) -> String {
 
 pub(super) fn render_terminal_report(
     report: &UsageReport,
+    period: ReportingPeriod,
     warnings: &[ImportWarning],
     diagnostics: &[ReportDiagnostic],
     agent_labels: &[(&str, &str)],
@@ -44,7 +50,7 @@ pub(super) fn render_terminal_report(
     let mut output = String::new();
     let totals = &report.totals;
 
-    writeln!(output, "Token Tracker — All Time").unwrap();
+    writeln!(output, "Token Tracker — {}", period.label()).unwrap();
     writeln!(output).unwrap();
     writeln!(
         output,

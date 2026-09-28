@@ -134,7 +134,10 @@ async fn uploads_validate_independently_of_storage_and_hide_storage_errors() {
     impl SummaryReadStore for FailingSink {
         type Error = io::Error;
 
-        fn summary(&self) -> Result<ExportSummary, Self::Error> {
+        fn summary_in_range(
+            &self,
+            _: Option<std::ops::Range<i64>>,
+        ) -> Result<ExportSummary, Self::Error> {
             Err(io::Error::other("private storage detail"))
         }
     }
@@ -295,4 +298,62 @@ async fn upload_requires_json_with_the_snapshot_structure() {
             .unwrap();
         assert_eq!(response.status(), status);
     }
+}
+
+#[tokio::test]
+async fn period_summaries_filter_uploaded_event_timestamps_and_validate_periods() {
+    use token_tracker::domain::ReportingPeriod;
+
+    let tree = TempTree::new();
+    let app = sqlite_router(&tree, 8192);
+    let mut revision = 0;
+    for (name, period) in [
+        ("day", ReportingPeriod::Day),
+        ("week", ReportingPeriod::Week),
+        ("month", ReportingPeriod::Month),
+    ] {
+        let range = period.current_range().unwrap();
+        let mut data = snapshot();
+        revision += 1;
+        data["export_revision"] = json!(revision);
+        let event = data["events"][0].clone();
+        data["events"] = json!(
+            [range.start - 1, range.start, range.end - 1, range.end]
+                .into_iter()
+                .enumerate()
+                .map(|(index, timestamp)| {
+                    let mut event = event.clone();
+                    event["event_key"] = json!(format!("event-{index}"));
+                    event["timestamp_unix_ms"] = json!(timestamp);
+                    event["recorded_cost_usd"] = json!("0.25");
+                    event
+                })
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(upload(&app, &data).await.status(), StatusCode::OK);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/summary?period={name}"))
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let totals = body(response).await;
+        assert_eq!(totals["tokens"]["total"], 300);
+        assert_eq!(totals["total_cost_usd"], "0.5");
+    }
+    let response = app
+        .oneshot(
+            Request::get("/summary?period=year")
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }

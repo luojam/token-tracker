@@ -210,3 +210,38 @@ fn summary_reports_failures_without_exposing_response_bodies_or_retrying() {
         assert!(!tree.root.join(".local").exists());
     }
 }
+
+#[test]
+fn period_reports_send_authenticated_queries_without_local_storage() {
+    let tree = TempTree::new();
+    tree.write(".local", "storage cannot be created here");
+    let auth = auth_file(&tree);
+    let listener = listener();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tree.write(
+        ".config/token-tracker/config.toml",
+        format!("server_url = '{url}'\nauth_file = '{}'\n", auth.display()),
+    );
+    let server = thread::spawn(move || {
+        for query in ["?period=day", "?period=week", "?period=month", ""] {
+            let (stream, _) = request(&listener, &format!("get /summary{query}"));
+            respond(
+                stream,
+                200,
+                r#"{"total_cost_usd":"1.5","tokens":{"total":10,"input":10,"output":0,"cache_read":0,"cache_write":0}}"#,
+            );
+        }
+    });
+    for period in [Some("day"), Some("week"), Some("month"), None] {
+        let report = super::successful_report(
+            super::command(&tree.root)
+                .args(period)
+                .arg("--server")
+                .output()
+                .unwrap(),
+        );
+        assert!(report.contains("Total tokens: 10\n"));
+        assert!(report.contains("Total cost: $1.5\n"));
+    }
+    server.join().unwrap();
+}

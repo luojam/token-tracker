@@ -1,6 +1,7 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::ops::Range;
 
 use super::{
     DeduplicationError, ReportDiagnostic, UsageReadStore, UsageSnapshot, deduplicate_events,
@@ -103,11 +104,13 @@ fn aggregate_cost(recorded: Option<RecordedCost>, estimates: &EstimateTotals) ->
 
 pub(crate) fn read_usage_summary<S: UsageReadStore>(
     store: &S,
+    range: Option<Range<i64>>,
 ) -> Result<(UsageSummary, Vec<ReportDiagnostic>), ReportError> {
     let snapshot = store
         .usage_snapshot()
         .map_err(|source| ReportError::Storage(Box::new(source)))?;
-    let summary = calculate_usage_summary(&snapshot).map_err(ReportError::Summary)?;
+    let summary =
+        calculate_usage_summary_in_range(&snapshot, range).map_err(ReportError::Summary)?;
 
     Ok((summary, snapshot.diagnostics))
 }
@@ -139,11 +142,32 @@ impl Error for ReportError {
 pub fn calculate_usage_summary(
     snapshot: &UsageSnapshot,
 ) -> Result<UsageSummary, UsageSummaryError> {
-    let usage = deduplicate_events(snapshot).map_err(|error| match error {
+    calculate_usage_summary_in_range(snapshot, None)
+}
+
+pub fn calculate_usage_summary_in_range(
+    snapshot: &UsageSnapshot,
+    range: Option<Range<i64>>,
+) -> Result<UsageSummary, UsageSummaryError> {
+    let mut usage = deduplicate_events(snapshot).map_err(|error| match error {
         DeduplicationError::InvalidData(message) => UsageSummaryError::InvalidData(message),
     })?;
+    let session_count = if let Some(range) = range {
+        usage.events.retain(|event| {
+            range.contains(&event.canonical.event.timestamp.as_unix_milliseconds())
+        });
+        usage
+            .events
+            .iter()
+            .flat_map(|event| &event.sessions)
+            .map(|session| (&session.key.agent, &session.key.session_id))
+            .collect::<HashSet<_>>()
+            .len()
+    } else {
+        usage.session_count
+    };
     summarize_events(
-        count_as_u64(usage.session_count)?,
+        count_as_u64(session_count)?,
         usage.events.iter().map(|event| &event.canonical.event),
     )
 }

@@ -206,5 +206,12 @@ pub trait UsageReadStore {
 pub trait SummaryReadStore {
     type Error: Error + Send + Sync + 'static;
 
-    fn summary(&self) -> Result<crate::domain::ExportSummary, Self::Error>;
+    fn summary(&self) -> Result<crate::domain::ExportSummary, Self::Error> {
+        self.summary_in_range(None)
+    }
+
+    fn summary_in_range(
+        &self,
+        range: Option<std::ops::Range<i64>>,
+    ) -> Result<crate::domain::ExportSummary, Self::Error>;
 }

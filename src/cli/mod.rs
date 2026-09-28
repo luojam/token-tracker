@@ -10,6 +10,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use token_tracker::domain::ReportingPeriod;
+
 use token_tracker::{
     AGENT_LABELS, ExportError, ImportSynchronizationError, ReportError, SqliteStoreError,
     TokenTracker, TokenTrackerConfig,
@@ -45,7 +47,7 @@ fn execute() -> Result<(), CliError> {
             Ok(())
         };
     }
-    if let Command::ServerSummary(options) = &command {
+    if let Command::ServerReport { options, period } = &command {
         let config = if options.url.is_some() && options.auth_file.is_some() {
             config::Config::default()
         } else {
@@ -53,11 +55,11 @@ fn execute() -> Result<(), CliError> {
         };
         let (url, auth_file) = options.resolve(&config)?;
         let summary = server::ServerClient::new(url, auth_file)
-            .and_then(|client| client.summary())
+            .and_then(|client| client.summary(*period))
             .map_err(CliError::ServerSummary)?;
         return io::stdout()
             .lock()
-            .write_all(reporting::render_server_summary(&summary).as_bytes())
+            .write_all(reporting::render_server_summary(&summary, *period).as_bytes())
             .map_err(CliError::Output);
     }
     let config = config::Config::load()?;
@@ -90,13 +92,18 @@ fn execute() -> Result<(), CliError> {
         return exporting::write_snapshot(&path, force, &snapshot);
     }
 
-    let result = tracker.report().map_err(CliError::Report)?;
+    let period = match command {
+        Command::Report(period) => period,
+        _ => ReportingPeriod::AllTime,
+    };
+    let result = tracker.report_for(period).map_err(CliError::Report)?;
 
     let output = if matches!(command, Command::Summary) {
         reporting::render_summary(&result.report)
     } else {
         reporting::render_terminal_report(
             &result.report,
+            period,
             &imported.warnings,
             &result.diagnostics,
             AGENT_LABELS,
@@ -108,17 +115,19 @@ fn execute() -> Result<(), CliError> {
         .map_err(CliError::Output)
 }
 
-const USAGE: &str = "Usage: token-tracker
+const USAGE: &str =
+    "Usage: token-tracker [day|week|month] [--server [<server-url>] [--auth-file <path>]]
        token-tracker doctor
        token-tracker summary
        token-tracker summary --server [<server-url>] [--auth-file <path>]
        token-tracker export <path> [--force]
        token-tracker upload [<server-url>] [--auth-file <path>]
 
-Without arguments, refresh sources and show the usage report.
+Without arguments, refresh sources and show the all-time usage report.
+Day, week, and month select the current UTC calendar period; weeks start Monday.
 Doctor checks configuration, storage, and source imports without changing local data.
 Summary refreshes sources and shows token totals by type and total cost.
-Summary --server fetches combined totals without accessing local usage.
+Use --server to fetch combined totals without accessing local usage.
 Export and upload refresh sources before exporting or uploading retained usage.
 Existing exports require --force. Use -- before paths beginning with '-'.
 Server requests require HTTPS (HTTP is allowed for loopback addresses).
@@ -127,11 +136,17 @@ Command-line values override these defaults.
 ";
 
 enum Command {
-    Report,
+    Report(ReportingPeriod),
     Doctor,
     Summary,
-    ServerSummary(ServerOptions),
-    Export { path: PathBuf, force: bool },
+    ServerReport {
+        options: ServerOptions,
+        period: ReportingPeriod,
+    },
+    Export {
+        path: PathBuf,
+        force: bool,
+    },
     Upload(ServerOptions),
     Help,
 }
@@ -162,7 +177,7 @@ impl ServerOptions {
 fn parse_command() -> Result<Command, CliError> {
     let mut args = std::env::args_os().skip(1).peekable();
     let Some(command) = args.next() else {
-        return Ok(Command::Report);
+        return Ok(Command::Report(ReportingPeriod::AllTime));
     };
     if (command == "--help" || command == "-h") && args.next().is_none() {
         return Ok(Command::Help);
@@ -170,14 +185,29 @@ fn parse_command() -> Result<Command, CliError> {
     if command == "doctor" && args.next().is_none() {
         return Ok(Command::Doctor);
     }
-    if command == "summary" {
+    let period = match command.to_str() {
+        Some("day") => Some(ReportingPeriod::Day),
+        Some("week") => Some(ReportingPeriod::Week),
+        Some("month") => Some(ReportingPeriod::Month),
+        Some("summary" | "--server") => Some(ReportingPeriod::AllTime),
+        _ => None,
+    };
+    if let Some(period) = period
+        && command != "--server"
+    {
         match args.next() {
-            None => return Ok(Command::Summary),
+            None => {
+                return Ok(if command == "summary" {
+                    Command::Summary
+                } else {
+                    Command::Report(period)
+                });
+            }
             Some(flag) if flag == "--server" => {}
             _ => return Err(CliError::Arguments),
         }
     }
-    if command == "upload" || command == "summary" {
+    if command == "upload" || period.is_some() {
         let url = if args
             .peek()
             .is_some_and(|arg| !arg.as_encoded_bytes().starts_with(b"-"))
@@ -207,7 +237,10 @@ fn parse_command() -> Result<Command, CliError> {
         return Ok(if command == "upload" {
             Command::Upload(options)
         } else {
-            Command::ServerSummary(options)
+            Command::ServerReport {
+                options,
+                period: period.unwrap(),
+            }
         });
     }
     if command != "export" {
@@ -275,7 +308,7 @@ impl fmt::Display for CliError {
             }
             Self::Open(source) => write!(formatter, "could not open usage storage: {source}"),
             Self::Import(source) => write!(formatter, "session synchronization failed: {source}"),
-            Self::Report(source) => write!(formatter, "all-time summary failed: {source}"),
+            Self::Report(source) => write!(formatter, "usage report failed: {source}"),
             Self::Output(source) => write!(formatter, "could not write report: {source}"),
             Self::Export(source) => write!(formatter, "could not build export: {source}"),
             Self::Upload(source) => write!(formatter, "could not upload snapshot: {source}"),

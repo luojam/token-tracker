@@ -12,7 +12,7 @@ use crate::adapters::codex::{CODEX_AGENT_ID, CodexSessionDiscovery, CodexSession
 use crate::adapters::files::FileSessionSource;
 use crate::adapters::hermes::{HERMES_AGENT_ID, HermesSessionSource};
 use crate::adapters::pi::{PI_AGENT_ID, PiSessionDiscovery, PiSessionParser};
-use crate::domain::export::ExportSnapshot;
+use crate::domain::{ReportingPeriod, export::ExportSnapshot};
 use crate::storage::{SqliteStoreError, SqliteUsageStore};
 
 /// Agent identifiers and display names for the bundled sources.
@@ -177,7 +177,11 @@ impl TokenTracker {
 
     /// Reads stored usage and diagnostics without refreshing or changing stored state.
     pub fn report(&self) -> Result<ReportResult, ReportError> {
-        let (summary, diagnostics) = read_usage_summary(&self.store)?;
+        self.report_for(ReportingPeriod::AllTime)
+    }
+
+    pub fn report_for(&self, period: ReportingPeriod) -> Result<ReportResult, ReportError> {
+        let (summary, diagnostics) = read_usage_summary(&self.store, period.current_range())?;
         Ok(ReportResult {
             report: build_usage_report(&summary),
             diagnostics,

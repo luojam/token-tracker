@@ -332,3 +332,34 @@ fn unrelated_copies_use_start_time_then_session_id() {
         1005
     );
 }
+
+#[test]
+fn period_totals_filter_canonical_events_and_count_matching_sessions() {
+    use token_tracker::application::calculate_usage_summary_in_range;
+
+    let mut data = snapshot(false);
+    for (observation, timestamp) in data.observations.iter_mut().zip([999, 1000, 1500, 2000]) {
+        observation.event.timestamp = Timestamp::from_unix_milliseconds(timestamp);
+    }
+    let summary = calculate_usage_summary_in_range(&data, Some(1000..2000)).unwrap();
+    assert_eq!(
+        summary.totals.tokens,
+        TokenCounts {
+            input: 1,
+            output: 1,
+            cache_read: 1,
+            cache_write: 1
+        }
+    );
+    assert_eq!(summary.totals.unique_usage_event_count, 1);
+    assert_eq!(summary.totals.session_count, 1);
+    assert_eq!(summary.totals.recorded_cost, None);
+
+    let summary = calculate_usage_summary_in_range(&data, Some(999..1000)).unwrap();
+    assert_eq!(summary.totals.tokens.input, 10);
+    assert_eq!(summary.totals.session_count, 2);
+    assert_eq!(
+        summary.totals.recorded_cost,
+        Some(RecordedCost::from_usd(0.25).unwrap())
+    );
+}

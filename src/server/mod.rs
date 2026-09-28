@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Request, State, rejection::JsonRejection},
+    extract::{DefaultBodyLimit, Query, Request, State, rejection::JsonRejection},
     http::{StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -134,14 +134,23 @@ async fn upload<S: ExportSink + Send + 'static>(
     }
 }
 
+#[derive(Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SummaryQuery {
+    #[serde(default)]
+    period: crate::domain::ReportingPeriod,
+}
+
 async fn summary<S: SummaryReadStore + Send + 'static>(
     State(store): State<Arc<Mutex<S>>>,
+    Query(query): Query<SummaryQuery>,
 ) -> Response {
+    let range = query.period.current_range();
     let result = tokio::task::spawn_blocking(move || {
         store
             .lock()
             .expect("snapshot storage lock poisoned")
-            .summary()
+            .summary_in_range(range)
     })
     .await;
     match result {

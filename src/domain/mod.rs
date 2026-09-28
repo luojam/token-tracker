@@ -1,10 +1,12 @@
 pub mod export;
 mod pricing_context;
+mod reporting_period;
 mod summary;
 pub use pricing_context::{
     AnthropicPricingContext, CacheWriteTokens, KnownRequests, OpenAiPricingContext, PricingContext,
     RequestBreakdown, ServiceSpeed,
 };
+pub use reporting_period::ReportingPeriod;
 pub use summary::*;
 
 use std::error::Error;

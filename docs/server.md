@@ -66,6 +66,9 @@ token-tracker summary --server https://tracker.example.com --auth-file ~/.config
 Save `server_url` and `auth_file` in [config.toml](../README.md#configuration)
 to use `token-tracker upload` and `token-tracker summary --server` without
 repeating the URL or auth-file path. Command-line values override saved defaults.
+Use `token-tracker day --server`, `week --server`, or `month --server` for the
+current UTC calendar period. Weeks start Monday. `token-tracker --server`
+returns all-time totals.
 
 ## API
 
@@ -73,5 +76,6 @@ repeating the URL or auth-file path. Command-line values override saved defaults
   with `Content-Type: application/json` and `Authorization: Bearer <token>`.
   Duplicate uploads succeed; stale or conflicting revisions return HTTP 409.
 - `GET /summary` requires the same bearer token and returns all-time cost and
-  token totals across machines.
+  token totals across machines. Add `?period=day`, `?period=week`, or
+  `?period=month` to filter by the current UTC calendar period (Monday-based weeks).
 - `GET /health` is public.

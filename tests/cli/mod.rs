@@ -636,3 +636,36 @@ fn imports_hermes_and_keeps_other_agents_working_with_a_broken_source() {
     assert!(fresh.contains("Pi usage:"), "{fresh}");
     assert!(fresh.contains("unsupported Hermes schema"), "{fresh}");
 }
+
+#[test]
+fn calendar_reports_refresh_local_usage_and_filter_event_timestamps() {
+    let tree = TempTree::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap();
+    let timestamp = chrono::DateTime::from_timestamp(now.as_secs() as i64, 0)
+        .unwrap()
+        .to_rfc3339();
+    let mut entries = ALL_USAGE
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    entries[2]["timestamp"] = timestamp.into();
+    tree.write(
+        ".pi/agent/sessions/history.jsonl",
+        entries
+            .iter()
+            .map(|entry| format!("{entry}\n"))
+            .collect::<String>(),
+    );
+    tree.write(
+        ".config/token-tracker/config.toml",
+        "server_url = 'invalid URL'\nauth_file = 'missing.token'\n",
+    );
+    for period in ["day", "week", "month"] {
+        let report = successful_report(command(&tree.root).arg(period).output().unwrap());
+        assert_totals(&report, [10, 20, 30, 40], 1, 1);
+        assert!(report.contains("(UTC)"));
+        assert!(report.contains("Total cost: $0.12"));
+    }
+}
