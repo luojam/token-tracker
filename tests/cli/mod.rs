@@ -168,6 +168,32 @@ fn imports_pi_codex_and_claude_and_reports_usage_without_exposing_content() {
 }
 
 #[test]
+fn summary_refreshes_sources_and_shows_only_totals() {
+    let tree = TempTree::new();
+    tree.write(".pi/agent/sessions/history.jsonl", ALL_USAGE);
+    tree.write(".pi/agent/sessions/broken.jsonl", "{malformed}\n");
+
+    let summary = successful_report(command(&tree.root).arg("summary").output().unwrap());
+
+    assert_eq!(
+        summary,
+        "Total tokens: 178\nInput tokens: 25\nOutput tokens: 38\nCache-read tokens: 51\nCache-write tokens: 64\nTotal cost: $1.020000 (partial)\n"
+    );
+}
+
+#[test]
+fn summary_without_usage_shows_zero_tokens_and_unavailable_cost() {
+    let tree = TempTree::new();
+
+    let summary = successful_report(command(&tree.root).arg("summary").output().unwrap());
+
+    assert_eq!(
+        summary,
+        "Total tokens: 0\nInput tokens: 0\nOutput tokens: 0\nCache-read tokens: 0\nCache-write tokens: 0\nTotal cost: unavailable\n"
+    );
+}
+
+#[test]
 fn storage_failure_exits_without_a_report() {
     let tree = TempTree::new();
     let sessions = tree.root.join("sessions");
@@ -385,9 +411,10 @@ fn read_export(connection: &rusqlite::Connection) -> token_tracker::ExportSnapsh
 }
 
 #[test]
-fn invalid_export_arguments_fail_before_opening_storage() {
+fn invalid_arguments_fail_before_opening_storage() {
     let tree = TempTree::new();
     for args in [
+        vec!["summary", "unexpected"],
         vec!["export"],
         vec!["export", "export.db", "--unknown"],
         vec!["export", "one.db", "two.db"],

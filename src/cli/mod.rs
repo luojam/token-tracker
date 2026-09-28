@@ -62,12 +62,16 @@ fn execute() -> Result<(), CliError> {
     let imported = tracker.refresh().map_err(CliError::Import)?;
     let result = tracker.report().map_err(CliError::Report)?;
 
-    let output = reporting::render_terminal_report(
-        &result.report,
-        &imported.warnings,
-        &result.diagnostics,
-        AGENT_LABELS,
-    );
+    let output = if matches!(command, Command::Summary) {
+        reporting::render_summary(&result.report)
+    } else {
+        reporting::render_terminal_report(
+            &result.report,
+            &imported.warnings,
+            &result.diagnostics,
+            AGENT_LABELS,
+        )
+    };
     io::stdout()
         .lock()
         .write_all(output.as_bytes())
@@ -75,10 +79,12 @@ fn execute() -> Result<(), CliError> {
 }
 
 const USAGE: &str = "Usage: token-tracker
+       token-tracker summary
        token-tracker export <path> [--force]
        token-tracker upload <server-url> --auth-file <path>
 
 Without arguments, refresh sources and show the usage report.
+Summary refreshes sources and shows token totals by type and total cost.
 Export and upload use retained usage without refreshing sources.
 Existing exports require --force. Use -- before paths beginning with '-'.
 Upload requires HTTPS (HTTP is allowed for loopback addresses).
@@ -86,6 +92,7 @@ Upload requires HTTPS (HTTP is allowed for loopback addresses).
 
 enum Command {
     Report,
+    Summary,
     Export { path: PathBuf, force: bool },
     Upload { url: String, auth_file: PathBuf },
     Help,
@@ -98,6 +105,13 @@ fn parse_command() -> Result<Command, CliError> {
     };
     if (command == "--help" || command == "-h") && args.next().is_none() {
         return Ok(Command::Help);
+    }
+    if command == "summary" {
+        return if args.next().is_none() {
+            Ok(Command::Summary)
+        } else {
+            Err(CliError::Arguments)
+        };
     }
     if command == "upload" {
         let url = args

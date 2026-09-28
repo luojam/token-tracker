@@ -35,6 +35,25 @@ machine_name = "my-computer"
 This display name is included in exports and does not change machine identity.
 The default is no name.
 
+## CLI commands
+
+| Command | Description |
+| --- | --- |
+| `token-tracker` | Refresh sources and show the full usage report. |
+| `token-tracker summary` | Refresh sources and show total, input, output, and cache tokens plus total cost. |
+| `token-tracker export <path> [--force]` | Export retained usage to SQLite. |
+| `token-tracker upload <server-url> --auth-file <path>` | Upload retained usage to a server. |
+| `token-tracker --help` | Show command usage. |
+
+Export and upload do not refresh sources. Run `token-tracker` or
+`token-tracker summary` first to import current usage.
+
+For exports, the parent directory must exist. Add `--force` to replace an existing
+export; unrelated files are never overwritten.
+
+For uploads, HTTPS is required except on loopback. See the
+[server guide](docs/server.md) for setup and authentication.
+
 ## Sources and local data
 
 | Source | Session location |
@@ -52,18 +71,6 @@ is retained after source sessions or databases are deleted.
 
 Costs use recorded values where available and API-price estimates otherwise.
 For subscription plans, these are API-equivalent costs, not your subscription bill.
-
-### SQLite export
-
-Export all locally retained usage:
-
-```sh
-token-tracker export export.db
-```
-
-Run `token-tracker` first to import current usage; export does not refresh sources.
-The parent directory must exist. Add `--force` to replace an existing export;
-unrelated files are never overwritten.
 
 ## Optional server: combine usage across machines
 

@@ -9,6 +9,19 @@ use token_tracker::domain::{
     UsageKind,
 };
 
+pub(super) fn render_summary(report: &UsageReport) -> String {
+    let totals = &report.totals;
+    format!(
+        "Total tokens: {}\nInput tokens: {}\nOutput tokens: {}\nCache-read tokens: {}\nCache-write tokens: {}\nTotal cost: {}\n",
+        format_integer(totals.tokens.total()),
+        format_integer(totals.tokens.input),
+        format_integer(totals.tokens.output),
+        format_integer(totals.tokens.cache_read),
+        format_integer(totals.tokens.cache_write),
+        cost_label(totals.cost).unwrap_or_else(|| "unavailable".into()),
+    )
+}
+
 pub(super) fn render_terminal_report(
     report: &UsageReport,
     warnings: &[ImportWarning],
