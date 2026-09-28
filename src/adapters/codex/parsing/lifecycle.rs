@@ -36,6 +36,10 @@ pub(super) enum ReviewBoundary {
 }
 
 impl TurnLifecycle {
+    pub(super) fn end_inherited_turn(&mut self) {
+        self.active = None;
+    }
+
     /// Returns whether the boundary should update pricing context.
     pub(super) fn accept_boundary(
         &mut self,
@@ -58,7 +62,7 @@ impl TurnLifecycle {
                         },
                     ..
                 })) => true,
-                _ => return Err(invalid()),
+                _ => return Err(CodexParseError::OverlappingTurn { line }),
             };
             if !self.started_turns.insert(turn_id.clone()) {
                 return Err(invalid());

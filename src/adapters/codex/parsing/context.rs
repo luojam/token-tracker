@@ -72,6 +72,11 @@ impl TierContext {
 }
 
 impl ContextState {
+    pub(super) fn enter_thread(&mut self, id: &str) {
+        self.scope = Some(id.to_owned());
+        self.active = None;
+    }
+
     pub(super) fn accept_header(&mut self, id: &str, provider: Option<String>, scoped: bool) {
         let thread = self.threads.entry(id.to_owned()).or_default();
         thread.provider = provider.clone();
@@ -193,7 +198,7 @@ impl ContextState {
 
 #[derive(Deserialize)]
 pub(super) struct SettingsWire {
-    thread_id: Option<String>,
+    pub(super) thread_id: Option<String>,
     thread_settings: ObjectWire<SettingsSnapshot>,
 }
 

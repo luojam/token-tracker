@@ -2,6 +2,7 @@ use super::parse_records as parse;
 use crate::support::records;
 
 use serde_json::{Value, json};
+use token_tracker::adapters::codex::CodexParseError;
 use token_tracker::domain::{
     ModelAttribution, PricingContext, ServiceTier, TierEvidence, UsageEvent,
 };
@@ -208,8 +209,8 @@ fn explicit_fork_response_owner_resolves_model_but_not_tier() {
             .to_vec();
         lines[0]["payload"]["model_provider"] = json!(provider);
         lines[1]["payload"]["model_provider"] = json!("parent-provider");
-        lines.insert(2, settings(Some("thread-parent"), Some(json!("priority"))));
-        lines.insert(3, settings(Some("thread-fork"), Some(json!("default"))));
+        lines.insert(2, settings(Some("thread-fork"), Some(json!("default"))));
+        lines.insert(3, settings(Some("thread-parent"), Some(json!("priority"))));
         if conflicting_model {
             lines.push(context("turn-fork", json!("conflicting-model")));
         }
@@ -270,5 +271,83 @@ fn fork_turns_without_an_owner_boundary_remain_unknown() {
                 known.then_some("child-provider")
             );
         }
+    }
+}
+
+#[test]
+fn fork_boundary_preserves_usage_and_starts_child_pricing_context() {
+    for inherited_usage in [false, true] {
+        let mut lines = records(include_str!(
+            "../../fixtures/codex/legacy-partial-fork.jsonl"
+        ))[..if inherited_usage { 6 } else { 4 }]
+            .to_vec();
+        lines[0]["payload"]["model_provider"] = json!("child-provider");
+        let inherited = parse(&lines).unwrap().events;
+        lines.extend([
+            settings(Some("thread-fork"), Some(json!("default"))),
+            boundary("task_started", "child-turn"),
+            context("child-turn", json!("child-model")),
+        ]);
+        let mut child_response = response("child-response", "child-turn", 1, 1);
+        child_response["payload"]["thread_id"] = json!("thread-fork");
+        lines.extend([
+            child_response,
+            mirror(1 + u64::from(inherited_usage)),
+            boundary("task_complete", "child-turn"),
+        ]);
+
+        let parsed = parse(&lines).unwrap();
+        assert_eq!(&parsed.events[..inherited.len()], inherited);
+        assert_eq!(parsed.events.len(), inherited.len() + 1);
+        let child = parsed.events.last().unwrap();
+        assert_eq!(child.tokens.total(), 110);
+        assert_eq!(
+            child.attribution,
+            Some(ModelAttribution {
+                provider: "child-provider".into(),
+                model: "child-model".into(),
+            })
+        );
+        assert_tier(child, ServiceTier::Standard, TierEvidence::RequestedSetting);
+    }
+}
+
+#[test]
+fn fork_boundary_requires_child_settings_and_cannot_reset_local_turns() {
+    let inherited = records(include_str!(
+        "../../fixtures/codex/legacy-partial-fork.jsonl"
+    ))[..6]
+        .to_vec();
+    for owner in [None, Some("thread-parent")] {
+        let mut lines = inherited.clone();
+        lines.extend([
+            settings(owner, Some(json!("default"))),
+            boundary("task_started", "child-turn"),
+        ]);
+        assert!(matches!(
+            parse(&lines),
+            Err(CodexParseError::OverlappingTurn { .. })
+        ));
+    }
+
+    for terminal in [None, Some("turn_aborted")] {
+        let mut lines = inherited.clone();
+        if let Some(terminal) = terminal {
+            lines.push(boundary(terminal, "turn-legacy-a"));
+        }
+        lines.extend([
+            settings(Some("thread-fork"), Some(json!("default"))),
+            boundary("task_started", "child-turn"),
+            context("child-turn", json!("child-model")),
+        ]);
+        assert!(parse(&lines).is_ok());
+        lines.extend([
+            settings(Some("thread-fork"), Some(json!("priority"))),
+            boundary("task_started", "overlapping-turn"),
+        ]);
+        assert!(matches!(
+            parse(&lines),
+            Err(CodexParseError::OverlappingTurn { line }) if line == lines.len()
+        ));
     }
 }

@@ -146,6 +146,8 @@ struct SessionState {
     headers: BTreeMap<String, HeaderIdentity>,
     expected_ancestor: Option<String>,
     inherited_prefix: bool,
+    inherited_history: bool,
+    pending_fork_boundary: bool,
     responses: BTreeMap<String, ResponseObservation>,
     legacy: LegacyUsageState,
     turns: TurnLifecycle,
@@ -162,6 +164,8 @@ impl SessionState {
             header.identity.forked_from_id.is_none(),
         );
         Self {
+            inherited_history: header.identity.forked_from_id.is_some(),
+            pending_fork_boundary: false,
             expected_ancestor: header.identity.forked_from_id.clone(),
             headers: BTreeMap::from([(header.metadata.session_id.clone(), header.identity)]),
             metadata: header.metadata,
@@ -180,6 +184,7 @@ impl SessionState {
         entry_type: &str,
         line: usize,
     ) -> Result<(), CodexParseError> {
+        let fork_boundary = std::mem::take(&mut self.pending_fork_boundary);
         match entry_type {
             "turn_context" => {
                 validate_timestamp(text, line)?;
@@ -215,6 +220,13 @@ impl SessionState {
                         validate_timestamp(text, line)?;
                         let settings: SettingsWire =
                             payload(text, line, "event_msg.payload.thread_settings")?;
+                        // Child settings followed by a start end inherited history.
+                        self.pending_fork_boundary = self.inherited_history
+                            && self.expected_ancestor.is_none()
+                            && self.mirrors.is_none()
+                            && !self.turns.in_review()
+                            && settings.thread_id.as_deref()
+                                == Some(self.metadata.session_id.as_str());
                         self.context
                             .accept_settings(settings, !self.turns.in_review());
                     }
@@ -223,6 +235,12 @@ impl SessionState {
                         let turn: TurnWire = payload(text, line, "event_msg.payload.turn_id")?;
                         if let Some(mirrors) = &self.mirrors {
                             mirrors.require_confirmed(line)?;
+                        }
+
+                        if event.entry_type == "task_started" && fork_boundary {
+                            self.turns.end_inherited_turn();
+                            self.context.enter_thread(&self.metadata.session_id);
+                            self.inherited_history = false;
                         }
 
                         if self.turns.accept_boundary(
@@ -302,6 +320,7 @@ impl SessionState {
         timestamp: Timestamp,
         line: usize,
     ) -> Result<(), CodexParseError> {
+        self.pending_fork_boundary = false;
         if !self.headers.contains_key(&response.thread_id) {
             return Err(CodexParseError::InvalidField {
                 line,
@@ -418,6 +437,7 @@ impl SessionState {
                     event,
                 },
             );
+            self.inherited_history = false;
         }
         Ok(())
     }
@@ -427,6 +447,7 @@ impl SessionState {
         header: NormalizedHeader,
         line: usize,
     ) -> Result<(), CodexParseError> {
+        self.pending_fork_boundary = false;
         let id = &header.metadata.session_id;
         if let Some(original) = self.headers.get(id) {
             if header.identity.started_at != original.started_at {
@@ -444,12 +465,12 @@ impl SessionState {
                 });
             }
 
-            self.context.accept_header(
-                id,
-                header.provider,
-                id == &self.metadata.session_id
-                    && (original.forked_from_id.is_none() || !self.inherited_prefix),
-            );
+            let scoped = id == &self.metadata.session_id
+                && (original.forked_from_id.is_none() || !self.inherited_prefix);
+            if scoped {
+                self.inherited_history = false;
+            }
+            self.context.accept_header(id, header.provider, scoped);
             return Ok(());
         }
 
@@ -792,6 +813,7 @@ pub enum CodexParseError {
     IncompleteHeader,
     InvalidHeader,
     InvalidField { line: usize, field: &'static str },
+    OverlappingTurn { line: usize },
     MalformedLine { line: usize },
     InvalidUtf8 { line: usize },
     Io { line: usize, kind: io::ErrorKind },
@@ -808,6 +830,10 @@ impl fmt::Display for CodexParseError {
             Self::InvalidField { line, field } => {
                 write!(formatter, "invalid {field} on Codex session line {line}")
             }
+            Self::OverlappingTurn { line } => write!(
+                formatter,
+                "task_started while another turn is active on Codex session line {line}"
+            ),
             Self::MalformedLine { line } => {
                 write!(formatter, "malformed Codex session line {line}")
             }

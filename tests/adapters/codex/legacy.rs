@@ -133,10 +133,16 @@ fn rejects_unsupported_baselines_resets_and_turn_lifecycles_without_content() {
             "payload": {"type": boundary, "turn_id": "SECRET_CONFLICT", "content": "SECRET_CONTENT"}});
 
         let error = parse(&format!("{}\n{conflict}", prefix(FRESH, 5))).unwrap_err();
-        assert!(matches!(
-            error,
-            CodexParseError::InvalidField { line: 6, .. }
-        ));
+        match boundary {
+            "task_started" => assert!(matches!(
+                error,
+                CodexParseError::OverlappingTurn { line: 6 }
+            )),
+            _ => assert!(matches!(
+                error,
+                CodexParseError::InvalidField { line: 6, .. }
+            )),
+        }
         assert!(!format!("{error:?} {error}").contains("SECRET"));
     }
 }
