@@ -189,7 +189,9 @@ def main():
     )
 
     # On EC2, wait for setup to finish, verify the downloaded bundle, then install.
+    # Merge remote output streams so SSM preserves the order of setup messages.
     remote = f"""set -euo pipefail
+exec 2>&1
 umask 077
 timeout 600 cloud-init status --wait
 export AWS_DEFAULT_REGION={shlex.quote(region)} AWS_PAGER=''

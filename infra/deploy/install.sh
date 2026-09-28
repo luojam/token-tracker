@@ -56,7 +56,12 @@ systemctl daemon-reload
 systemctl enable token-tracker caddy
 
 systemctl restart token-tracker caddy
-curl --fail --silent --show-error --max-time 5 --retry 30 --retry-delay 2 \
+echo "Waiting for HTTPS health check (Caddy may need to obtain a certificate)..."
+if ! curl --fail --silent --show-error --output /dev/null --max-time 5 --retry 30 --retry-delay 2 \
   --retry-all-errors --retry-max-time 150 \
-  --resolve "$domain:443:127.0.0.1" "https://$domain/health"
+  --resolve "$domain:443:127.0.0.1" "https://$domain/health" 2> "$work/health-check.log"; then
+  echo "HTTPS health check failed after retries; deployment could not be verified." >&2
+  cat "$work/health-check.log" >&2
+  exit 1
+fi
 echo "Deployed $release to $domain"
