@@ -146,6 +146,12 @@ fn bundled_models_use_exact_flat_rates() {
             1_800_000_000_000,
         ),
         (
+            "claude-sonnet-5-5",
+            ServiceSpeed::Standard,
+            355_000_000,
+            1_800_000_000_000,
+        ),
+        (
             "claude-haiku-4-5-20251001",
             ServiceSpeed::Standard,
             177_500_000,
@@ -246,6 +252,7 @@ fn unsupported_facts_report_the_most_specific_reason() {
         "claude-fable-5",
         "claude-fable-5-1",
         "claude-sonnet-5",
+        "claude-sonnet-5-5",
         "claude-haiku-4-5-20251001",
     ] {
         let mut event = event();

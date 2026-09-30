@@ -7,8 +7,8 @@ use crate::domain::{
     ServiceSpeed, ServiceTier, TierEvidence, TokenCounts, UsageEstimate, UsageEvent,
 };
 
-pub const SNAPSHOT_ID: &str = "anthropic-api-2026-09-25";
-pub const RATE_DATE: &str = "2026-09-25";
+pub const SNAPSHOT_ID: &str = "anthropic-api-2026-09-30";
+pub const RATE_DATE: &str = "2026-09-30";
 
 /// Integer microdollars per million tokens; count times rate gives picodollars.
 #[derive(Clone, Copy)]
@@ -90,7 +90,7 @@ fn lookup_rates(
         "claude-fable-5-1" => FABLE_5_1,
         "claude-opus-5" => OPUS_5,
         "claude-opus-5-5" => OPUS_5_5,
-        "claude-sonnet-5" => SONNET_5,
+        "claude-sonnet-5" | "claude-sonnet-5-5" => SONNET_5,
         "claude-haiku-4-5-20251001" => HAIKU_4_5,
         _ => return Err(Reason::UnsupportedModel),
     };
