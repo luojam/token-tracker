@@ -10,7 +10,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use token_tracker::domain::ReportingPeriod;
+use token_tracker::domain::{ReportFilters, ReportingPeriod};
 
 use token_tracker::{
     AGENT_LABELS, ExportError, ImportSynchronizationError, ReportError, SqliteStoreError,
@@ -47,7 +47,12 @@ fn execute() -> Result<(), CliError> {
             Ok(())
         };
     }
-    if let Command::ServerReport { options, period } = &command {
+    if let Command::ServerReport {
+        options,
+        period,
+        filters,
+    } = &command
+    {
         let config = if options.url.is_some() && options.auth_file.is_some() {
             config::Config::default()
         } else {
@@ -55,7 +60,7 @@ fn execute() -> Result<(), CliError> {
         };
         let (url, auth_file) = options.resolve(&config)?;
         let summary = server::ServerClient::new(url, auth_file)
-            .and_then(|client| client.summary(*period))
+            .and_then(|client| client.summary(*period, filters))
             .map_err(CliError::ServerSummary)?;
         return io::stdout()
             .lock()
@@ -92,13 +97,19 @@ fn execute() -> Result<(), CliError> {
         return exporting::write_snapshot(&path, force, &snapshot);
     }
 
-    let period = match command {
-        Command::Report(period) => period,
-        _ => ReportingPeriod::AllTime,
+    let Command::Report {
+        period,
+        filters,
+        summary,
+    } = command
+    else {
+        unreachable!("other commands return before reporting");
     };
-    let result = tracker.report_for(period).map_err(CliError::Report)?;
+    let result = tracker
+        .report_filtered(period, &filters)
+        .map_err(CliError::Report)?;
 
-    let output = if matches!(command, Command::Summary) {
+    let output = if summary {
         reporting::render_summary(&result.report)
     } else {
         reporting::render_terminal_report(
@@ -116,10 +127,9 @@ fn execute() -> Result<(), CliError> {
 }
 
 const USAGE: &str =
-    "Usage: token-tracker [day|week|month] [--server [<server-url>] [--auth-file <path>]]
+    "Usage: token-tracker [day|week|month] [filters] [--server [<server-url>] [--auth-file <path>]]
        token-tracker doctor
-       token-tracker summary
-       token-tracker summary --server [<server-url>] [--auth-file <path>]
+       token-tracker summary [filters] [--server [<server-url>] [--auth-file <path>]]
        token-tracker export <path> [--force]
        token-tracker upload [<server-url>] [--auth-file <path>]
 
@@ -128,6 +138,8 @@ Day, week, and month select the current UTC calendar period; weeks start Monday.
 Doctor checks configuration, storage, and source imports without changing local data.
 Summary refreshes sources and shows token totals by type and total cost.
 Use --server to fetch combined totals without accessing local usage.
+Filters: --agent <id>, --provider <name>, --model <name> (exact, case-sensitive).
+Repeat a filter to match any listed value; different filters combine with AND.
 Export and upload refresh sources before exporting or uploading retained usage.
 Existing exports require --force. Use -- before paths beginning with '-'.
 Server requests require HTTPS (HTTP is allowed for loopback addresses).
@@ -136,12 +148,16 @@ Command-line values override these defaults.
 ";
 
 enum Command {
-    Report(ReportingPeriod),
+    Report {
+        period: ReportingPeriod,
+        filters: ReportFilters,
+        summary: bool,
+    },
     Doctor,
-    Summary,
     ServerReport {
         options: ServerOptions,
         period: ReportingPeriod,
+        filters: ReportFilters,
     },
     Export {
         path: PathBuf,
@@ -177,7 +193,7 @@ impl ServerOptions {
 fn parse_command() -> Result<Command, CliError> {
     let mut args = std::env::args_os().skip(1).peekable();
     let Some(command) = args.next() else {
-        return Ok(Command::Report(ReportingPeriod::AllTime));
+        return parse_report(ReportingPeriod::AllTime, false, args);
     };
     if (command == "--help" || command == "-h") && args.next().is_none() {
         return Ok(Command::Help);
@@ -189,25 +205,20 @@ fn parse_command() -> Result<Command, CliError> {
         Some("day") => Some(ReportingPeriod::Day),
         Some("week") => Some(ReportingPeriod::Week),
         Some("month") => Some(ReportingPeriod::Month),
-        Some("summary" | "--server") => Some(ReportingPeriod::AllTime),
+        Some("summary" | "--server" | "--agent" | "--provider" | "--model") => {
+            Some(ReportingPeriod::AllTime)
+        }
         _ => None,
     };
-    if let Some(period) = period
-        && command != "--server"
-    {
-        match args.next() {
-            None => {
-                return Ok(if command == "summary" {
-                    Command::Summary
-                } else {
-                    Command::Report(period)
-                });
-            }
-            Some(flag) if flag == "--server" => {}
-            _ => return Err(CliError::Arguments),
-        }
+    if let Some(period) = period {
+        let summary = command == "summary";
+        let first_flag = command
+            .as_encoded_bytes()
+            .starts_with(b"-")
+            .then_some(command);
+        return parse_report(period, summary, first_flag.into_iter().chain(args));
     }
-    if command == "upload" || period.is_some() {
+    if command == "upload" {
         let url = if args
             .peek()
             .is_some_and(|arg| !arg.as_encoded_bytes().starts_with(b"-"))
@@ -234,14 +245,7 @@ fn parse_command() -> Result<Command, CliError> {
             return Err(CliError::Arguments);
         }
         let options = ServerOptions { url, auth_file };
-        return Ok(if command == "upload" {
-            Command::Upload(options)
-        } else {
-            Command::ServerReport {
-                options,
-                period: period.unwrap(),
-            }
-        });
+        return Ok(Command::Upload(options));
     }
     if command != "export" {
         return Err(CliError::Arguments);
@@ -267,6 +271,73 @@ fn parse_command() -> Result<Command, CliError> {
         path: path.ok_or(CliError::Arguments)?,
         force,
     })
+}
+
+fn parse_report(
+    period: ReportingPeriod,
+    summary: bool,
+    args: impl IntoIterator<Item = std::ffi::OsString>,
+) -> Result<Command, CliError> {
+    let mut args = args.into_iter().peekable();
+    let mut filters = ReportFilters::default();
+    let mut server = false;
+    let mut options = ServerOptions {
+        url: None,
+        auth_file: None,
+    };
+    while let Some(flag) = args.next() {
+        match flag.to_str() {
+            Some("--agent" | "--provider" | "--model") => {
+                let value = args
+                    .next()
+                    .and_then(|arg| arg.into_string().ok())
+                    .filter(|value| !value.trim().is_empty() && !value.starts_with('-'))
+                    .ok_or(CliError::Arguments)?;
+                match flag.to_str().unwrap() {
+                    "--agent" => filters.agents.push(value),
+                    "--provider" => filters.providers.push(value),
+                    _ => filters.models.push(value),
+                }
+            }
+            Some("--server") if !server => {
+                server = true;
+                if args
+                    .peek()
+                    .is_some_and(|arg| !arg.as_encoded_bytes().starts_with(b"-"))
+                {
+                    options.url = Some(
+                        args.next()
+                            .and_then(|arg| arg.into_string().ok())
+                            .filter(|value| !value.is_empty())
+                            .ok_or(CliError::Arguments)?,
+                    );
+                }
+            }
+            Some("--auth-file") if options.auth_file.is_none() => {
+                options.auth_file = Some(PathBuf::from(
+                    args.next()
+                        .filter(|arg| !arg.is_empty() && !arg.as_encoded_bytes().starts_with(b"-"))
+                        .ok_or(CliError::Arguments)?,
+                ));
+            }
+            _ => return Err(CliError::Arguments),
+        }
+    }
+    if server {
+        Ok(Command::ServerReport {
+            options,
+            period,
+            filters,
+        })
+    } else if options.auth_file.is_some() {
+        Err(CliError::Arguments)
+    } else {
+        Ok(Command::Report {
+            period,
+            filters,
+            summary,
+        })
+    }
 }
 
 #[derive(Debug)]

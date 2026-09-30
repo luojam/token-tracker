@@ -7,8 +7,9 @@ use super::{
     DeduplicationError, ReportDiagnostic, UsageReadStore, UsageSnapshot, deduplicate_events,
 };
 use crate::domain::{
-    AgentId, EstimateTotal, EstimateTotals, EstimatedCost, RecordedCost, SummaryBreakdown,
-    SummaryGroup, SummaryTotals, TierEvidence, TokenCounts, UsageEvent, UsageSummary,
+    AgentId, EstimateTotal, EstimateTotals, EstimatedCost, RecordedCost, ReportFilters,
+    SummaryBreakdown, SummaryGroup, SummaryTotals, TierEvidence, TokenCounts, UsageEvent,
+    UsageSummary,
 };
 use crate::pricing::EventEstimate;
 
@@ -105,12 +106,13 @@ fn aggregate_cost(recorded: Option<RecordedCost>, estimates: &EstimateTotals) ->
 pub(crate) fn read_usage_summary<S: UsageReadStore>(
     store: &S,
     range: Option<Range<i64>>,
+    filters: &ReportFilters,
 ) -> Result<(UsageSummary, Vec<ReportDiagnostic>), ReportError> {
     let snapshot = store
         .usage_snapshot()
         .map_err(|source| ReportError::Storage(Box::new(source)))?;
-    let summary =
-        calculate_usage_summary_in_range(&snapshot, range).map_err(ReportError::Summary)?;
+    let summary = calculate_usage_summary_filtered(&snapshot, range, filters)
+        .map_err(ReportError::Summary)?;
 
     Ok((summary, snapshot.diagnostics))
 }
@@ -149,12 +151,24 @@ pub fn calculate_usage_summary_in_range(
     snapshot: &UsageSnapshot,
     range: Option<Range<i64>>,
 ) -> Result<UsageSummary, UsageSummaryError> {
+    calculate_usage_summary_filtered(snapshot, range, &ReportFilters::default())
+}
+
+pub fn calculate_usage_summary_filtered(
+    snapshot: &UsageSnapshot,
+    range: Option<Range<i64>>,
+    filters: &ReportFilters,
+) -> Result<UsageSummary, UsageSummaryError> {
     let mut usage = deduplicate_events(snapshot).map_err(|error| match error {
         DeduplicationError::InvalidData(message) => UsageSummaryError::InvalidData(message),
     })?;
-    let session_count = if let Some(range) = range {
+    let session_count = if range.is_some() || !filters.is_empty() {
         usage.events.retain(|event| {
-            range.contains(&event.canonical.event.timestamp.as_unix_milliseconds())
+            let event = &event.canonical.event;
+            range
+                .as_ref()
+                .is_none_or(|range| range.contains(&event.timestamp.as_unix_milliseconds()))
+                && filters.matches(event)
         });
         usage
             .events

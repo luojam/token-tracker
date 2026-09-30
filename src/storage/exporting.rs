@@ -73,19 +73,26 @@ fn validate_destination(connection: &Connection, initialize: bool) -> rusqlite::
 impl SummaryReadStore for SqliteExportStore {
     type Error = SqliteStoreError;
 
-    fn summary_in_range(
+    fn summary_filtered(
         &self,
         range: Option<std::ops::Range<i64>>,
+        filters: &crate::domain::ReportFilters,
     ) -> Result<ExportSummary, Self::Error> {
         let mut statement = self.connection.prepare(
             "SELECT input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
                     recorded_cost_usd, estimate FROM events
              WHERE (?1 IS NULL OR timestamp_unix_ms >= ?1)
-               AND (?2 IS NULL OR timestamp_unix_ms < ?2)",
+               AND (?2 IS NULL OR timestamp_unix_ms < ?2)
+               AND (?3 = '[]' OR agent IN (SELECT value FROM json_each(?3)))
+               AND (?4 = '[]' OR provider IN (SELECT value FROM json_each(?4)))
+               AND (?5 = '[]' OR model IN (SELECT value FROM json_each(?5)))",
         )?;
         let mut rows = statement.query(params![
             range.as_ref().map(|r| r.start),
-            range.as_ref().map(|r| r.end)
+            range.as_ref().map(|r| r.end),
+            serde_json::json!(filters.agents).to_string(),
+            serde_json::json!(filters.providers).to_string(),
+            serde_json::json!(filters.models).to_string(),
         ])?;
         let mut summary = ExportSummary::default();
         while let Some(row) = rows.next()? {

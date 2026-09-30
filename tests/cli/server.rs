@@ -223,8 +223,13 @@ fn period_reports_send_authenticated_queries_without_local_storage() {
         format!("server_url = '{url}'\nauth_file = '{}'\n", auth.display()),
     );
     let server = thread::spawn(move || {
-        for query in ["?period=day", "?period=week", "?period=month", ""] {
-            let (stream, _) = request(&listener, &format!("get /summary{query}"));
+        for query in ["period=day&", "period=week&", "period=month&", ""] {
+            let (stream, _) = request(
+                &listener,
+                &format!(
+                    "get /summary?{query}agent=codex&agent=pi&provider=openai&model=custom%2fmodel%2ba"
+                ),
+            );
             respond(
                 stream,
                 200,
@@ -236,7 +241,9 @@ fn period_reports_send_authenticated_queries_without_local_storage() {
         let report = super::successful_report(
             super::command(&tree.root)
                 .args(period)
+                .args(["--agent", "codex", "--model", "custom/model+a"])
                 .arg("--server")
+                .args(["--agent", "pi", "--provider", "openai"])
                 .output()
                 .unwrap(),
         );

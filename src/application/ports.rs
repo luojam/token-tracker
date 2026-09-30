@@ -213,5 +213,13 @@ pub trait SummaryReadStore {
     fn summary_in_range(
         &self,
         range: Option<std::ops::Range<i64>>,
+    ) -> Result<crate::domain::ExportSummary, Self::Error> {
+        self.summary_filtered(range, &crate::domain::ReportFilters::default())
+    }
+
+    fn summary_filtered(
+        &self,
+        range: Option<std::ops::Range<i64>>,
+        filters: &crate::domain::ReportFilters,
     ) -> Result<crate::domain::ExportSummary, Self::Error>;
 }

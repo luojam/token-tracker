@@ -52,6 +52,9 @@ auth_file = ""
 Export and upload refresh sources automatically before exporting or uploading
 all locally retained usage.
 
+Reports support [agent, provider, and model filters](docs/filters.md), locally
+and with `--server`.
+
 For exports, the parent directory must exist. Add `--force` to replace an existing
 export; unrelated files are never overwritten.
 

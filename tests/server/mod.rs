@@ -134,9 +134,10 @@ async fn uploads_validate_independently_of_storage_and_hide_storage_errors() {
     impl SummaryReadStore for FailingSink {
         type Error = io::Error;
 
-        fn summary_in_range(
+        fn summary_filtered(
             &self,
             _: Option<std::ops::Range<i64>>,
+            _: &token_tracker::domain::ReportFilters,
         ) -> Result<ExportSummary, Self::Error> {
             Err(io::Error::other("private storage detail"))
         }
@@ -356,4 +357,103 @@ async fn period_summaries_filter_uploaded_event_timestamps_and_validate_periods(
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn summary_filters_combine_repeated_values_with_periods() {
+    use token_tracker::domain::ReportingPeriod;
+
+    let tree = TempTree::new();
+    let app = sqlite_router(&tree, 16384);
+    let range = ReportingPeriod::Day.current_range().unwrap();
+    let mut data = snapshot();
+    let template = data["events"][0].clone();
+    data["events"] = json!(
+        [
+            ("codex", Some("openai"), Some("custom/model+a"), range.start),
+            ("pi", Some("openai"), Some("custom/model+a"), range.start),
+            (
+                "hermes",
+                Some("openai"),
+                Some("custom/model+a"),
+                range.start
+            ),
+            ("codex", Some("other"), Some("custom/model+a"), range.start),
+            ("codex", Some("openai"), Some("other-model"), range.start),
+            ("codex", None, None, range.start),
+            (
+                "codex",
+                Some("openai"),
+                Some("custom/model+a"),
+                range.start - 1
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (agent, provider, model, timestamp))| {
+            let mut event = template.clone();
+            event["event_key"] = json!(format!("event-{index}"));
+            event["agent"] = json!(agent);
+            event["provider"] = json!(provider);
+            event["model"] = json!(model);
+            event["timestamp_unix_ms"] = json!(timestamp);
+            event["pricing_context"] = json!(null);
+            if index != 0 {
+                event["recorded_cost_usd"] = json!("0.25");
+                event["estimate"] = json!({"status": "not_needed"});
+            }
+            event
+        })
+        .collect::<Vec<_>>()
+    );
+    assert_eq!(upload(&app, &data).await.status(), StatusCode::OK);
+
+    for (query, tokens, cost) in [
+        (
+            "period=day&agent=codex&agent=pi&provider=openai&model=custom%2Fmodel%2Ba",
+            300,
+            "0.262345678901",
+        ),
+        (
+            "provider=openai&model=custom%2Fmodel%2Ba&model=other-model",
+            750,
+            "1.012345678901",
+        ),
+        ("agent=missing", 0, "0"),
+        ("model=Custom%2Fmodel%2Ba", 0, "0"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/summary?{query}"))
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let totals = body(response).await;
+        assert_eq!(totals["tokens"]["total"], tokens);
+        assert_eq!(totals["total_cost_usd"], cost);
+    }
+
+    for query in [
+        "agent=",
+        "model=%20",
+        "period=day&period=week",
+        "unknown=codex",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::get(format!("/summary?{query}"))
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
 }

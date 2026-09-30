@@ -1,11 +1,13 @@
 pub mod export;
 mod pricing_context;
+mod report_filters;
 mod reporting_period;
 mod summary;
 pub use pricing_context::{
     AnthropicPricingContext, CacheWriteTokens, KnownRequests, OpenAiPricingContext, PricingContext,
     RequestBreakdown, ServiceSpeed,
 };
+pub use report_filters::ReportFilters;
 pub use reporting_period::ReportingPeriod;
 pub use summary::*;
 

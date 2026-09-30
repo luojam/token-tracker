@@ -147,6 +147,35 @@ fn snapshot(reverse: bool) -> UsageSnapshot {
 }
 
 #[test]
+fn filters_apply_after_deduplication_and_count_matching_sessions() {
+    use token_tracker::application::calculate_usage_summary_filtered;
+    use token_tracker::domain::ReportFilters;
+
+    let mut data = snapshot(false);
+    let (empty, _) = session("/sessions/empty.jsonl", "empty-session", 300, None, vec![]);
+    data.sessions.push(empty);
+    let mut filters = ReportFilters {
+        agents: vec!["codex".into(), "pi".into()],
+        providers: vec!["provider-a".into()],
+        models: vec!["model-a".into()],
+    };
+    let summary = calculate_usage_summary_filtered(&data, None, &filters).unwrap();
+    assert_eq!(summary.totals.tokens.total(), 19);
+    assert_eq!(summary.totals.recorded_cost.unwrap().as_usd(), 0.25);
+    assert_eq!(summary.totals.unique_usage_event_count, 1);
+    assert_eq!(summary.totals.session_count, 2);
+
+    let outside = calculate_usage_summary_filtered(&data, Some(0..1000), &filters).unwrap();
+    assert_eq!(outside.totals.session_count, 0);
+    assert_eq!(outside.totals.tokens.total(), 0);
+
+    filters.providers = vec!["wrong-provider".into()];
+    filters.models.clear();
+    let excluded = calculate_usage_summary_filtered(&data, None, &filters).unwrap();
+    assert_eq!(excluded.totals.unique_usage_event_count, 0);
+}
+
+#[test]
 fn shared_event_deduplication_preserves_selected_observations_and_session_memberships() {
     let mut data = snapshot(false);
     let (empty, _) = session("/sessions/empty.jsonl", "empty-session", 300, None, vec![]);

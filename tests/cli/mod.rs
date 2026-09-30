@@ -468,6 +468,9 @@ fn invalid_arguments_fail_before_opening_storage() {
     for args in [
         vec!["doctor", "unexpected"],
         vec!["summary", "unexpected"],
+        vec!["--agent"],
+        vec!["week", "--provider", ""],
+        vec!["summary", "--model", "--server"],
         vec!["summary", "--server"],
         vec!["summary", "--server", "https://example.com"],
         vec!["summary", "--auth-file", "auth.token"],
@@ -663,9 +666,46 @@ fn calendar_reports_refresh_local_usage_and_filter_event_timestamps() {
         "server_url = 'invalid URL'\nauth_file = 'missing.token'\n",
     );
     for period in ["day", "week", "month"] {
-        let report = successful_report(command(&tree.root).arg(period).output().unwrap());
+        let report = successful_report(
+            command(&tree.root)
+                .args([period, "--provider", "provider-a"])
+                .output()
+                .unwrap(),
+        );
         assert_totals(&report, [10, 20, 30, 40], 1, 1);
         assert!(report.contains("(UTC)"));
         assert!(report.contains("Total cost: $0.12"));
     }
+}
+
+#[test]
+fn local_reports_filter_totals_and_breakdowns() {
+    let tree = TempTree::new();
+    tree.write(".pi/agent/sessions/history.jsonl", ALL_USAGE);
+    tree.write(".codex/sessions/rollout-history.jsonl", CODEX_USAGE);
+    let filters = [
+        "--agent",
+        "pi",
+        "--agent",
+        "codex",
+        "--provider",
+        "provider-a",
+        "--model",
+        "model-resolved",
+    ];
+    let report = successful_report(command(&tree.root).args(filters).output().unwrap());
+    assert_totals(&report, [10, 20, 30, 40], 1, 1);
+    assert!(report.contains("Pi usage:"));
+    assert!(!report.contains("Codex usage:"));
+    assert!(report.contains("Total cost: $0.120000\n"));
+
+    let summary = successful_report(
+        command(&tree.root)
+            .arg("summary")
+            .args(filters)
+            .output()
+            .unwrap(),
+    );
+    assert!(summary.contains("Total tokens: 100\n"));
+    assert!(summary.contains("Total cost: $0.120000\n"));
 }

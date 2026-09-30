@@ -14,6 +14,7 @@ use serde_json::json;
 use subtle::ConstantTimeEq;
 
 use crate::application::SummaryReadStore;
+use crate::domain::{ReportFilters, ReportingPeriod};
 use crate::{ExportSink, ExportSnapshot, PublishError, PublishOutcome};
 
 pub use config::ServerConfig;
@@ -134,23 +135,38 @@ async fn upload<S: ExportSink + Send + 'static>(
     }
 }
 
-#[derive(Default, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SummaryQuery {
-    #[serde(default)]
-    period: crate::domain::ReportingPeriod,
-}
-
 async fn summary<S: SummaryReadStore + Send + 'static>(
     State(store): State<Arc<Mutex<S>>>,
-    Query(query): Query<SummaryQuery>,
+    Query(query): Query<Vec<(String, String)>>,
 ) -> Response {
-    let range = query.period.current_range();
+    let mut period = None;
+    let mut filters = ReportFilters::default();
+    for (name, value) in query {
+        if value.trim().is_empty() {
+            return error(StatusCode::BAD_REQUEST, "invalid_summary_query");
+        }
+        match name.as_str() {
+            "period" if period.is_none() => {
+                period = Some(match value.as_str() {
+                    "all_time" => ReportingPeriod::AllTime,
+                    "day" => ReportingPeriod::Day,
+                    "week" => ReportingPeriod::Week,
+                    "month" => ReportingPeriod::Month,
+                    _ => return error(StatusCode::BAD_REQUEST, "invalid_summary_query"),
+                });
+            }
+            "agent" => filters.agents.push(value),
+            "provider" => filters.providers.push(value),
+            "model" => filters.models.push(value),
+            _ => return error(StatusCode::BAD_REQUEST, "invalid_summary_query"),
+        }
+    }
+    let range = period.unwrap_or_default().current_range();
     let result = tokio::task::spawn_blocking(move || {
         store
             .lock()
             .expect("snapshot storage lock poisoned")
-            .summary_in_range(range)
+            .summary_filtered(range, &filters)
     })
     .await;
     match result {

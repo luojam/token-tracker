@@ -10,7 +10,7 @@ use reqwest::{
     blocking::{Client, RequestBuilder},
     header, redirect,
 };
-use token_tracker::domain::{ExportSummary, ReportingPeriod};
+use token_tracker::domain::{ExportSummary, ReportFilters, ReportingPeriod};
 
 pub(super) struct ServerClient {
     client: Client,
@@ -94,10 +94,23 @@ impl ServerClient {
         Ok(body)
     }
 
-    pub fn summary(&self, period: ReportingPeriod) -> Result<ExportSummary, ServerError> {
+    pub fn summary(
+        &self,
+        period: ReportingPeriod,
+        filters: &ReportFilters,
+    ) -> Result<ExportSummary, ServerError> {
         let mut request = self.request(Method::GET, "summary");
         if period != ReportingPeriod::AllTime {
             request = request.query(&[("period", period)]);
+        }
+        for (name, values) in [
+            ("agent", &filters.agents),
+            ("provider", &filters.providers),
+            ("model", &filters.models),
+        ] {
+            for value in values {
+                request = request.query(&[(name, value)]);
+            }
         }
         let body = self.send(request)?;
         serde_json::from_slice(&body).map_err(|_| ServerError::Response)

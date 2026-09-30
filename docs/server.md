@@ -78,4 +78,5 @@ returns all-time totals.
 - `GET /summary` requires the same bearer token and returns all-time cost and
   token totals across machines. Add `?period=day`, `?period=week`, or
   `?period=month` to filter by the current UTC calendar period (Monday-based weeks).
+  Optional `agent`, `provider`, and `model` parameters support [report filters](filters.md).
 - `GET /health` is public.
