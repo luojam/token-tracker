@@ -1,4 +1,24 @@
-The suite starts at `integration.rs`, grouped by component:
+# Development
+
+Run locally with `cargo run`, or build `target/release/token-tracker` with
+`cargo build --release`. See [server runtime](server.md#runtime) for the server build.
+
+## Checks
+
+From the repository root:
+
+```sh
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo check --all-features
+cargo test --all-features
+```
+
+## Tests
+
+Paths below are relative to `tests/`.
+
+The suite starts at `tests/integration.rs`, grouped by component:
 
 - `adapters/`: discovery and parsing.
 - `application/`: sync, event deduplication, reports, and snapshot exports.
@@ -12,7 +32,7 @@ Reuse `support/` and fixtures. Name tests after behavior and keep expected value
 independent of the implementation. Test lifecycles at the application layer, not
 again per adapter or CLI. Reserve inline unit tests for private behavior.
 
-Run all tests with `cargo test`, or filter by module:
+Run individual test modules:
 
 ```sh
 cargo test --test integration adapters::codex

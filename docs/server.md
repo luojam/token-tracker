@@ -1,82 +1,62 @@
 # Server
 
-The optional server collects uploaded snapshots and reports totals across the
-latest snapshot from each machine.
+The optional server collects usage snapshots and reports combined totals across
+the latest snapshot from each machine. Uploads are explicit: local CLI reports
+do not upload, and server reports do not refresh clients.
 
-## Deployment
+Each machine has a stable ID and an increasing snapshot version (`export_revision`).
+A newer upload replaces that machine's snapshot; retrying the same snapshot succeeds.
+Older versions or different snapshots with the same version are rejected.
 
-[Terraform](../infra/main.tf) provisions EC2 and an auth token.
-[scripts/deploy.py](../scripts/deploy.py) builds and deploys through SSM, with
-Caddy providing HTTPS.
+For AWS setup and client onboarding, see [deployment](deployment.md). For upload
+and reporting commands, see the [CLI guide](cli.md).
 
-Requires Python 3, Terraform 1.11+, AWS CLI v2, `musl-gcc`, and the Rust
-`x86_64-unknown-linux-musl` target, plus AWS credentials permitting Terraform,
-S3 uploads, and SSM commands. From the repository root:
+## Runtime
 
-```sh
-terraform -chdir=infra init
-terraform -chdir=infra apply
-terraform -chdir=infra output -raw public_ip
-```
-
-Point your domain's DNS A record at that IP. Once it resolves, deploy:
+Build the server with:
 
 ```sh
-python3 scripts/deploy.py tracker.example.com
+cargo build --release --features server --bin token-tracker-server
 ```
 
-Rerun to update and check HTTPS health. Options:
+The binary is `target/release/token-tracker-server`. It listens on the fixed
+address `127.0.0.1:3000`; the deployment uses Caddy for public HTTPS.
 
-- `--provision`: apply infrastructure changes first.
-- `--release SHA`: reuse an uploaded binary by SHA-256; rollback needs database compatibility.
+| Environment variable | Default |
+| --- | --- |
+| `TOKEN_TRACKER_SERVER_AUTH_FILE` | `/etc/token-tracker/auth.token` |
+| `TOKEN_TRACKER_SERVER_DATABASE` | `/var/lib/token-tracker/server/snapshots.db` |
+| `TOKEN_TRACKER_MAX_UPLOAD_BYTES` | `33554432` (32 MiB); must be a positive integer |
 
-For Caddy upgrades, change the version and checksum in
-[caddy.env](../infra/deploy/caddy.env), then redeploy.
+The process needs a readable token file and writable database storage. It reads
+the token at startup, so restart after changing it. The token file must be a
+regular file accessible only by its owner. Tokens contain at least 32 ASCII
+letters, digits, or `-._~+/=` characters; the file may contain at most 4096 bytes,
+including any trailing newline.
 
-Troubleshoot using the printed SSM command ID, `/var/log/token-tracker-setup.log`,
-or `journalctl -u token-tracker -u caddy`. Timed-out commands may still be running.
-
-## Upload
-
-Save the generated token from AWS SSM Parameter Store
-(`/token-tracker/auth-token`) to a local file on each machine using AWS credentials
-with access to the parameter. The file must be accessible only by its owner:
-
-```sh
-umask 077
-mkdir -p ~/.config/token-tracker
-aws ssm get-parameter --region eu-north-1 \
-  --name /token-tracker/auth-token --with-decryption \
-  --query Parameter.Value --output text > ~/.config/token-tracker/auth.token
-chmod 600 ~/.config/token-tracker/auth.token
-token-tracker upload https://tracker.example.com --auth-file ~/.config/token-tracker/auth.token
-```
-
-Upload refreshes sources automatically and includes all locally retained usage.
-HTTPS is required except on loopback.
-
-## Combined summary
-
-Fetch totals across the latest uploaded snapshot from each machine:
-
-```sh
-token-tracker summary --server https://tracker.example.com --auth-file ~/.config/token-tracker/auth.token
-```
-
-Save `server_url` and `auth_file` in [config.toml](../README.md#configuration)
-to use `token-tracker upload` and `token-tracker summary --server` without
-repeating the URL or auth-file path. Command-line values override saved defaults.
-Use `token-tracker day --server`, `week --server`, or `month --server` for the
-current UTC calendar period. Weeks start Monday. `token-tracker --server`
-returns all-time totals.
+All clients share one bearer token and access the same combined dataset.
 
 ## API
 
-- `POST /snapshots` accepts [snapshot JSON](../tests/fixtures/export-example.json)
-  with `Content-Type: application/json` and `Authorization: Bearer <token>`.
-  Duplicate uploads succeed; stale or conflicting revisions return HTTP 409.
-- `GET /summary` requires the same bearer token and returns all-time cost and
-  token totals across machines. Add `?period=day`, `?period=week`, or
-  `?period=month` to filter by the current UTC calendar period (Monday-based weeks).
-  Optional `agent`, `provider`, and `model` parameters support [report filters](filters.md).
-- `GET /health` is public.
+`POST /snapshots` and `GET /summary` require `Authorization: Bearer <token>`.
+Missing or invalid authentication returns HTTP 401. `GET /health` is public.
+
+| Endpoint | Request | Response |
+| --- | --- | --- |
+| `POST /snapshots` | [Snapshot JSON](../tests/fixtures/export-example.json), with `Content-Type: application/json`. | JSON containing `status` (`published` or `already_published`), `machine_id`, and `export_revision`. |
+| `GET /summary` | Optional period and filters below. | JSON cost and token totals across machines. |
+| `GET /health` | No parameters. | `ok` followed by a newline. |
+
+Summary parameters:
+
+- `period`: `all_time` (default), `day`, `week`, or `month`. Periods use the current
+  UTC calendar; weeks start Monday.
+- `agent`, `provider`, `model`: repeatable parameters using the CLI's
+  [filter matching rules](cli.md#filters).
+
+Example: `/summary?period=week&agent=codex&agent=pi&provider=openai`.
+Unknown parameters, empty values, and repeated `period` return HTTP 400.
+
+Uploads return HTTP 409 for stale or conflicting revisions, 413 for oversized
+bodies, 415 for unsupported content types, and 422 for invalid snapshots.
+Storage failures return HTTP 500. Error responses contain an `error` field.
