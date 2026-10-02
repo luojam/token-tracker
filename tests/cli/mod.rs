@@ -348,15 +348,36 @@ fn invalid_config_fails_before_opening_storage_but_help_still_works() {
         assert!(error.contains("could not load config"), "{error}");
         assert!(error.contains(path.to_str().unwrap()), "{error}");
     }
+    for (args, usage) in [
+        (vec!["--help"], "Usage: token-tracker [command]"),
+        (vec!["-h"], "Usage: token-tracker [command]"),
+        (vec!["export", "--help"], "Usage: token-tracker export"),
+        (vec!["upload", "--help"], "Usage: token-tracker upload"),
+        (vec!["week", "-h"], "Usage: token-tracker week"),
+        (vec!["doctor", "--help"], "Usage: token-tracker doctor"),
+        (
+            vec!["summary", "--agent", "codex", "--help"],
+            "Usage: token-tracker summary",
+        ),
+    ] {
+        let help = successful_report(command(&tree.root).args(args).output().unwrap());
+        assert!(help.starts_with(usage), "{help}");
+    }
     assert!(!tree.root.join(".local").exists());
-    assert!(
+}
+
+#[test]
+fn export_accepts_help_flag_as_a_path_after_double_dash() {
+    let tree = TempTree::new();
+    successful_report(
         command(&tree.root)
-            .arg("--help")
+            .current_dir(&tree.root)
+            .args(["export", "--", "--help"])
             .output()
-            .unwrap()
-            .status
-            .success()
+            .unwrap(),
     );
+    let connection = rusqlite::Connection::open(tree.root.join("--help")).unwrap();
+    assert!(read_export(&connection).events.is_empty());
 }
 
 #[test]
@@ -465,34 +486,67 @@ fn read_export(connection: &rusqlite::Connection) -> token_tracker::ExportSnapsh
 #[test]
 fn invalid_arguments_fail_before_opening_storage() {
     let tree = TempTree::new();
-    for args in [
-        vec!["doctor", "unexpected"],
-        vec!["summary", "unexpected"],
-        vec!["--agent"],
-        vec!["week", "--provider", ""],
-        vec!["summary", "--model", "--server"],
-        vec!["summary", "--server"],
-        vec!["summary", "--server", "https://example.com"],
-        vec!["summary", "--auth-file", "auth.token"],
-        vec!["upload"],
-        vec!["upload", "--auth-file"],
-        vec!["summary", "--server", "--unknown"],
-        vec![
-            "summary",
-            "--server",
-            "https://example.com",
-            "--auth-file",
-            "auth.token",
-            "extra",
-        ],
-        vec!["export"],
-        vec!["export", "export.db", "--unknown"],
-        vec!["export", "one.db", "two.db"],
+    for (args, message) in [
+        (vec!["unknown"], "unknown command 'unknown'"),
+        (
+            vec!["doctor", "unexpected"],
+            "unexpected argument 'unexpected'",
+        ),
+        (
+            vec!["summary", "unexpected"],
+            "unexpected argument 'unexpected'",
+        ),
+        (vec!["--agent"], "--agent requires a value"),
+        (
+            vec!["week", "--provider", ""],
+            "--provider requires a value",
+        ),
+        (
+            vec!["summary", "--model", "--server"],
+            "--model requires a value",
+        ),
+        (vec!["summary", "--server"], "missing server URL"),
+        (
+            vec!["summary", "--server", "https://example.com"],
+            "missing bearer-token file",
+        ),
+        (
+            vec!["summary", "--auth-file", "auth.token"],
+            "--auth-file requires --server",
+        ),
+        (vec!["upload"], "missing server URL"),
+        (vec!["upload", "--auth-file"], "--auth-file requires a path"),
+        (
+            vec!["summary", "--server", "--unknown"],
+            "unknown option '--unknown'",
+        ),
+        (
+            vec![
+                "summary",
+                "--server",
+                "https://example.com",
+                "--auth-file",
+                "auth.token",
+                "extra",
+            ],
+            "unexpected argument 'extra'",
+        ),
+        (vec!["export"], "export requires a path"),
+        (
+            vec!["export", "export.db", "--unknown"],
+            "unknown option '--unknown'",
+        ),
+        (
+            vec!["export", "one.db", "two.db"],
+            "export accepts only one path",
+        ),
     ] {
         let output = command(&tree.root).args(args).output().unwrap();
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("Usage:"));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains(message), "{error}");
+        assert!(error.contains("Try 'token-tracker --help'"), "{error}");
     }
     assert!(!tree.root.join(".local").exists());
 }

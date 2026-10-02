@@ -17,6 +17,8 @@ Local reports, exports, and uploads refresh sources automatically.
 | `token-tracker upload [<server-url>] [--auth-file <path>]` | Upload usage to a server. |
 | `token-tracker --help` or `-h` | Show command usage. |
 
+Use `<command> --help` (or `-h`) for help with a specific command.
+
 Add `--server [<server-url>]` to the default report, `day`, `week`, `month`, or
 `summary` to fetch combined server totals without accessing local usage.
 Server reports show totals rather than the local report's breakdowns.

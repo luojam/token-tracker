@@ -1,6 +1,7 @@
 mod config;
 mod doctor;
 mod exporting;
+mod help;
 mod reporting;
 mod server;
 mod uploading;
@@ -29,10 +30,10 @@ pub fn run() -> ExitCode {
 
 fn execute() -> Result<(), CliError> {
     let command = parse_command()?;
-    if matches!(command, Command::Help) {
+    if let Command::Help(text) = command {
         return io::stdout()
             .lock()
-            .write_all(USAGE.as_bytes())
+            .write_all(text.as_bytes())
             .map_err(CliError::Output);
     }
     if matches!(command, Command::Doctor) {
@@ -126,27 +127,6 @@ fn execute() -> Result<(), CliError> {
         .map_err(CliError::Output)
 }
 
-const USAGE: &str =
-    "Usage: token-tracker [day|week|month] [filters] [--server [<server-url>] [--auth-file <path>]]
-       token-tracker doctor
-       token-tracker summary [filters] [--server [<server-url>] [--auth-file <path>]]
-       token-tracker export <path> [--force]
-       token-tracker upload [<server-url>] [--auth-file <path>]
-
-Without arguments, refresh sources and show the all-time usage report.
-Day, week, and month select the current UTC calendar period; weeks start Monday.
-Doctor checks configuration, storage, and source imports without changing local data.
-Summary refreshes sources and shows token totals by type and total cost.
-Use --server to fetch combined totals without accessing local usage.
-Filters: --agent <id>, --provider <name>, --model <name> (exact, case-sensitive).
-Repeat a filter to match any listed value; different filters combine with AND.
-Export and upload refresh sources before exporting or uploading retained usage.
-Existing exports require --force. Use -- before paths beginning with '-'.
-Server requests require HTTPS (HTTP is allowed for loopback addresses).
-Server URL and auth-file default to server_url and auth_file in config.toml.
-Command-line values override these defaults.
-";
-
 enum Command {
     Report {
         period: ReportingPeriod,
@@ -164,7 +144,7 @@ enum Command {
         force: bool,
     },
     Upload(ServerOptions),
-    Help,
+    Help(String),
 }
 
 struct ServerOptions {
@@ -179,26 +159,42 @@ impl ServerOptions {
             .as_deref()
             .or(config.server_url.as_deref())
             .filter(|url| !url.is_empty())
-            .ok_or(CliError::Arguments)?;
+            .ok_or_else(|| {
+                arguments("missing server URL; supply a URL or set server_url in config")
+            })?;
         let auth_file = self
             .auth_file
             .as_deref()
             .or(config.auth_file.as_deref())
             .filter(|path| !path.as_os_str().is_empty())
-            .ok_or(CliError::Arguments)?;
+            .ok_or_else(|| {
+                arguments(
+                    "missing bearer-token file; use --auth-file <path> or set auth_file in config",
+                )
+            })?;
         Ok((url, auth_file))
     }
 }
 
 fn parse_command() -> Result<Command, CliError> {
-    let mut args = std::env::args_os().skip(1).peekable();
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    let wants_help = args
+        .iter()
+        .take_while(|arg| *arg != "--")
+        .any(|arg| arg == "--help" || arg == "-h");
+    let mut args = args.into_iter().peekable();
     let Some(command) = args.next() else {
         return parse_report(ReportingPeriod::AllTime, false, args);
     };
-    if (command == "--help" || command == "-h") && args.next().is_none() {
-        return Ok(Command::Help);
+    if wants_help {
+        if let Some(text) = command.to_str().and_then(help::for_command) {
+            return Ok(Command::Help(text));
+        }
     }
-    if command == "doctor" && args.next().is_none() {
+    if command == "doctor" {
+        if let Some(arg) = args.next() {
+            return Err(unexpected(&arg));
+        }
         return Ok(Command::Doctor);
     }
     let period = match command.to_str() {
@@ -227,7 +223,7 @@ fn parse_command() -> Result<Command, CliError> {
                 args.next()
                     .and_then(|arg| arg.into_string().ok())
                     .filter(|arg| !arg.is_empty())
-                    .ok_or(CliError::Arguments)?,
+                    .ok_or_else(|| arguments("server URL must be nonempty UTF-8 text"))?,
             )
         } else {
             None
@@ -235,20 +231,24 @@ fn parse_command() -> Result<Command, CliError> {
         let auth_file = match args.next() {
             Some(flag) if flag == "--auth-file" => Some(PathBuf::from(
                 args.next()
-                    .filter(|arg| !arg.is_empty())
-                    .ok_or(CliError::Arguments)?,
+                    .filter(|arg| !arg.is_empty() && !arg.as_encoded_bytes().starts_with(b"-"))
+                    .ok_or_else(|| arguments("--auth-file requires a path"))?,
             )),
-            Some(_) => return Err(CliError::Arguments),
+            Some(arg) => return Err(unexpected(&arg)),
             None => None,
         };
-        if args.next().is_some() {
-            return Err(CliError::Arguments);
+        if let Some(arg) = args.next() {
+            return Err(unexpected(&arg));
         }
         let options = ServerOptions { url, auth_file };
         return Ok(Command::Upload(options));
     }
     if command != "export" {
-        return Err(CliError::Arguments);
+        return Err(if command.as_encoded_bytes().starts_with(b"-") {
+            unexpected(&command)
+        } else {
+            arguments(format!("unknown command '{}'", command.to_string_lossy()))
+        });
     }
     let mut path = None;
     let mut force = false;
@@ -256,19 +256,23 @@ fn parse_command() -> Result<Command, CliError> {
     for arg in args {
         if !positional_only && arg == "--" {
             positional_only = true;
-        } else if !positional_only && arg == "--force" && !force {
+        } else if !positional_only && arg == "--force" {
+            if force {
+                return Err(arguments("--force can only be used once"));
+            }
             force = true;
-        } else if (!positional_only && arg.as_encoded_bytes().starts_with(b"-"))
-            || arg.is_empty()
-            || path.is_some()
-        {
-            return Err(CliError::Arguments);
+        } else if !positional_only && arg.as_encoded_bytes().starts_with(b"-") {
+            return Err(unexpected(&arg));
+        } else if arg.is_empty() {
+            return Err(arguments("export requires a nonempty path"));
+        } else if path.is_some() {
+            return Err(arguments("export accepts only one path"));
         } else {
             path = Some(PathBuf::from(arg));
         }
     }
     Ok(Command::Export {
-        path: path.ok_or(CliError::Arguments)?,
+        path: path.ok_or_else(|| arguments("export requires a path"))?,
         force,
     })
 }
@@ -292,7 +296,9 @@ fn parse_report(
                     .next()
                     .and_then(|arg| arg.into_string().ok())
                     .filter(|value| !value.trim().is_empty() && !value.starts_with('-'))
-                    .ok_or(CliError::Arguments)?;
+                    .ok_or_else(|| {
+                        arguments(format!("{} requires a value", flag.to_string_lossy()))
+                    })?;
                 match flag.to_str().unwrap() {
                     "--agent" => filters.agents.push(value),
                     "--provider" => filters.providers.push(value),
@@ -309,7 +315,7 @@ fn parse_report(
                         args.next()
                             .and_then(|arg| arg.into_string().ok())
                             .filter(|value| !value.is_empty())
-                            .ok_or(CliError::Arguments)?,
+                            .ok_or_else(|| arguments("server URL must be nonempty UTF-8 text"))?,
                     );
                 }
             }
@@ -317,10 +323,16 @@ fn parse_report(
                 options.auth_file = Some(PathBuf::from(
                     args.next()
                         .filter(|arg| !arg.is_empty() && !arg.as_encoded_bytes().starts_with(b"-"))
-                        .ok_or(CliError::Arguments)?,
+                        .ok_or_else(|| arguments("--auth-file requires a path"))?,
                 ));
             }
-            _ => return Err(CliError::Arguments),
+            Some("--server" | "--auth-file") => {
+                return Err(arguments(format!(
+                    "{} can only be used once",
+                    flag.to_string_lossy()
+                )));
+            }
+            _ => return Err(unexpected(&flag)),
         }
     }
     if server {
@@ -330,7 +342,7 @@ fn parse_report(
             filters,
         })
     } else if options.auth_file.is_some() {
-        Err(CliError::Arguments)
+        Err(arguments("--auth-file requires --server for reports"))
     } else {
         Ok(Command::Report {
             period,
@@ -340,9 +352,22 @@ fn parse_report(
     }
 }
 
+fn arguments(message: impl Into<String>) -> CliError {
+    CliError::Arguments(message.into())
+}
+
+fn unexpected(arg: &std::ffi::OsStr) -> CliError {
+    let kind = if arg.as_encoded_bytes().starts_with(b"-") {
+        "unknown option"
+    } else {
+        "unexpected argument"
+    };
+    arguments(format!("{kind} '{}'", arg.to_string_lossy()))
+}
+
 #[derive(Debug)]
 enum CliError {
-    Arguments,
+    Arguments(String),
     Doctor,
     Config {
         path: PathBuf,
@@ -368,7 +393,12 @@ enum CliError {
 impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Arguments => write!(formatter, "invalid arguments\n{USAGE}"),
+            Self::Arguments(message) => {
+                write!(
+                    formatter,
+                    "{message}\nTry 'token-tracker --help' for usage."
+                )
+            }
             Self::Doctor => formatter.write_str("doctor found issues (see report above)"),
             Self::Config { path, source } => {
                 write!(
