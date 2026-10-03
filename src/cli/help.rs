@@ -1,20 +1,13 @@
-const REPORT_OPTIONS: &str = "Report options:
+const REPORT_OPTIONS: &str = "Options:
     --agent <id>        Filter: codex, claude, pi, hermes
     --provider <name>   Filter by stored provider name
     --model <name>      Filter by stored model name
-    --server [<url>]    Fetch combined server totals without reading local usage
+    --server [<url>]    Fetch combined server totals (requires an auth file)
     --auth-file <path>  Bearer-token file for server requests
 ";
 
-const FILTERS: &str = "Filters are exact and case-sensitive.
-Repeat a filter to match any value; different filters combine with AND.
-Filters apply only to reports.
-";
-
 const CONFIG: &str = "Config: ~/.config/token-tracker/config.toml
-An absolute XDG_CONFIG_HOME replaces ~/.config.
-Set the server URL and token-file path through arguments or config.
-Arguments override config. HTTPS is required except on loopback.
+Command-line values take precedence over config settings.
 ";
 
 pub(super) fn for_command(command: &str) -> Option<String> {
@@ -23,26 +16,24 @@ pub(super) fn for_command(command: &str) -> Option<String> {
             "Usage: token-tracker [command] [options]
 
 Commands:
-    (none)              All-time usage report
-    day | week | month  Current UTC period; weeks start Monday
-    summary             All-time token totals by type and total cost
-    doctor              Check config, storage, and sources without changing data
-    export <path>       Export all retained usage to SQLite
-    upload [<url>]      Upload all retained usage to a server
+    (none) [options]                     All-time usage report
+    day | week | month [options]         Current UTC period; weeks start Monday
+    summary [options]                    All-time tokens by type and total cost
+    doctor                               Check config, storage, and sources
+    upload [<url>] [--auth-file <path>]  Upload all retained usage to a server
+    export <path>                        Export all retained usage to SQLite
 
-Local reports, exports, and uploads refresh sources automatically.
-
-{REPORT_OPTIONS}
-{FILTERS}
-Other options:
-    --force            Replace an existing Token Tracker export (export only)
-    --                 Allow export paths starting with '-'
-    -h, --help          Show help; also works after a command
+{REPORT_OPTIONS}    -h, --help          Show help; also works after a command
 
 {CONFIG}
+Local reports, exports, and uploads refresh sources automatically.
+With --server, reports use combined usage data stored on the server.
+
 Examples:
+    token-tracker
     token-tracker week --agent codex
-    token-tracker summary --server
+    token-tracker --server https://tracker.example.com --auth-file auth.token
+    token-tracker upload https://tracker.example.com --auth-file auth.token
 "
         ),
         "day" | "week" | "month" | "summary" | "--server" | "--agent" | "--provider"
@@ -59,10 +50,10 @@ Examples:
 
 {description}
 Local reports refresh sources automatically.
+With --server, reports use combined usage data stored on the server.
 
 {REPORT_OPTIONS}    -h, --help          Show help
 
-{FILTERS}
 {CONFIG}"
             )
         }
