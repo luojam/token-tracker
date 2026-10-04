@@ -1,4 +1,10 @@
-use std::{fmt::Display, fmt::Write, fs, io, path::Path};
+use std::{
+    collections::BTreeSet,
+    fmt::Display,
+    fmt::Write,
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 use token_tracker::{
     AGENT_LABELS,
@@ -14,6 +20,7 @@ use super::{config::Config, reporting::escape_control_characters};
 pub(super) struct DoctorReport {
     pub output: String,
     pub has_issues: bool,
+    seen_issues: BTreeSet<(Option<PathBuf>, String)>,
 }
 
 pub(super) fn inspect() -> DoctorReport {
@@ -26,6 +33,7 @@ pub(super) fn inspect() -> DoctorReport {
     report.storage();
     report.output.push_str("\nSources (full scan):\n");
 
+    report.seen_issues.clear();
     report.line("Agent", "Hermes");
     match HermesSessionSource::for_default_roots() {
         Ok(source) => {
@@ -37,6 +45,7 @@ pub(super) fn inspect() -> DoctorReport {
         Err(error) => report.issue(None, error),
     }
     report.output.push('\n');
+    report.seen_issues.clear();
     report.line("Agent", "Pi");
     match pi::default_session_root() {
         Ok(root) => {
@@ -49,6 +58,7 @@ pub(super) fn inspect() -> DoctorReport {
         Err(error) => report.issue(None, error),
     }
     report.output.push('\n');
+    report.seen_issues.clear();
     report.line("Agent", "Codex");
     match codex::default_session_roots() {
         Ok(roots) => {
@@ -63,6 +73,7 @@ pub(super) fn inspect() -> DoctorReport {
         Err(error) => report.issue(None, error),
     }
     report.output.push('\n');
+    report.seen_issues.clear();
     report.line("Agent", "Claude Code");
     match claude::default_session_root() {
         Ok(root) => {
@@ -94,9 +105,16 @@ impl DoctorReport {
 
     fn issue(&mut self, path: Option<&Path>, error: impl Display) {
         self.has_issues = true;
+        let error = error.to_string();
+        if !self
+            .seen_issues
+            .insert((path.map(Path::to_path_buf), error.clone()))
+        {
+            return;
+        }
         let message = match path {
             Some(path) => format!("{}: {error}", path.display()),
-            None => error.to_string(),
+            None => error,
         };
         self.line("ISSUE", message);
     }
@@ -165,6 +183,7 @@ impl DoctorReport {
     }
 
     fn storage(&mut self) {
+        self.seen_issues.clear();
         let path = match default_database_path() {
             Ok(path) => path,
             Err(error) => {

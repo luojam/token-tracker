@@ -140,6 +140,66 @@ fn doctor_reports_retained_notices_without_changing_storage_or_export_revision()
 }
 
 #[test]
+fn doctor_collapses_identical_issues_per_section_without_hiding_distinct_sources() {
+    let tree = TempTree::new();
+    let paths = [".hermes/state.db", ".hermes/profiles/work/state.db"];
+    for (index, path) in paths.iter().enumerate() {
+        let path = tree.root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        hermes::database(&path)
+            .execute_batch(&format!(
+                "INSERT INTO sessions (id, started_at, input_tokens)
+                 VALUES ('second', 1700000003, 10);
+                 INSERT INTO session_model_usage
+                     (session_id, model, billing_provider, billing_mode, input_tokens)
+                 VALUES ('second', 'model-a', 'openai-codex', 'subscription', 10);
+                 UPDATE sessions SET id = '{index}-' || id;
+                 UPDATE session_model_usage SET session_id = '{index}-' || session_id;"
+            ))
+            .unwrap();
+    }
+    successful_report(command(&tree.root).output().unwrap());
+
+    let output = command(&tree.root).arg("doctor").output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report = String::from_utf8(output.stdout).unwrap();
+    let (stored, scanned) = report.split_once("Sources (full scan):").unwrap();
+    for section in [stored, scanned] {
+        for path in paths {
+            let prefix = format!("ISSUE: {}: ", tree.root.join(path).display());
+            for code in ["hermes_subscription_estimate", "hermes_counter_mismatch"] {
+                assert_eq!(
+                    section.matches(&format!("{prefix}{code}:")).count(),
+                    1,
+                    "{section}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn doctor_reports_setup_failures_for_every_agent() {
+    let tree = TempTree::new();
+    let output = command(&tree.root)
+        .current_dir(&tree.root)
+        .env("HOME", "relative-home")
+        .arg("doctor")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let report = String::from_utf8(output.stdout).unwrap();
+    for agent in ["Hermes", "Pi", "Codex", "Claude Code"] {
+        assert!(
+            report.contains(&format!(
+                "  Agent: {agent}\n  ISSUE: HOME is unavailable or is not an absolute path"
+            )),
+            "{report}"
+        );
+    }
+}
+
+#[test]
 fn doctor_rejects_foreign_machine_state_without_changing_it() {
     let tree = TempTree::new();
     let machine = tree.write(".local/share/token-tracker/machine-state.db", "");
