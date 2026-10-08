@@ -7,7 +7,7 @@ mod server;
 mod uploading;
 
 use std::fmt;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -63,9 +63,13 @@ fn execute() -> Result<(), CliError> {
         let summary = server::ServerClient::new(url, auth_file)
             .and_then(|client| client.summary(*period, filters))
             .map_err(CliError::ServerSummary)?;
+        let output = reporting::wrap_report(
+            reporting::render_server_summary(&summary, *period),
+            terminal_width(),
+        );
         return io::stdout()
             .lock()
-            .write_all(reporting::render_server_summary(&summary, *period).as_bytes())
+            .write_all(output.as_bytes())
             .map_err(CliError::Output);
     }
     let config = config::Config::load()?;
@@ -110,8 +114,9 @@ fn execute() -> Result<(), CliError> {
         .report_filtered(period, &filters)
         .map_err(CliError::Report)?;
 
+    let width = terminal_width();
     let output = if summary {
-        reporting::render_summary(&result.report)
+        reporting::wrap_report(reporting::render_summary(&result.report), width)
     } else {
         reporting::render_terminal_report(
             &result.report,
@@ -119,12 +124,22 @@ fn execute() -> Result<(), CliError> {
             &imported.warnings,
             &result.diagnostics,
             AGENT_LABELS,
+            width,
         )
     };
     io::stdout()
         .lock()
         .write_all(output.as_bytes())
         .map_err(CliError::Output)
+}
+
+fn terminal_width() -> Option<usize> {
+    if !io::stdout().is_terminal() {
+        return None;
+    }
+    terminal_size::terminal_size_of(io::stdout())
+        .map(|(terminal_size::Width(width), _)| usize::from(width))
+        .filter(|width| *width > 0)
 }
 
 enum Command {

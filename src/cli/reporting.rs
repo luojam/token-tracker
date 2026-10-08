@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 use std::fmt::Write;
 
+use textwrap::core::display_width;
+
 use token_tracker::application::{
     CostAmount, CostTotal, ImportWarning, ReportDiagnostic, UsageReport,
 };
@@ -46,6 +48,7 @@ pub(super) fn render_terminal_report(
     warnings: &[ImportWarning],
     diagnostics: &[ReportDiagnostic],
     agent_labels: &[(&str, &str)],
+    terminal_width: Option<usize>,
 ) -> String {
     let mut output = String::new();
     let totals = &report.totals;
@@ -129,13 +132,15 @@ pub(super) fn render_terminal_report(
             })
             .collect::<Vec<_>>();
 
-        let mut widths = headers.each_ref().map(|header| header.chars().count());
+        let mut widths = headers.each_ref().map(|header| display_width(header));
         for (_, cells) in &rows {
             for (width, cell) in widths.iter_mut().zip(cells) {
-                *width = (*width).max(cell.chars().count());
+                *width = (*width).max(display_width(cell));
             }
         }
 
+        let table_width = widths.iter().sum::<usize>() + 2 * headers.len();
+        let stacked = terminal_width.is_some_and(|width| width > 0 && table_width > width);
         let mut previous_agent = None;
         for (agent, cells) in &rows {
             if previous_agent != Some(agent) {
@@ -146,10 +151,20 @@ pub(super) fn render_terminal_report(
                 let label = escape_control_characters(label);
                 writeln!(output).unwrap();
                 writeln!(output, "{label} usage:").unwrap();
-                render_table_row(&mut output, &headers, &widths);
+                if !stacked {
+                    render_table_row(&mut output, &headers, &widths);
+                }
                 previous_agent = Some(agent);
             }
-            render_table_row(&mut output, cells, &widths);
+            if stacked {
+                writeln!(output).unwrap();
+                writeln!(output, "  {}", cells[0]).unwrap();
+                for (label, value) in headers.iter().zip(cells).skip(1) {
+                    writeln!(output, "    {label}: {value}").unwrap();
+                }
+            } else {
+                render_table_row(&mut output, cells, &widths);
+            }
         }
     }
 
@@ -216,7 +231,30 @@ pub(super) fn render_terminal_report(
         }
     }
 
-    output
+    wrap_report(output, terminal_width)
+}
+
+pub(super) fn wrap_report(output: String, width: Option<usize>) -> String {
+    let Some(width) = width.filter(|width| *width > 0) else {
+        return output;
+    };
+    let mut wrapped = String::new();
+    for line in output.lines() {
+        if display_width(line) <= width {
+            writeln!(wrapped, "{line}").unwrap();
+            continue;
+        }
+        let content = line.trim_start_matches(' ');
+        let indent = &line[..(line.len() - content.len()).min(width.saturating_sub(2))];
+        let options = textwrap::Options::new(width)
+            .initial_indent(indent)
+            .subsequent_indent(indent)
+            .word_splitter(textwrap::WordSplitter::NoHyphenation);
+        for part in textwrap::wrap(content, options) {
+            writeln!(wrapped, "{part}").unwrap();
+        }
+    }
+    wrapped
 }
 
 fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) {
@@ -327,10 +365,11 @@ fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) 
 
 fn render_table_row(output: &mut String, cells: &[String; 8], widths: &[usize; 8]) {
     for (index, (cell, width)) in cells.iter().zip(widths).enumerate() {
+        let padding = width - display_width(cell);
         if index == 0 {
-            write!(output, "  {cell:<width$}").unwrap();
+            write!(output, "  {cell}{:padding$}", "").unwrap();
         } else {
-            write!(output, "  {cell:>width$}").unwrap();
+            write!(output, "  {:padding$}{cell}", "").unwrap();
         }
     }
     writeln!(output).unwrap();
@@ -402,4 +441,97 @@ fn format_integer(value: impl Into<u128>) -> String {
         formatted.push(character);
     }
     formatted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use token_tracker::application::{ReportRow, ReportTotals};
+
+    #[test]
+    fn report_switches_at_table_width_and_keeps_every_field() {
+        let tokens = TokenCounts {
+            input: 12_345,
+            output: 1_234,
+            cache_read: 8_000,
+            cache_write: 0,
+        };
+        let cost = CostTotal::Available {
+            amount: CostAmount::Usd(0.12),
+            partial: true,
+        };
+        let report = UsageReport {
+            totals: ReportTotals {
+                tokens,
+                cost,
+                estimates: EstimateTotals::default(),
+                session_count: 1,
+                unique_usage_event_count: 42,
+            },
+            rows: vec![ReportRow {
+                agent: "pi".into(),
+                group: SummaryGroup::ProviderModel(ModelAttribution {
+                    provider: "提供者".into(),
+                    model: "模型模型模型模型模型e\u{301}".into(),
+                }),
+                tokens,
+                cost,
+                estimates: EstimateTotals::default(),
+                unique_usage_event_count: 42,
+            }],
+        };
+        let render = |width| {
+            render_terminal_report(
+                &report,
+                ReportingPeriod::AllTime,
+                &[],
+                &[],
+                &[("pi", "Pi")],
+                width,
+            )
+        };
+        let wide = render(None);
+        let table = wide
+            .lines()
+            .filter(|line| line.starts_with("  "))
+            .collect::<Vec<_>>();
+        let width = display_width(table[0]);
+        assert_eq!(display_width(table[1]), width);
+        assert_eq!(render(Some(width)), wide);
+
+        let stacked = render(Some(width - 1));
+        assert!(
+            stacked.contains(concat!(
+                "Pi usage:\n\n",
+                "  提供者 / 模型模型模型模型模型e\u{301}\n",
+                "    Input: 12,345\n",
+                "    Output: 1,234\n",
+                "    Cache read: 8,000\n",
+                "    Cache write: 0\n",
+                "    Total: 21,579\n",
+                "    Events: 42\n",
+                "    Cost: $0.120000 (partial)\n",
+            )),
+            "{stacked}"
+        );
+        let narrow = render(Some(24));
+        assert!(narrow.lines().all(|line| display_width(line) <= 24));
+        assert!(narrow.contains("$0.120000"));
+        assert!(narrow.contains("(partial)"));
+    }
+
+    #[test]
+    fn wrapping_preserves_long_names_paths_and_blank_lines() {
+        let output = "Warnings (1):\n\n- /very/long/path/without/spaces: missing usage\n    模型模型模型e\u{301}: unavailable\n";
+        let wrapped = wrap_report(output.into(), Some(18));
+        assert!(wrapped.lines().all(|line| display_width(line) <= 18));
+        assert!(wrapped.starts_with("Warnings (1):\n\n"));
+        assert!(wrapped.contains("    模型模型模型e\u{301}:\n"));
+        let compact = |text: &str| {
+            text.chars()
+                .filter(|c| !c.is_whitespace())
+                .collect::<String>()
+        };
+        assert_eq!(compact(&wrapped), compact(output));
+    }
 }
