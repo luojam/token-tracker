@@ -163,8 +163,13 @@ impl TurnLifecycle {
     }
 
     pub(super) fn accounting_turn(&self) -> Option<&AccountingTurn> {
+        self.active_accounting_turn()
+            .filter(|turn| turn.has_context)
+    }
+
+    pub(super) fn active_accounting_turn(&self) -> Option<&AccountingTurn> {
         match &self.active {
-            Some(ActiveTurn::Accounting(turn)) if turn.has_context => Some(turn),
+            Some(ActiveTurn::Accounting(turn)) => Some(turn),
             _ => None,
         }
     }

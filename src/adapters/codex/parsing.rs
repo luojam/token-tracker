@@ -315,7 +315,12 @@ impl SessionState {
             }
             "compacted" => {
                 validate_timestamp(text, line)?;
-                if self.mirrors.is_none() && !self.referenced_history {
+                if let Some(mirrors) = &mut self.mirrors {
+                    let compaction: CompactionWire = payload(text, line, "compacted.payload")?;
+                    if let Some(id) = compaction.compaction_response_id {
+                        mirrors.accept_compaction(&id, line)?;
+                    }
+                } else if !self.referenced_history {
                     self.legacy.accept_compaction();
                 }
             }
@@ -419,7 +424,7 @@ impl SessionState {
         } else {
             if self
                 .turns
-                .accounting_turn()
+                .active_accounting_turn()
                 .is_none_or(|turn| turn.id != response.turn_id)
             {
                 return Err(CodexParseError::InvalidField {
@@ -749,6 +754,11 @@ struct ResponseUsageWire {
     usage: ObjectWire<TokenUsageWire>,
     turn_token_usage: ObjectWire<TokenUsageWire>,
     thread_token_usage: ObjectWire<TokenUsageWire>,
+}
+
+#[derive(Deserialize)]
+struct CompactionWire {
+    compaction_response_id: Option<String>,
 }
 
 #[derive(Deserialize)]

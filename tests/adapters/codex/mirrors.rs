@@ -176,6 +176,57 @@ fn repeated_snapshots_compaction_and_zero_mirrors_do_not_add_events() {
 }
 
 #[test]
+fn compaction_usage_is_counted_without_a_mirror_or_prior_model_context() {
+    let original = records(RESPONSE);
+    for before_context in [false, true] {
+        let mut source = original[..8].to_vec();
+        if !before_context {
+            source.push(original[8].clone());
+        }
+        source.push(original[9].clone());
+        let compaction_index = source.len();
+        source.push(
+            json!({"timestamp":"2026-01-01T00:00:06Z","type":"compacted",
+            "payload":{"compaction_response_id":"response-b"}}),
+        );
+        source.push(original[8].clone());
+
+        let mut recomputed = original[4].clone();
+        multiply(&mut recomputed["payload"]["info"]["last_token_usage"], 0);
+        recomputed["payload"]["info"]["last_token_usage"]["total_tokens"] = json!(50);
+        source.push(recomputed);
+
+        let mut next = original[9].clone();
+        next["payload"]["response_id"] = json!("response-c");
+        multiply(&mut next["payload"]["turn_token_usage"], 2);
+        for (counter, value) in original[9]["payload"]["usage"].as_object().unwrap() {
+            let total = &mut next["payload"]["thread_token_usage"][counter];
+            *total = json!(total.as_u64().unwrap() + value.as_u64().unwrap());
+        }
+        source.push(next);
+        source.extend_from_slice(&original[10..]);
+
+        let parsed = parse(&source).unwrap();
+        assert_eq!(parsed.events.len(), 3);
+        assert_eq!(
+            parsed.events.iter().map(|e| e.tokens.total()).sum::<u128>(),
+            390
+        );
+        assert_eq!(parsed.events[1].attribution.is_none(), before_context);
+        assert_eq!(parsed.events[2].attribution, parsed.events[0].attribution);
+
+        source[compaction_index]["payload"]["compaction_response_id"] = json!("response-a");
+        assert!(matches!(
+            parse(&source),
+            Err(CodexParseError::InvalidField {
+                field: "compacted.payload.compaction_response_id",
+                ..
+            })
+        ));
+    }
+}
+
+#[test]
 fn adding_response_usage_to_a_legacy_offset_is_checked_for_overflow() {
     let mut source = records(UPGRADE);
     let largest = json!({"input_tokens":u64::MAX,"cached_input_tokens":0,"output_tokens":0,"reasoning_output_tokens":0,"total_tokens":u64::MAX});

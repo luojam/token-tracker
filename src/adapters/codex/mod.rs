@@ -8,4 +8,4 @@ pub use parsing::{CodexParseError, CodexSessionParser};
 
 pub(crate) const CODEX_AGENT_ID: &str = "codex";
 
-const NORMALIZATION_VERSION: NonZeroU32 = NonZeroU32::new(2).unwrap();
+const NORMALIZATION_VERSION: NonZeroU32 = NonZeroU32::new(3).unwrap();

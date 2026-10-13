@@ -35,6 +35,29 @@ fn referenced_history_counts_local_requests_with_child_pricing() {
 }
 
 #[test]
+fn first_referenced_request_can_be_compaction_without_a_usage_mirror() {
+    let mut source = records(FORK);
+    let expected = parse(&source).unwrap().events;
+    for index in [6, 12] {
+        for (counter, usage) in source[5]["payload"]["usage"].as_object().unwrap().clone() {
+            let total = &mut source[index]["payload"]["info"]["total_token_usage"][&counter];
+            *total = json!(total.as_u64().unwrap() - usage.as_u64().unwrap());
+        }
+    }
+    source[6]["payload"]["info"]["last_token_usage"] = json!({
+        "input_tokens":0,"cached_input_tokens":0,"output_tokens":0,
+        "reasoning_output_tokens":0,"total_tokens":50,"cache_write_input_tokens":0
+    });
+    source.insert(
+        6,
+        json!({"timestamp":"2026-01-01T00:00:06Z","type":"compacted",
+        "payload":{"compaction_response_id":"response-a"}}),
+    );
+
+    assert_eq!(parse(&source).unwrap().events, expected);
+}
+
+#[test]
 fn interrupted_reference_closes_only_the_initial_inherited_turn() {
     let source = records(FORK);
     let abort = json!({"timestamp":"2026-01-01T00:00:00Z","type":"event_msg",

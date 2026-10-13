@@ -36,6 +36,24 @@ impl MirrorState {
         Ok(())
     }
 
+    pub(super) fn accept_compaction(
+        &mut self,
+        response_id: &str,
+        line: usize,
+    ) -> Result<(), CodexParseError> {
+        if let Some(pending) = &self.pending {
+            if pending.id != response_id {
+                return Err(CodexParseError::InvalidField {
+                    line,
+                    field: "compacted.payload.compaction_response_id",
+                });
+            }
+            // Compaction requests count toward response totals but not token_count totals.
+            self.pending = None;
+        }
+        Ok(())
+    }
+
     pub(super) fn accept_response(
         &mut self,
         response: &ResponseUsageWire,
@@ -143,7 +161,11 @@ impl MirrorState {
         let confirmed = match self.confirmed {
             Some(confirmed) => confirmed,
             None => {
-                let pending = self.pending.as_ref().ok_or_else(invalid)?;
+                let Some(pending) = self.pending.as_ref() else {
+                    // The first referenced-history request may have been a compaction.
+                    self.confirmed = Some(total);
+                    return Ok(());
+                };
                 let inherited = total.checked_sub(&pending.usage).ok_or_else(invalid)?;
                 inherited.normalize(line, TOTAL)?;
                 inherited

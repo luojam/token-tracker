@@ -1,8 +1,8 @@
 use crate::support::TempTree;
+use std::cell::Cell;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, Write};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use token_tracker::adapters::files::{FileSessionSource, ParseContext, SessionParser};
 
 use token_tracker::adapters::pi::{PiParseError, PiSessionDiscovery, PiSessionParser};
@@ -273,7 +273,7 @@ fn notices_persist_until_a_successful_replacement() {
 }
 
 struct MutatingParser {
-    remaining_changes: AtomicUsize,
+    remaining_changes: Cell<usize>,
 }
 
 impl SessionParser for MutatingParser {
@@ -286,11 +286,8 @@ impl SessionParser for MutatingParser {
     ) -> Result<SessionData, Self::Error> {
         let path = context.source_path.to_owned();
         let parsed = PiSessionParser::new().parse(input, context);
-        if self
-            .remaining_changes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
-            .is_ok()
-        {
+        if let Some(remaining) = self.remaining_changes.get().checked_sub(1) {
+            self.remaining_changes.set(remaining);
             OpenOptions::new()
                 .append(true)
                 .open(&path)
@@ -308,7 +305,7 @@ fn files_changed_during_parsing_are_retried() {
     let path = tree.root.join("changing.jsonl");
     fs::write(&path, session("changing-session", &[("initial-event", 10)])).unwrap();
     let parser = MutatingParser {
-        remaining_changes: AtomicUsize::new(1),
+        remaining_changes: Cell::new(1),
     };
     let mut store = SqliteUsageStore::open_in_memory().unwrap();
 
@@ -347,7 +344,7 @@ fn continuously_changing_files_are_deferred() {
         &FileSessionSource::new(
             &PiSessionDiscovery::new(&tree.root),
             &MutatingParser {
-                remaining_changes: AtomicUsize::new(usize::MAX),
+                remaining_changes: Cell::new(usize::MAX),
             },
         ),
         &mut store,
