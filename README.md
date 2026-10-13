@@ -1,4 +1,4 @@
-# 🦀 Token Tracker
+# Token Tracker
 
 Track token usage and API-equivalent costs across Pi, Codex, Claude Code, and
 Hermes from one Rust CLI.
@@ -6,6 +6,31 @@ Hermes from one Rust CLI.
 - Filter reports by agent, provider, model, or time period.
 - Persistent local usage history.
 - Optional server for totals across machines.
+
+## Example output
+
+```text
+Token Tracker — This Week (UTC)
+
+Total tokens: 2,010,000
+Input tokens: 250,000
+Output tokens: 60,000
+Cache-read tokens: 1,600,000
+Cache-write tokens: 100,000
+Total cost: $2.560000
+Sessions: 12
+Unique usage events: 100
+
+Usage by provider/model:
+
+Claude Code usage:
+  Provider / model               Input  Output  Cache read  Cache write      Total  Events       Cost
+  anthropic / claude-opus-5-5  150,000  40,000   1,000,000      100,000  1,290,000      60  $2.100000
+
+Codex usage:
+  Provider / model               Input  Output  Cache read  Cache write      Total  Events       Cost
+  openai / gpt-6.1-sol         100,000  20,000     600,000            0    720,000      40  $0.460000
+```
 
 ## Quick start
 
