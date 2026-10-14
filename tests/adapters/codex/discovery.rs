@@ -15,15 +15,21 @@ fn discovers_only_rollouts_in_nested_active_and_archive_roots_once_in_path_order
     fs::create_dir_all(&nested).unwrap();
     fs::create_dir_all(&archive).unwrap();
     let first = archive.join("rollout-archived.jsonl");
+    let compressed = archive.join("rollout-compressed.jsonl.zst");
     let second = nested.join("rollout-active.jsonl");
     fs::write(&second, b"not JSON; discovery reads only metadata").unwrap();
     fs::write(&first, b"archived").unwrap();
+    fs::write(&compressed, b"compressed").unwrap();
+    fs::write(first.with_extension("jsonl.zst"), b"stale sibling").unwrap();
     fs::set_permissions(&second, fs::Permissions::from_mode(0o000)).unwrap();
     for ignored in [
         "history.jsonl",
         "session.jsonl",
         "rollout-backup.jsonl.bak",
         "rollout-other.txt",
+        "rollout-backup.jsonl.zst.bak",
+        "rollout-other.zst",
+        "history.jsonl.zst",
     ] {
         fs::write(nested.join(ignored), b"ignored").unwrap();
     }
@@ -44,7 +50,7 @@ fn discovers_only_rollouts_in_nested_active_and_archive_roots_once_in_path_order
             .iter()
             .map(|file| file.path.clone())
             .collect::<Vec<_>>(),
-        vec![first, second]
+        vec![first, compressed, second]
     );
     for file in &report.files {
         let metadata = fs::metadata(&file.path).unwrap();

@@ -12,7 +12,7 @@ use chrono::DateTime;
 use serde::de::{DeserializeOwned, MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer};
 use std::collections::BTreeMap;
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, BufReader};
 use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::{error::Error, fmt};
@@ -46,8 +46,21 @@ impl SessionParser for CodexSessionParser {
     fn parse(
         &self,
         input: &mut dyn BufRead,
-        _context: ParseContext<'_>,
+        context: ParseContext<'_>,
     ) -> Result<SessionData, Self::Error> {
+        let mut decoded;
+        let input = if super::discovery::is_compressed(context.source_path) {
+            let decoder = zstd::stream::read::Decoder::with_buffer(input).map_err(|error| {
+                CodexParseError::Io {
+                    line: 1,
+                    kind: error.kind(),
+                }
+            })?;
+            decoded = BufReader::new(decoder);
+            &mut decoded as &mut dyn BufRead
+        } else {
+            input
+        };
         let mut lines = JsonlReader::new(input);
         let mut session: Option<SessionState> = None;
         let mut completion = SnapshotCompletion::Complete;

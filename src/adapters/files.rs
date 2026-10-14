@@ -58,6 +58,15 @@ pub trait SessionFileDiscovery {
     fn agent_id(&self) -> AgentId;
 
     fn discover(&self) -> Result<FileDiscoveryReport, Self::Error>;
+
+    fn source_key(&self, path: &Path) -> SourceKey {
+        file_source_key(path)
+    }
+
+    /// Resolve the physical file again when a source can change representation.
+    fn resolve_path(&self, path: &Path) -> io::Result<PathBuf> {
+        Ok(path.to_owned())
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -113,7 +122,7 @@ impl<D: SessionFileDiscovery, P: SessionParser> SessionSource for FileSessionSou
             .files
             .into_iter()
             .map(|file| DiscoveredSource {
-                key: file_source_key(&file.path),
+                key: self.discovery.source_key(&file.path),
                 path: Some(file.path),
                 revision: file.revision.into(),
             })
@@ -128,6 +137,11 @@ impl<D: SessionFileDiscovery, P: SessionParser> SessionSource for FileSessionSou
                         .path
                         .as_deref()
                         .is_some_and(|path| report.coverage.covers(path))
+                    && !report
+                        .coverage
+                        .inaccessible_paths
+                        .iter()
+                        .any(|path| self.discovery.source_key(path) == state.key)
             })
             .map(|state| state.key.clone())
             .collect();
@@ -143,7 +157,7 @@ impl<D: SessionFileDiscovery, P: SessionParser> SessionSource for FileSessionSou
             .path
             .as_deref()
             .ok_or_else(|| FileSourceError::Io(io::Error::other("file source has no path")))?;
-        load_stable_session(path, &self.parser)
+        load_stable_session(path, &self.parser, &self.discovery)
     }
 }
 
@@ -175,6 +189,14 @@ impl<D: SessionFileDiscovery + ?Sized> SessionFileDiscovery for &D {
     fn discover(&self) -> Result<FileDiscoveryReport, Self::Error> {
         (**self).discover()
     }
+
+    fn source_key(&self, path: &Path) -> SourceKey {
+        (**self).source_key(path)
+    }
+
+    fn resolve_path(&self, path: &Path) -> io::Result<PathBuf> {
+        (**self).resolve_path(path)
+    }
 }
 
 impl<P: SessionParser + ?Sized> SessionParser for &P {
@@ -193,14 +215,19 @@ impl<P: SessionParser + ?Sized> SessionParser for &P {
     }
 }
 
-fn load_stable_session<P: SessionParser>(
+fn load_stable_session<P: SessionParser, D: SessionFileDiscovery>(
     path: &Path,
     parser: &P,
+    discovery: &D,
 ) -> Result<SessionSnapshot, FileSourceError> {
     let mut last_retry = FileSourceError::ChangedDuringRead;
 
     for _ in 0..STABLE_READ_ATTEMPTS {
-        match load_session_once(path, parser) {
+        match discovery
+            .resolve_path(path)
+            .map_err(FileSourceError::Io)
+            .and_then(|path| load_session_once(&path, parser))
+        {
             Err(error @ (FileSourceError::Io(_) | FileSourceError::ChangedDuringRead)) => {
                 last_retry = error;
             }

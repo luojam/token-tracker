@@ -93,6 +93,9 @@ file accessible only by its owner (`chmod 600`). See
 | Claude Code | `~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`. |
 | Hermes | `~/.hermes/state.db` and `~/.hermes/profiles/*/state.db`, or `$HERMES_HOME/state.db` when set. |
 
+Codex imports both `.jsonl` and compressed `.jsonl.zst` rollouts. If both exist,
+the plain file takes precedence.
+
 Usage is stored at `~/.local/share/token-tracker/usage.db`; an absolute
 `XDG_DATA_HOME` replaces `~/.local/share`. Only usage and session metadata are
 stored. Imported usage remains after source sessions or databases are deleted.

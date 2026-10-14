@@ -1,5 +1,6 @@
 use token_tracker::adapters::files::{ParseContext, SessionParser};
 mod cache;
+mod compression;
 mod context;
 mod discovery;
 mod legacy;

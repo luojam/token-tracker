@@ -1,10 +1,12 @@
 use super::CODEX_AGENT_ID;
 use crate::adapters::discovery::{self, RecursiveLayout};
-use crate::adapters::files::{FileDiscoveryReport, SessionFileDiscovery};
+use crate::adapters::files::{FileDiscoveryReport, SessionFileDiscovery, file_source_key};
+use crate::application::SourceKey;
 
 use crate::domain::AgentId;
+use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
-use std::{env, error::Error, ffi::OsStr, fmt, io};
+use std::{env, error::Error, ffi::OsStr, fmt, fs, io};
 
 pub fn default_session_roots() -> Result<Vec<PathBuf>, CodexDiscoveryError> {
     default_session_roots_from(
@@ -76,10 +78,32 @@ impl SessionFileDiscovery for CodexSessionDiscovery {
             }
         }
 
-        Ok(discovery::discover(
-            distinct_roots,
-            RecursiveLayout(is_rollout),
-        ))
+        let mut report = discovery::discover(distinct_roots, RecursiveLayout(is_rollout));
+        let plain_paths: HashSet<_> = report
+            .files
+            .iter()
+            .filter(|file| !is_compressed(&file.path))
+            .map(|file| file.path.clone())
+            .collect();
+        report.files.retain(|file| {
+            !is_compressed(&file.path) || !plain_paths.contains(&plain_path(&file.path))
+        });
+        Ok(report)
+    }
+
+    fn source_key(&self, path: &Path) -> SourceKey {
+        file_source_key(&plain_path(path))
+    }
+
+    fn resolve_path(&self, path: &Path) -> io::Result<PathBuf> {
+        let plain = plain_path(path);
+        match fs::metadata(&plain) {
+            Ok(_) => Ok(plain),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                Ok(plain.with_extension("jsonl.zst"))
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -93,10 +117,22 @@ fn absolute_root(root: &Path) -> Result<PathBuf, CodexDiscoveryError> {
 }
 
 fn is_rollout(path: &Path) -> bool {
-    path.extension() == Some(OsStr::new("jsonl"))
+    (path.extension() == Some(OsStr::new("jsonl")) || is_compressed(path))
         && path
             .file_name()
             .is_some_and(|name| name.as_encoded_bytes().starts_with(b"rollout-"))
+}
+
+pub(super) fn is_compressed(path: &Path) -> bool {
+    path.as_os_str().as_encoded_bytes().ends_with(b".jsonl.zst")
+}
+
+fn plain_path(path: &Path) -> PathBuf {
+    if is_compressed(path) {
+        path.with_extension("")
+    } else {
+        path.to_owned()
+    }
 }
 
 #[derive(Debug)]
