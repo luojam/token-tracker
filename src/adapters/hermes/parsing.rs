@@ -50,7 +50,7 @@ pub(super) fn normalize(
         }
 
         let tokens = tokens(row)?;
-        if task.is_empty() {
+        if matches!(task, "" | "voice_chat") {
             main_tokens =
                 main_tokens
                     .checked_add(tokens)
@@ -71,7 +71,7 @@ pub(super) fn normalize(
             identity,
             timestamp,
             kind: match task {
-                "" => UsageKind::Assistant,
+                "" | "voice_chat" => UsageKind::Assistant,
                 "compression" => UsageKind::Compaction,
                 _ => UsageKind::Other,
             },

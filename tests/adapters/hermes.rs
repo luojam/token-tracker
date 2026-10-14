@@ -173,6 +173,52 @@ fn snapshot_normalizes_disjoint_model_task_usage_and_revises_deterministically()
 }
 
 #[test]
+fn voice_turns_are_counted_once_alongside_main_and_auxiliary_usage() {
+    let tree = TempTree::new();
+    let (path, connection) = fixture(&tree);
+    connection
+        .execute_batch(
+            "UPDATE sessions SET input_tokens = input_tokens + 10,
+                output_tokens = output_tokens + 5, cache_read_tokens = cache_read_tokens + 100,
+                cache_write_tokens = cache_write_tokens + 3, api_call_count = api_call_count + 1
+             WHERE id = 'child';
+             INSERT INTO session_model_usage (session_id, model, task, input_tokens,
+                 output_tokens, cache_read_tokens, cache_write_tokens, api_call_count)
+             VALUES ('child', 'voice-model', 'voice_chat', 10, 5, 100, 3, 1);",
+        )
+        .unwrap();
+
+    let snapshot = read_snapshot(&path).unwrap();
+    let session = &snapshot.sessions[0].snapshot.as_ref().unwrap().session;
+    let total = session
+        .events
+        .iter()
+        .fold(TokenCounts::default(), |sum, event| {
+            sum.checked_add(event.tokens).unwrap()
+        });
+    assert_eq!(
+        total,
+        TokenCounts {
+            input: 182,
+            output: 65,
+            cache_read: 810,
+            cache_write: 35,
+        }
+    );
+    let voice = session
+        .events
+        .iter()
+        .find(|event| {
+            event
+                .attribution
+                .as_ref()
+                .is_some_and(|model| model.model == "voice-model")
+        })
+        .unwrap();
+    assert_eq!(voice.kind, UsageKind::Assistant);
+}
+
+#[test]
 fn unsupported_schema_and_invalid_accounting_cannot_become_empty_usage() {
     let tree = TempTree::new();
     let (path, connection) = fixture(&tree);

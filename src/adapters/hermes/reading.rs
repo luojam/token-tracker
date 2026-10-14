@@ -105,7 +105,7 @@ pub fn read_snapshot(path: &Path) -> Result<HermesDatabaseSnapshot, HermesReadEr
                     snapshot: parsing::normalize(&session, &usage).map(|data| SessionSnapshot {
                         // Sorted rows include only selected columns; absent optional columns remain distinguishable.
                         revision: SourceRevision(
-                            serde_json::to_vec(&("hermes-snapshot-v1", &session, &usage))
+                            serde_json::to_vec(&("hermes-snapshot-v2", &session, &usage))
                                 .expect("accounting fields are serializable"),
                         ),
                         session: data,
