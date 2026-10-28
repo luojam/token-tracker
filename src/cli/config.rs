@@ -8,14 +8,12 @@ use serde::Deserialize;
 
 use super::CliError;
 
-const TEMPLATE: &str = "machine_name = \"\"\nserver_url = \"\"\nauth_file = \"\"\n";
+const TEMPLATE: &str = "machine_name = \"\"\n";
 
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Config {
     pub machine_name: Option<String>,
-    pub server_url: Option<String>,
-    pub auth_file: Option<PathBuf>,
 }
 
 impl Config {
@@ -47,10 +45,6 @@ impl Config {
             source: io::Error::new(io::ErrorKind::InvalidData, source.message()),
         })?;
         config.machine_name = config.machine_name.filter(|value| !value.is_empty());
-        config.server_url = config.server_url.filter(|value| !value.is_empty());
-        config.auth_file = config
-            .auth_file
-            .filter(|value| !value.as_os_str().is_empty());
         Ok(config)
     }
 }

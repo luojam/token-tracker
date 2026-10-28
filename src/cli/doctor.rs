@@ -154,32 +154,6 @@ impl DoctorReport {
             "machine_name",
             config.machine_name.as_deref().unwrap_or("(unset)"),
         );
-        match config.server_url {
-            None => self.line("server_url", "(unset)"),
-            Some(value) => match super::server::parse_server_url(&value) {
-                Ok(url) => self.line("server_url", url),
-                Err(error) => {
-                    self.line("server_url", "(invalid; value omitted)");
-                    self.issue(None, error);
-                }
-            },
-        }
-
-        match config.auth_file {
-            None => self.line("auth_file", "(unset)"),
-            Some(path) => match std::path::absolute(&path) {
-                Ok(path) => {
-                    self.line("auth_file", path.display());
-                    match token_tracker::auth::read_token(&path) {
-                        Ok(_) => {
-                            self.line("Auth status", "readable; token format and permissions OK")
-                        }
-                        Err(error) => self.issue(None, error),
-                    }
-                }
-                Err(error) => self.issue(Some(&path), error),
-            },
-        }
     }
 
     fn storage(&mut self) {

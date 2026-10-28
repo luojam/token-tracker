@@ -5,8 +5,6 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 mod doctor;
-mod server;
-mod uploading;
 
 const ALL_USAGE: &str = include_str!("../fixtures/pi/all-usage.jsonl");
 const CODEX_USAGE: &str = include_str!("../fixtures/codex/response-mirrors.jsonl");
@@ -288,9 +286,7 @@ fn config_is_created_with_unset_options_and_preserves_user_settings() {
     assert_eq!(export().machine_name, None);
     let content = fs::read_to_string(&config_path).unwrap();
     let config: toml::Table = toml::from_str(&content).unwrap();
-    for option in ["machine_name", "server_url", "auth_file"] {
-        assert_eq!(config[option].as_str(), Some(""));
-    }
+    assert_eq!(config["machine_name"].as_str(), Some(""));
     assert_eq!(export().machine_name, None);
 
     let content = "# My settings\nmachine_name = 'laptop'\n";
@@ -304,7 +300,7 @@ fn config_sets_export_name_with_xdg_precedence_and_home_fallback() {
     let tree = TempTree::new();
     tree.write(
         ".config/token-tracker/config.toml",
-        "machine_name = 'laptop'\nserver_url = 'unused'\nauth_file = 'missing.token'\n",
+        "machine_name = 'laptop'\n",
     );
     tree.write(
         "config/token-tracker/config.toml",
@@ -352,7 +348,6 @@ fn invalid_config_fails_before_opening_storage_but_help_still_works() {
         (vec!["--help"], "Usage: token-tracker [command]"),
         (vec!["-h"], "Usage: token-tracker [command]"),
         (vec!["export", "--help"], "Usage: token-tracker export"),
-        (vec!["upload", "--help"], "Usage: token-tracker upload"),
         (vec!["week", "-h"], "Usage: token-tracker week"),
         (vec!["doctor", "--help"], "Usage: token-tracker doctor"),
         (
@@ -502,34 +497,8 @@ fn invalid_arguments_fail_before_opening_storage() {
             "--provider requires a value",
         ),
         (
-            vec!["summary", "--model", "--server"],
+            vec!["summary", "--model", "--agent"],
             "--model requires a value",
-        ),
-        (vec!["summary", "--server"], "missing server URL"),
-        (
-            vec!["summary", "--server", "https://example.com"],
-            "missing bearer-token file",
-        ),
-        (
-            vec!["summary", "--auth-file", "auth.token"],
-            "--auth-file requires --server",
-        ),
-        (vec!["upload"], "missing server URL"),
-        (vec!["upload", "--auth-file"], "--auth-file requires a path"),
-        (
-            vec!["summary", "--server", "--unknown"],
-            "unknown option '--unknown'",
-        ),
-        (
-            vec![
-                "summary",
-                "--server",
-                "https://example.com",
-                "--auth-file",
-                "auth.token",
-                "extra",
-            ],
-            "unexpected argument 'extra'",
         ),
         (vec!["export"], "export requires a path"),
         (
@@ -559,9 +528,9 @@ fn pi_directory_settings_follow_precedence_and_resolve_file_urls() {
         "custom agent/settings.json",
         r#"{"sessionDir":"sessions with spaces #"}"#,
     );
-    let agent_url = reqwest::Url::from_directory_path(tree.root.join("custom agent")).unwrap();
+    let agent_url = url::Url::from_directory_path(tree.root.join("custom agent")).unwrap();
     let session_url =
-        reqwest::Url::from_directory_path(tree.root.join("sessions with spaces #")).unwrap();
+        url::Url::from_directory_path(tree.root.join("sessions with spaces #")).unwrap();
     let run = |name: &str, session_override: &str| {
         successful_report(
             command(&tree.root)
@@ -714,10 +683,6 @@ fn calendar_reports_refresh_local_usage_and_filter_event_timestamps() {
             .iter()
             .map(|entry| format!("{entry}\n"))
             .collect::<String>(),
-    );
-    tree.write(
-        ".config/token-tracker/config.toml",
-        "server_url = 'invalid URL'\nauth_file = 'missing.token'\n",
     );
     for period in ["day", "week", "month"] {
         let report = successful_report(

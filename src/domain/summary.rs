@@ -3,48 +3,6 @@ use super::{
 };
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ExportSummary {
-    pub total_cost_usd: super::export::UsdAmount,
-    #[serde(
-        serialize_with = "serialize_summary_tokens",
-        deserialize_with = "deserialize_summary_tokens"
-    )]
-    pub tokens: TokenCounts,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct SummaryTokens {
-    total: u128,
-    #[serde(flatten)]
-    counts: TokenCounts,
-}
-
-fn serialize_summary_tokens<S: serde::Serializer>(
-    tokens: &TokenCounts,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serde::Serialize::serialize(
-        &SummaryTokens {
-            total: tokens.total(),
-            counts: *tokens,
-        },
-        serializer,
-    )
-}
-
-fn deserialize_summary_tokens<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<TokenCounts, D::Error> {
-    let tokens = <SummaryTokens as serde::Deserialize>::deserialize(deserializer)?;
-    if tokens.total != tokens.counts.total() {
-        return Err(serde::de::Error::custom(
-            "token total does not match counts",
-        ));
-    }
-    Ok(tokens.counts)
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SummaryTotals {
     pub tokens: TokenCounts,

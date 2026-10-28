@@ -7,30 +7,12 @@ use token_tracker::application::{
     CostAmount, CostTotal, ImportWarning, ReportDiagnostic, UsageReport,
 };
 use token_tracker::domain::{
-    EstimateTotals, EstimateUnavailableReason, ExportSummary, ModelAttribution, ReportingPeriod,
-    ServiceTier, SummaryGroup, TokenCounts, UsageKind,
+    EstimateTotals, EstimateUnavailableReason, ModelAttribution, ReportingPeriod, ServiceTier,
+    SummaryGroup, UsageKind,
 };
 
 pub(super) fn render_summary(report: &UsageReport) -> String {
-    render_totals(
-        &report.totals.tokens,
-        &cost_label(report.totals.cost).unwrap_or_else(|| "unavailable".into()),
-    )
-}
-
-pub(super) fn render_server_summary(summary: &ExportSummary, period: ReportingPeriod) -> String {
-    let totals = render_totals(
-        &summary.tokens,
-        &format!("${}", summary.total_cost_usd.as_str()),
-    );
-    if period == ReportingPeriod::AllTime {
-        totals
-    } else {
-        format!("Token Tracker — {}\n\n{totals}", period.label())
-    }
-}
-
-fn render_totals(tokens: &TokenCounts, cost: &str) -> String {
+    let tokens = &report.totals.tokens;
     format!(
         "Total tokens: {}\nInput tokens: {}\nOutput tokens: {}\nCache-read tokens: {}\nCache-write tokens: {}\nTotal cost: {}\n",
         format_integer(tokens.total()),
@@ -38,7 +20,7 @@ fn render_totals(tokens: &TokenCounts, cost: &str) -> String {
         format_integer(tokens.output),
         format_integer(tokens.cache_read),
         format_integer(tokens.cache_write),
-        cost,
+        cost_label(report.totals.cost).unwrap_or_else(|| "unavailable".into()),
     )
 }
 
@@ -447,6 +429,7 @@ fn format_integer(value: impl Into<u128>) -> String {
 mod tests {
     use super::*;
     use token_tracker::application::{ReportRow, ReportTotals};
+    use token_tracker::domain::TokenCounts;
 
     #[test]
     fn report_switches_at_table_width_and_keeps_every_field() {

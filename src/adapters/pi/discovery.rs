@@ -60,7 +60,7 @@ fn default_session_root_from(
             .to_str()
             .filter(|path| path.starts_with("file://"))
         {
-            return reqwest::Url::parse(url)
+            return url::Url::parse(url)
                 .ok()
                 .and_then(|url| url.to_file_path().ok())
                 .ok_or_else(|| PiDiscoveryError::SessionRootResolution {

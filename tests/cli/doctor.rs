@@ -1,6 +1,6 @@
 use super::{ALL_USAGE, CLAUDE_SESSION_ID, CODEX_USAGE, command, successful_report};
 use crate::support::{TempTree, hermes};
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::fs;
 
 #[test]
 fn doctor_resolves_overrides_and_checks_all_sources_without_creating_local_data() {
@@ -11,11 +11,9 @@ fn doctor_resolves_overrides_and_checks_all_sources_without_creating_local_data(
     hermes::database(&tree.root.join(".hermes/profiles/work/state.db"))
         .execute_batch("DELETE FROM session_model_usage; UPDATE sessions SET input_tokens = 0, output_tokens = 0, cache_read_tokens = 0, cache_write_tokens = 0, reasoning_tokens = 0, api_call_count = 0;")
         .unwrap();
-    let token = tree.write("auth.token", "SECRET_abcdefghijklmnopqrstuvwxyz0123456789");
-    fs::set_permissions(&token, fs::Permissions::from_mode(0o600)).unwrap();
     let config = tree.write(
         "config/token-tracker/config.toml",
-        "machine_name = 'work'\nserver_url = 'https://example.com'\nauth_file = 'auth.token'\n",
+        "machine_name = 'work'\n",
     );
     let before = fs::read(&config).unwrap();
 
@@ -42,7 +40,6 @@ fn doctor_resolves_overrides_and_checks_all_sources_without_creating_local_data(
         "codex/archived_sessions",
         ".claude/projects",
         ".hermes/profiles",
-        "auth.token",
     ] {
         assert!(
             report.contains(tree.root.join(path).to_str().unwrap()),
@@ -214,28 +211,4 @@ fn doctor_rejects_foreign_machine_state_without_changing_it() {
     assert_eq!(output.status.code(), Some(1), "{report}");
     assert!(report.contains("invalid machine state schema"), "{report}");
     assert_eq!(fs::read(machine).unwrap(), before);
-}
-
-#[test]
-fn doctor_checks_server_settings_without_exposing_credentials() {
-    let tree = TempTree::new();
-    tree.write(
-        ".config/token-tracker/config.toml",
-        "server_url = 'https://user:SECRET_PASSWORD@example.com?token=SECRET_QUERY'\nauth_file = 'auth.token'\n",
-    );
-    let token = tree.write("auth.token", "SECRET_abcdefghijklmnopqrstuvwxyz0123456789");
-    fs::set_permissions(token, fs::Permissions::from_mode(0o644)).unwrap();
-    let output = command(&tree.root)
-        .current_dir(&tree.root)
-        .arg("doctor")
-        .output()
-        .unwrap();
-    assert_eq!(output.status.code(), Some(1));
-    let report = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        report.contains("server_url: (invalid; value omitted)"),
-        "{report}"
-    );
-    assert!(report.contains("chmod 600"), "{report}");
-    assert!(!report.contains("SECRET_"), "{report}");
 }

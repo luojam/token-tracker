@@ -3,12 +3,10 @@ mod doctor;
 mod exporting;
 mod help;
 mod reporting;
-mod server;
-mod uploading;
 
 use std::fmt;
 use std::io::{self, IsTerminal, Write};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use token_tracker::domain::{ReportFilters, ReportingPeriod};
@@ -48,54 +46,13 @@ fn execute() -> Result<(), CliError> {
             Ok(())
         };
     }
-    if let Command::ServerReport {
-        options,
-        period,
-        filters,
-    } = &command
-    {
-        let config = if options.url.is_some() && options.auth_file.is_some() {
-            config::Config::default()
-        } else {
-            config::Config::load()?
-        };
-        let (url, auth_file) = options.resolve(&config)?;
-        let summary = server::ServerClient::new(url, auth_file)
-            .and_then(|client| client.summary(*period, filters))
-            .map_err(CliError::ServerSummary)?;
-        let output = reporting::wrap_report(
-            reporting::render_server_summary(&summary, *period),
-            terminal_width(),
-        );
-        return io::stdout()
-            .lock()
-            .write_all(output.as_bytes())
-            .map_err(CliError::Output);
-    }
     let config = config::Config::load()?;
-    let uploader = if let Command::Upload(options) = &command {
-        let (url, auth_file) = options.resolve(&config)?;
-        Some(uploading::Uploader::new(url, auth_file).map_err(CliError::Upload)?)
-    } else {
-        None
-    };
     let mut tracker = TokenTracker::open(TokenTrackerConfig {
         machine_name: config.machine_name,
         ..Default::default()
     })
     .map_err(CliError::Open)?;
     let imported = tracker.refresh().map_err(CliError::Import)?;
-
-    if let Some(uploader) = uploader {
-        let snapshot = tracker.export_snapshot().map_err(CliError::Export)?;
-        let status = uploader.upload(&snapshot).map_err(CliError::Upload)?;
-        return writeln!(
-            io::stdout().lock(),
-            "Snapshot revision {} {status}.",
-            snapshot.export_revision
-        )
-        .map_err(CliError::Output);
-    }
 
     if let Command::Export { path, force } = command {
         let snapshot = tracker.export_snapshot().map_err(CliError::Export)?;
@@ -149,46 +106,11 @@ enum Command {
         summary: bool,
     },
     Doctor,
-    ServerReport {
-        options: ServerOptions,
-        period: ReportingPeriod,
-        filters: ReportFilters,
-    },
     Export {
         path: PathBuf,
         force: bool,
     },
-    Upload(ServerOptions),
     Help(String),
-}
-
-struct ServerOptions {
-    url: Option<String>,
-    auth_file: Option<PathBuf>,
-}
-
-impl ServerOptions {
-    fn resolve<'a>(&'a self, config: &'a config::Config) -> Result<(&'a str, &'a Path), CliError> {
-        let url = self
-            .url
-            .as_deref()
-            .or(config.server_url.as_deref())
-            .filter(|url| !url.is_empty())
-            .ok_or_else(|| {
-                arguments("missing server URL; supply a URL or set server_url in config")
-            })?;
-        let auth_file = self
-            .auth_file
-            .as_deref()
-            .or(config.auth_file.as_deref())
-            .filter(|path| !path.as_os_str().is_empty())
-            .ok_or_else(|| {
-                arguments(
-                    "missing bearer-token file; use --auth-file <path> or set auth_file in config",
-                )
-            })?;
-        Ok((url, auth_file))
-    }
 }
 
 fn parse_command() -> Result<Command, CliError> {
@@ -197,7 +119,7 @@ fn parse_command() -> Result<Command, CliError> {
         .iter()
         .take_while(|arg| *arg != "--")
         .any(|arg| arg == "--help" || arg == "-h");
-    let mut args = args.into_iter().peekable();
+    let mut args = args.into_iter();
     let Some(command) = args.next() else {
         return parse_report(ReportingPeriod::AllTime, false, args);
     };
@@ -216,9 +138,7 @@ fn parse_command() -> Result<Command, CliError> {
         Some("day") => Some(ReportingPeriod::Day),
         Some("week") => Some(ReportingPeriod::Week),
         Some("month") => Some(ReportingPeriod::Month),
-        Some("summary" | "--server" | "--agent" | "--provider" | "--model") => {
-            Some(ReportingPeriod::AllTime)
-        }
+        Some("summary" | "--agent" | "--provider" | "--model") => Some(ReportingPeriod::AllTime),
         _ => None,
     };
     if let Some(period) = period {
@@ -228,35 +148,6 @@ fn parse_command() -> Result<Command, CliError> {
             .starts_with(b"-")
             .then_some(command);
         return parse_report(period, summary, first_flag.into_iter().chain(args));
-    }
-    if command == "upload" {
-        let url = if args
-            .peek()
-            .is_some_and(|arg| !arg.as_encoded_bytes().starts_with(b"-"))
-        {
-            Some(
-                args.next()
-                    .and_then(|arg| arg.into_string().ok())
-                    .filter(|arg| !arg.is_empty())
-                    .ok_or_else(|| arguments("server URL must be nonempty UTF-8 text"))?,
-            )
-        } else {
-            None
-        };
-        let auth_file = match args.next() {
-            Some(flag) if flag == "--auth-file" => Some(PathBuf::from(
-                args.next()
-                    .filter(|arg| !arg.is_empty() && !arg.as_encoded_bytes().starts_with(b"-"))
-                    .ok_or_else(|| arguments("--auth-file requires a path"))?,
-            )),
-            Some(arg) => return Err(unexpected(&arg)),
-            None => None,
-        };
-        if let Some(arg) = args.next() {
-            return Err(unexpected(&arg));
-        }
-        let options = ServerOptions { url, auth_file };
-        return Ok(Command::Upload(options));
     }
     if command != "export" {
         return Err(if command.as_encoded_bytes().starts_with(b"-") {
@@ -297,13 +188,8 @@ fn parse_report(
     summary: bool,
     args: impl IntoIterator<Item = std::ffi::OsString>,
 ) -> Result<Command, CliError> {
-    let mut args = args.into_iter().peekable();
+    let mut args = args.into_iter();
     let mut filters = ReportFilters::default();
-    let mut server = false;
-    let mut options = ServerOptions {
-        url: None,
-        auth_file: None,
-    };
     while let Some(flag) = args.next() {
         match flag.to_str() {
             Some("--agent" | "--provider" | "--model") => {
@@ -320,51 +206,14 @@ fn parse_report(
                     _ => filters.models.push(value),
                 }
             }
-            Some("--server") if !server => {
-                server = true;
-                if args
-                    .peek()
-                    .is_some_and(|arg| !arg.as_encoded_bytes().starts_with(b"-"))
-                {
-                    options.url = Some(
-                        args.next()
-                            .and_then(|arg| arg.into_string().ok())
-                            .filter(|value| !value.is_empty())
-                            .ok_or_else(|| arguments("server URL must be nonempty UTF-8 text"))?,
-                    );
-                }
-            }
-            Some("--auth-file") if options.auth_file.is_none() => {
-                options.auth_file = Some(PathBuf::from(
-                    args.next()
-                        .filter(|arg| !arg.is_empty() && !arg.as_encoded_bytes().starts_with(b"-"))
-                        .ok_or_else(|| arguments("--auth-file requires a path"))?,
-                ));
-            }
-            Some("--server" | "--auth-file") => {
-                return Err(arguments(format!(
-                    "{} can only be used once",
-                    flag.to_string_lossy()
-                )));
-            }
             _ => return Err(unexpected(&flag)),
         }
     }
-    if server {
-        Ok(Command::ServerReport {
-            options,
-            period,
-            filters,
-        })
-    } else if options.auth_file.is_some() {
-        Err(arguments("--auth-file requires --server for reports"))
-    } else {
-        Ok(Command::Report {
-            period,
-            filters,
-            summary,
-        })
-    }
+    Ok(Command::Report {
+        period,
+        filters,
+        summary,
+    })
 }
 
 fn arguments(message: impl Into<String>) -> CliError {
@@ -393,8 +242,6 @@ enum CliError {
     Report(ReportError),
     Output(io::Error),
     Export(ExportError),
-    Upload(uploading::UploadError),
-    ServerSummary(server::ServerError),
     ExportOutput {
         path: PathBuf,
         source: io::Error,
@@ -427,10 +274,6 @@ impl fmt::Display for CliError {
             Self::Report(source) => write!(formatter, "usage report failed: {source}"),
             Self::Output(source) => write!(formatter, "could not write report: {source}"),
             Self::Export(source) => write!(formatter, "could not build export: {source}"),
-            Self::Upload(source) => write!(formatter, "could not upload snapshot: {source}"),
-            Self::ServerSummary(source) => {
-                write!(formatter, "could not fetch server summary: {source}")
-            }
             Self::ExportDatabase { path, source } => write!(
                 formatter,
                 "could not write export to {}: {source}",

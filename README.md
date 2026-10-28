@@ -5,7 +5,6 @@ Hermes from one Rust CLI.
 
 - Filter reports by agent, provider, model, or time period.
 - Persistent local usage history.
-- Optional server for totals across machines.
 
 ## Example output
 
@@ -45,7 +44,7 @@ token-tracker
 ```
 
 Running without arguments imports new or changed sessions and shows an all-time
-usage report. No server or configuration is needed.
+usage report. No configuration is needed.
 
 ## Usage
 
@@ -66,14 +65,6 @@ token-tracker week --agent codex
 token-tracker month --agent claude --agent pi
 token-tracker --provider openai
 token-tracker --model gpt-5
-```
-
-With a [server configured](docs/deployment.md#connect-clients):
-
-```sh
-token-tracker upload         # Upload this machine's usage
-token-tracker --server       # Combined totals across machines
-token-tracker week --server  # Combined totals for this week
 ```
 
 Periods use UTC; weeks start Monday. See the [CLI guide](docs/cli.md)
@@ -104,17 +95,7 @@ Custom agent directories are also supported; see
 | Machine identity | `~/.local/share/token-tracker/machine-state.db` |
 | Configuration | `~/.config/token-tracker/config.toml` |
 
-## Server
-
-The optional self-hosted server collects usage from multiple machines and reports
-combined totals. Run `token-tracker upload` on each machine to send its latest
-usage, then use `--server` to query the totals.
-
-See [deployment and client setup](docs/deployment.md) for setup instructions.
-
 ## Documentation
 
 - [CLI](docs/cli.md): commands, options, filters, configuration, and local data.
-- [Server](docs/server.md): behavior, runtime configuration, and API.
-- [Deployment](docs/deployment.md): AWS setup, client onboarding, updates, and troubleshooting.
 - [Development](docs/development.md): building, checks, and test conventions.

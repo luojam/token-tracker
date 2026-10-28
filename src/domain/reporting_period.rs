@@ -1,10 +1,8 @@
 use chrono::{DateTime, Datelike, Duration, Utc};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReportingPeriod {
-    #[default]
     AllTime,
     Day,
     Week,
