@@ -1,5 +1,10 @@
 # Token Tracker
 
+> [!WARNING]
+> This legacy `server` branch is deprecated and kept for reference. Server support
+> has been removed from [main](https://github.com/luojam/token-tracker/tree/main).
+> Use `main` for the current CLI.
+
 Track token usage and API-equivalent costs across Pi, Codex, Claude Code, and
 Hermes from one Rust CLI.
 
