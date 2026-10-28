@@ -345,8 +345,8 @@ fn invalid_config_fails_before_opening_storage_but_help_still_works() {
         assert!(error.contains(path.to_str().unwrap()), "{error}");
     }
     for (args, usage) in [
-        (vec!["--help"], "Usage: token-tracker [command]"),
-        (vec!["-h"], "Usage: token-tracker [command]"),
+        (vec!["--help"], "Usage: token-tracker [OPTIONS]"),
+        (vec!["-h"], "Usage: token-tracker [OPTIONS]"),
         (vec!["export", "--help"], "Usage: token-tracker export"),
         (vec!["week", "-h"], "Usage: token-tracker week"),
         (vec!["doctor", "--help"], "Usage: token-tracker doctor"),
@@ -356,7 +356,7 @@ fn invalid_config_fails_before_opening_storage_but_help_still_works() {
         ),
     ] {
         let help = successful_report(command(&tree.root).args(args).output().unwrap());
-        assert!(help.starts_with(usage), "{help}");
+        assert!(help.contains(usage), "{help}");
     }
     assert!(!tree.root.join(".local").exists());
 }
@@ -482,7 +482,7 @@ fn read_export(connection: &rusqlite::Connection) -> token_tracker::ExportSnapsh
 fn invalid_arguments_fail_before_opening_storage() {
     let tree = TempTree::new();
     for (args, message) in [
-        (vec!["unknown"], "unknown command 'unknown'"),
+        (vec!["unknown"], "unrecognized subcommand 'unknown'"),
         (
             vec!["doctor", "unexpected"],
             "unexpected argument 'unexpected'",
@@ -491,33 +491,44 @@ fn invalid_arguments_fail_before_opening_storage() {
             vec!["summary", "unexpected"],
             "unexpected argument 'unexpected'",
         ),
-        (vec!["--agent"], "--agent requires a value"),
-        (
-            vec!["week", "--provider", ""],
-            "--provider requires a value",
-        ),
+        (vec!["--agent"], "a value is required for '--agent <ID>'"),
+        (vec!["week", "--provider", ""], "value must not be blank"),
         (
             vec!["summary", "--model", "--agent"],
-            "--model requires a value",
+            "a value is required for '--model <NAME>'",
         ),
-        (vec!["export"], "export requires a path"),
+        (vec!["export"], "<PATH>"),
+        (vec!["export", ""], "a value is required for '<PATH>'"),
+        (vec!["--model", "  "], "value must not be blank"),
+        (
+            vec!["doctor", "--agent", "codex"],
+            "unexpected argument '--agent'",
+        ),
+        (
+            vec!["--agent", "codex", "export", "usage.db"],
+            "cannot be used with",
+        ),
         (
             vec!["export", "export.db", "--unknown"],
-            "unknown option '--unknown'",
+            "unexpected argument '--unknown'",
         ),
         (
             vec!["export", "one.db", "two.db"],
-            "export accepts only one path",
+            "unexpected argument 'two.db'",
         ),
     ] {
         let output = command(&tree.root).args(args).output().unwrap();
-        assert!(!output.status.success());
+        assert_eq!(output.status.code(), Some(2));
         assert!(output.stdout.is_empty());
         let error = String::from_utf8_lossy(&output.stderr);
         assert!(error.contains(message), "{error}");
-        assert!(error.contains("Try 'token-tracker --help'"), "{error}");
+        assert!(
+            error.contains("For more information, try '--help'."),
+            "{error}"
+        );
     }
     assert!(!tree.root.join(".local").exists());
+    assert!(!tree.root.join(".config").exists());
 }
 
 #[test]
