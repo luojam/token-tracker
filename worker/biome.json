@@ -1,0 +1,23 @@
+{
+    "root": true,
+    "files": {
+        "includes": ["**", "!package-lock.json", "!.wrangler", "!node_modules"]
+    },
+    "formatter": {
+        "indentStyle": "space",
+        "indentWidth": 4
+    },
+    "linter": {
+        "enabled": true,
+        "rules": {
+            "preset": "recommended"
+        }
+    },
+    "assist": {
+        "actions": {
+            "source": {
+                "organizeImports": "on"
+            }
+        }
+    }
+}

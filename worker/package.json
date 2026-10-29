@@ -1,0 +1,22 @@
+{
+    "name": "token-tracker-remote",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "wrangler dev",
+        "deploy": "wrangler deploy",
+        "check": "biome check . && tsc --noEmit",
+        "format": "biome check --write .",
+        "test": "tsx --test test/*.test.ts"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "^2.0.0",
+        "@cloudflare/workers-types": "^5.20261023.1",
+        "@types/node": "^24.0.0",
+        "esbuild": "^0.28.2",
+        "miniflare": "5.20261023.2-beta",
+        "tsx": "^4.0.0",
+        "typescript": "^7.0.2",
+        "wrangler": "^4.0.0"
+    }
+}
