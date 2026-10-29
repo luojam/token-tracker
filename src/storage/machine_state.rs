@@ -79,6 +79,14 @@ impl MachineState {
         Ok(Self { connection })
     }
 
+    pub fn identity(&mut self) -> Result<String, SqliteStoreError> {
+        let allocation = self.begin_export()?;
+        let id = allocation.machine_id.clone();
+        allocation.transaction.commit()?;
+
+        Ok(id)
+    }
+
     /// Hold the lock through the usage read so revision order follows snapshot order.
     pub fn begin_export(&mut self) -> Result<ExportRevisionTransaction<'_>, SqliteStoreError> {
         let transaction = self

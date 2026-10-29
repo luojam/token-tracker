@@ -197,6 +197,39 @@ impl TokenTracker {
         })
     }
 
+    pub fn sync_remote(
+        &mut self,
+        remote: &impl crate::remote::RemoteStore,
+    ) -> crate::remote::Result<(crate::remote::RemoteSnapshot, SynchronizationReport)> {
+        use crate::{application::UsageReadStore, remote, storage::MachineState};
+
+        let _lock = remote::cache::lock(&self.machine_state_path.with_extension("sync.lock"))?;
+        let machine_id = MachineState::open(&self.machine_state_path)?.identity()?;
+
+        let listing = remote.list()?;
+        let key = format!("machines/{machine_id}.json");
+        let previous = listing
+            .iter()
+            .find(|object| object.key == key)
+            .map(|object| object.etag.as_str());
+
+        let imported = self.refresh()?;
+        let snapshot = remote::build_snapshot(
+            &self.store.usage_snapshot()?,
+            machine_id,
+            self.machine_name.clone(),
+            remote::now_ms(),
+        )?;
+
+        remote.upload(
+            &snapshot.machine_id,
+            previous,
+            serde_json::to_vec(&snapshot)?,
+        )?;
+
+        Ok((snapshot, imported))
+    }
+
     /// Exports retained usage without refreshing sources. Persists a new export revision.
     pub fn export_snapshot(&self) -> Result<ExportSnapshot, ExportError> {
         super::exporting::export_snapshot(

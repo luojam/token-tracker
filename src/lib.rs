@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod application;
 pub mod domain;
 pub mod pricing;
+pub mod remote;
 pub mod storage;
 
 pub use application::{

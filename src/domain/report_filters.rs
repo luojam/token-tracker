@@ -13,17 +13,25 @@ impl ReportFilters {
     }
 
     pub fn matches(&self, event: &UsageEvent) -> bool {
+        self.matches_dimensions(
+            event.identity.agent.as_str(),
+            event.attribution.as_ref().map(|a| a.provider.as_str()),
+            event.attribution.as_ref().map(|a| a.model.as_str()),
+        )
+    }
+
+    pub fn matches_dimensions(
+        &self,
+        agent: &str,
+        provider: Option<&str>,
+        model: Option<&str>,
+    ) -> bool {
         let matches = |values: &[String], value: Option<&str>| {
             values.is_empty() || value.is_some_and(|value| values.iter().any(|v| v == value))
         };
-        matches(&self.agents, Some(event.identity.agent.as_str()))
-            && matches(
-                &self.providers,
-                event.attribution.as_ref().map(|a| a.provider.as_str()),
-            )
-            && matches(
-                &self.models,
-                event.attribution.as_ref().map(|a| a.model.as_str()),
-            )
+
+        matches(&self.agents, Some(agent))
+            && matches(&self.providers, provider)
+            && matches(&self.models, model)
     }
 }
