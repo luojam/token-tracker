@@ -14,6 +14,15 @@ cargo check --all-targets
 cargo test
 ```
 
+Worker checks (Node.js 22+):
+
+```sh
+cd worker
+npm ci
+npm run check
+npm test
+```
+
 ## Tests
 
 Paths below are relative to `tests/`.
@@ -23,6 +32,7 @@ The suite starts at `tests/integration.rs`, grouped by component:
 - `adapters/`: discovery and parsing.
 - `application/`: sync, event deduplication, reports, and snapshot exports.
 - `pricing/`: rates, costs, and precision.
+- `remote/`: compact snapshots, sync conflicts, and cache refreshes.
 - `storage/`: persistence and failure handling.
 - `cli/`: command wiring, rendered output, privacy, and failures.
 - `export/`: serialized contract, money precision, and destination publication semantics.

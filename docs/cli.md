@@ -4,13 +4,14 @@ See the [quickstart](../README.md#quick-start) for installation.
 
 ## Commands
 
-Reports and exports refresh sources automatically.
+Local reports, exports, and sync refresh sources automatically.
 
 | Command | Behavior |
 | --- | --- |
 | `token-tracker` | Show the full all-time usage report. |
 | `token-tracker day`, `week`, or `month` | Report the current UTC calendar period. Weeks start Monday. |
 | `token-tracker summary` | Show total, input, output, and cache tokens plus total cost. |
+| `token-tracker sync` | Replace this machine’s remote snapshot; see [setup](remote.md). |
 | `token-tracker doctor` | Check configuration, storage paths, source access, and import issues without changing local data. Exit unsuccessfully if issues are found. |
 | `token-tracker export <path> [--force]` | Export usage to SQLite. |
 | `token-tracker --help` or `-h` | Show command usage. |
@@ -26,6 +27,7 @@ Use `<command> --help` (or `-h`) for help with a specific command.
 | `--agent <id>` | Reports | Filter by source: `codex`, `claude`, `pi`, or `hermes`. Repeatable. |
 | `--provider <name>` | Reports | Filter by stored provider name. Repeatable. |
 | `--model <name>` | Reports | Filter by stored model name. Repeatable. |
+| `--remote` | Reports | Combine uploaded machine snapshots. |
 | `--force` | Export | Replace an existing Token Tracker export; unrelated files are never overwritten. |
 | `--` | Export | Treat following arguments as paths, including names beginning with `-`. |
 
@@ -56,13 +58,17 @@ file has empty values, which mean unset.
 
 | Key | Meaning |
 | --- | --- |
-| `machine_name` | Optional label included in exports; not the machine identity. |
+| `machine_name` | Optional label included in exports and remote snapshots. |
+| `remote_url` | Worker origin for remote sync and reports; see [setup](remote.md). |
 
 For example, set a label for this machine:
 
 ```toml
 machine_name = "laptop"
 ```
+
+Remote commands read `remote_token` from `auth.toml` beside `config.toml`;
+see [remote setup](remote.md#setup).
 
 ## Sources and local data
 

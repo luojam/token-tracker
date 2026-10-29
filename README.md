@@ -5,6 +5,7 @@ Hermes from one Rust CLI.
 
 - Filter reports by agent, provider, model, or time period.
 - Persistent local usage history.
+- Optional [remote sync](docs/remote.md) across machines.
 
 ## Example output
 
@@ -94,6 +95,7 @@ Custom agent directories are also supported; see
 | Usage database | `~/.local/share/token-tracker/usage.db` |
 | Machine identity | `~/.local/share/token-tracker/machine-state.db` |
 | Configuration | `~/.config/token-tracker/config.toml` |
+| Remote credentials | `~/.config/token-tracker/auth.toml` |
 
 ## Documentation
 
