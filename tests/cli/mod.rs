@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 mod doctor;
+mod remote;
 
 const ALL_USAGE: &str = include_str!("../fixtures/pi/all-usage.jsonl");
 const CODEX_USAGE: &str = include_str!("../fixtures/codex/response-mirrors.jsonl");
