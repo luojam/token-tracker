@@ -3,12 +3,13 @@
 //! - https://platform.claude.com/docs/en/models/overview
 
 use crate::domain::{
-    CacheWriteTokens, EstimateUnavailableReason, EstimatedCost, ModelAttribution, PricingContext,
-    ServiceSpeed, ServiceTier, TierEvidence, TokenCounts, UsageEstimate, UsageEvent,
+    AnthropicPricingContext, CacheWriteTokens, EstimateUnavailableReason, EstimatedCost,
+    ModelAttribution, PricingContext, RequestBreakdown, ServiceSpeed, ServiceTier, TierEvidence,
+    TokenCounts, UsageEstimate, UsageEvent,
 };
 
-pub const SNAPSHOT_ID: &str = "anthropic-api-2026-09-30";
-pub const RATE_DATE: &str = "2026-09-30";
+pub const SNAPSHOT_ID: &str = "anthropic-api-2026-10-29";
+pub const RATE_DATE: &str = "2026-10-29";
 
 /// Integer microdollars per million tokens; count times rate gives picodollars.
 #[derive(Clone, Copy)]
@@ -73,6 +74,24 @@ const HAIKU_4_5: TokenRates = TokenRates {
     cache_write_5m: 1_250_000,
     cache_write_1h: 2_000_000,
 };
+const SONNET_5_5: TokenRates = TokenRates {
+    cache_read: 100_000,
+    ..SONNET_5
+};
+const HAIKU_5_5: TokenRates = TokenRates {
+    input: 100_000,
+    output: 500_000,
+    cache_read: 10_000,
+    cache_write_5m: 125_000,
+    cache_write_1h: 200_000,
+};
+const HAIKU_5_5_LONG: TokenRates = TokenRates {
+    input: 500_000,
+    output: 2_500_000,
+    cache_read: 50_000,
+    cache_write_5m: 625_000,
+    cache_write_1h: 1_000_000,
+};
 
 fn lookup_rates(
     attribution: &ModelAttribution,
@@ -90,7 +109,9 @@ fn lookup_rates(
         "claude-fable-5-1" => FABLE_5_1,
         "claude-opus-5" => OPUS_5,
         "claude-opus-5-5" => OPUS_5_5,
-        "claude-sonnet-5" | "claude-sonnet-5-5" => SONNET_5,
+        "claude-sonnet-5" => SONNET_5,
+        "claude-sonnet-5-5" => SONNET_5_5,
+        "claude-haiku-5-5" => HAIKU_5_5,
         "claude-haiku-4-5-20251001" => HAIKU_4_5,
         _ => return Err(Reason::UnsupportedModel),
     };
@@ -131,12 +152,84 @@ pub fn calculate_estimate(event: &UsageEvent) -> Result<UsageEstimate, EstimateU
         return Err(Reason::InvalidUsageBreakdown);
     }
 
-    let cost = price_tokens(event.tokens, facts.cache_writes.as_deref(), rates)?;
+    let cost = if attribution.model == "claude-haiku-5-5" {
+        price_haiku(event.tokens, facts)?
+    } else {
+        price_tokens(event.tokens, facts.cache_writes.as_deref(), rates)?
+    };
     Ok(UsageEstimate {
         cost,
         assumed_cache_writes_as_input: false,
         assumed_short_context: false,
     })
+}
+
+fn price_haiku(
+    tokens: TokenCounts,
+    facts: &AnthropicPricingContext,
+) -> Result<EstimatedCost, EstimateUnavailableReason> {
+    use EstimateUnavailableReason as Reason;
+
+    let is_long = |tokens: TokenCounts| {
+        u128::from(tokens.input) + u128::from(tokens.cache_read) + u128::from(tokens.cache_write)
+            > 100_000
+    };
+    let requests = match &facts.requests {
+        RequestBreakdown::KnownRequests(requests) => requests.as_slice(),
+        RequestBreakdown::SingleRequest => std::slice::from_ref(&tokens),
+        _ if !is_long(tokens) => std::slice::from_ref(&tokens),
+        _ => return Err(Reason::UnknownRequestGranularity),
+    };
+    let mut bands = [TokenCounts::default(); 2];
+    for request in requests {
+        let band = &mut bands[usize::from(is_long(*request))];
+        *band = band
+            .checked_add(*request)
+            .ok_or(Reason::ArithmeticOverflow)?;
+    }
+
+    let durations = facts.cache_writes.as_deref();
+    let split_writes = bands.iter().all(|band| band.cache_write > 0);
+    let shared_ttl = if split_writes {
+        // Durations are aggregated across requests, so mixed TTLs cannot be assigned to bands.
+        let mut writes = durations
+            .ok_or(Reason::IncompleteCacheDetail)?
+            .iter()
+            .filter(|write| write.tokens > 0);
+        let ttl = writes
+            .next()
+            .ok_or(Reason::IncompleteCacheDetail)?
+            .ttl_seconds;
+        if writes.any(|write| write.ttl_seconds != ttl) {
+            return Err(Reason::IncompleteCacheDetail);
+        }
+        Some(ttl)
+    } else {
+        None
+    };
+
+    bands.into_iter().zip([HAIKU_5_5, HAIKU_5_5_LONG]).try_fold(
+        EstimatedCost::default(),
+        |total, (tokens, rates)| {
+            let writes = shared_ttl.map(|ttl_seconds| {
+                [CacheWriteTokens {
+                    ttl_seconds,
+                    tokens: tokens.cache_write,
+                }]
+            });
+            let durations = if tokens.cache_write == 0 {
+                None
+            } else {
+                writes
+                    .as_ref()
+                    .map(|writes| writes.as_slice())
+                    .or(durations)
+            };
+            total
+                .checked_add(price_tokens(tokens, durations, rates)?)
+                .ok_or(Reason::ArithmeticOverflow)
+        },
+    )
 }
 
 fn price_tokens(

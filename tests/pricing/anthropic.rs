@@ -148,7 +148,7 @@ fn bundled_models_use_exact_flat_rates() {
         (
             "claude-sonnet-5-5",
             ServiceSpeed::Standard,
-            355_000_000,
+            345_000_000,
             1_800_000_000_000,
         ),
         (
@@ -201,6 +201,58 @@ fn bundled_models_use_exact_flat_rates() {
         calculate_estimate(&event),
         expected(u128::from(u64::MAX) * 40_500_000)
     );
+}
+
+#[test]
+fn haiku_prices_all_tokens_at_the_request_input_boundary() {
+    let mut event = event();
+    event.attribution.as_mut().unwrap().model = "claude-haiku-5-5".into();
+    event.tokens.cache_read = 99_950;
+    facts(&mut event).requests = RequestBreakdown::SingleRequest;
+    assert_eq!(calculate_estimate(&event), expected(1_016_250_000));
+
+    event.tokens.input += 1;
+    assert_eq!(calculate_estimate(&event), expected(5_081_750_000));
+
+    facts(&mut event).requests = RequestBreakdown::AggregateOrUnknown;
+    assert_eq!(
+        calculate_estimate(&event),
+        Err(Reason::UnknownRequestGranularity)
+    );
+    facts(&mut event).speed = ServiceSpeed::Fast;
+    assert_eq!(calculate_estimate(&event), Err(Reason::UnsupportedSpeed));
+}
+
+#[test]
+fn haiku_prices_known_requests_separately_and_requires_assignable_cache_durations() {
+    let mut event = event();
+    event.attribution.as_mut().unwrap().model = "claude-haiku-5-5".into();
+    let short = TokenCounts {
+        cache_read: 99_950,
+        ..event.tokens
+    };
+    event.tokens = short.checked_add(short).unwrap();
+    facts(&mut event).requests =
+        RequestBreakdown::KnownRequests(KnownRequests::from_vec(vec![short, short]).unwrap());
+    for write in facts(&mut event).cache_writes.as_mut().unwrap() {
+        write.tokens *= 2;
+    }
+    assert_eq!(calculate_estimate(&event), expected(2_032_500_000));
+
+    let long = TokenCounts { input: 11, ..short };
+    event.tokens = short.checked_add(long).unwrap();
+    facts(&mut event).requests =
+        RequestBreakdown::KnownRequests(KnownRequests::from_vec(vec![short, long]).unwrap());
+    assert_eq!(
+        calculate_estimate(&event),
+        Err(Reason::IncompleteCacheDetail)
+    );
+
+    facts(&mut event).cache_writes = Some(vec![CacheWriteTokens {
+        ttl_seconds: 300,
+        tokens: 80,
+    }]);
+    assert_eq!(calculate_estimate(&event), expected(6_093_500_000));
 }
 
 #[test]

@@ -73,6 +73,8 @@ for all options.
 ### Costs
 
 Costs use recorded values where available and API-price estimates otherwise.
+OpenAI cache-write estimates use 30-minute retention rates; 12-hour retention
+is not yet distinguished.
 
 ## Local data
 

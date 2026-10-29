@@ -1,9 +1,11 @@
 //! API token estimates exclude regional uplifts, discounts, tool fees, and subscriptions.
+//! Cache-write estimates use default 30-minute retention, not 12-hour retention.
 //!
 //! Rate snapshot sources:
 //! - https://developers.openai.com/api/docs/pricing.md (Standard and Fast tables)
 //! - https://developers.openai.com/api/docs/models/gpt-6-astra (request threshold)
 //! - https://developers.openai.com/api/docs/models/gpt-6.1-sol (rates and request threshold)
+//! - https://developers.openai.com/api/docs/models/gpt-6.1-terra (rates and request threshold)
 //! - https://developers.openai.com/api/docs/models/gpt-6-sol (request threshold)
 //! - https://developers.openai.com/api/docs/models/gpt-6-luna (request threshold)
 //! - https://developers.openai.com/api/docs/models/gpt-5.6-sol (threshold and alias)
@@ -19,8 +21,8 @@ use crate::domain::{
     UsageEvent,
 };
 
-pub const SNAPSHOT_ID: &str = "openai-api-2026-09-30";
-pub const RATE_DATE: &str = "2026-09-30";
+pub const SNAPSHOT_ID: &str = "openai-api-2026-10-29";
+pub const RATE_DATE: &str = "2026-10-29";
 
 /// Integer microdollars per million tokens. Multiplying by tokens gives picodollars.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +116,19 @@ const GPT_6_1_SOL: ModelRates = ModelRates {
         short_input_limit: 272_000,
         short: TokenRates::new(4_000_000, 200_000, 5_000_000, 20_000_000),
         long: Some(TokenRates::new(8_000_000, 400_000, 10_000_000, 30_000_000)),
+    },
+};
+
+const GPT_6_1_TERRA: ModelRates = ModelRates {
+    standard: ContextRates::Banded {
+        short_input_limit: 272_000,
+        short: TokenRates::new(1_000_000, 50_000, 1_250_000, 5_000_000),
+        long: Some(TokenRates::new(2_000_000, 100_000, 2_500_000, 7_500_000)),
+    },
+    fast: ContextRates::Banded {
+        short_input_limit: 272_000,
+        short: TokenRates::new(2_000_000, 100_000, 2_500_000, 10_000_000),
+        long: Some(TokenRates::new(4_000_000, 200_000, 5_000_000, 15_000_000)),
     },
 };
 
@@ -215,6 +230,7 @@ fn schedule(
     let model = match attribution.model.as_str() {
         "gpt-6-astra" => &GPT_6_ASTRA,
         "gpt-6.1-sol" => &GPT_6_1_SOL,
+        "gpt-6.1-terra" => &GPT_6_1_TERRA,
         "gpt-6-sol" => &GPT_6_SOL,
         "gpt-6-luna" => &GPT_6_LUNA,
         "gpt-5.6-sol" | "gpt-5.6" => &GPT_5_6_SOL,
