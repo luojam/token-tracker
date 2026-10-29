@@ -5,7 +5,7 @@ use std::{
 
 use super::{CliError, args::ReportArgs, config::Config, reporting::*};
 use token_tracker::{
-    TokenTracker, TokenTrackerConfig,
+    AGENT_LABELS, TokenTracker, TokenTrackerConfig,
     domain::{ReportFilters, ReportingPeriod},
     remote::{HttpRemote, RemoteError, SnapshotCache, combine_snapshots},
 };
@@ -73,28 +73,9 @@ pub(super) fn report(
         render_summary(&report)
     );
 
+    let width = super::terminal_width();
     if !summary {
-        writeln!(output, "\nUsage by agent / provider / model:").unwrap();
-        for row in &report.rows {
-            writeln!(
-                output,
-                "- {} / {}: {} tokens; {}",
-                escape_control_characters(row.agent.as_str()),
-                group_label(&row.group),
-                format_integer(row.tokens.total()),
-                cost_label(row.cost).unwrap_or_else(|| "unavailable".into())
-            )
-            .unwrap();
-            writeln!(
-                output,
-                "  Input: {}; output: {}; cache read: {}; cache write: {}",
-                format_integer(row.tokens.input),
-                format_integer(row.tokens.output),
-                format_integer(row.tokens.cache_read),
-                format_integer(row.tokens.cache_write)
-            )
-            .unwrap();
-        }
+        render_usage_breakdown(&mut output, &report, AGENT_LABELS, width, false);
     }
 
     render_estimate_diagnostics(&mut output, &report.totals.estimates);
@@ -131,6 +112,6 @@ pub(super) fn report(
 
     io::stdout()
         .lock()
-        .write_all(wrap_report(output, super::terminal_width()).as_bytes())
+        .write_all(wrap_report(output, width).as_bytes())
         .map_err(CliError::Output)
 }

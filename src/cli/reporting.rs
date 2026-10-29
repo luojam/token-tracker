@@ -78,77 +78,7 @@ pub(super) fn render_terminal_report(
     )
     .unwrap();
 
-    writeln!(output).unwrap();
-    writeln!(output, "Usage by provider/model:").unwrap();
-    if report.rows.is_empty() {
-        writeln!(output, "- none").unwrap();
-    } else {
-        let headers = [
-            "Provider / model",
-            "Input",
-            "Output",
-            "Cache read",
-            "Cache write",
-            "Total",
-            "Events",
-            "Cost",
-        ]
-        .map(str::to_owned);
-        let rows = report
-            .rows
-            .iter()
-            .map(|row| {
-                (
-                    &row.agent,
-                    [
-                        group_label(&row.group),
-                        format_integer(row.tokens.input),
-                        format_integer(row.tokens.output),
-                        format_integer(row.tokens.cache_read),
-                        format_integer(row.tokens.cache_write),
-                        format_integer(row.tokens.total()),
-                        format_integer(row.unique_usage_event_count),
-                        cost_label(row.cost).unwrap_or_else(|| "-".into()),
-                    ],
-                )
-            })
-            .collect::<Vec<_>>();
-
-        let mut widths = headers.each_ref().map(|header| display_width(header));
-        for (_, cells) in &rows {
-            for (width, cell) in widths.iter_mut().zip(cells) {
-                *width = (*width).max(display_width(cell));
-            }
-        }
-
-        let table_width = widths.iter().sum::<usize>() + 2 * headers.len();
-        let stacked = terminal_width.is_some_and(|width| width > 0 && table_width > width);
-        let mut previous_agent = None;
-        for (agent, cells) in &rows {
-            if previous_agent != Some(agent) {
-                let label = agent_labels
-                    .iter()
-                    .find(|(id, _)| *id == agent.as_str())
-                    .map_or(agent.as_str(), |(_, label)| *label);
-                let label = escape_control_characters(label);
-                writeln!(output).unwrap();
-                writeln!(output, "{label} usage:").unwrap();
-                if !stacked {
-                    render_table_row(&mut output, &headers, &widths);
-                }
-                previous_agent = Some(agent);
-            }
-            if stacked {
-                writeln!(output).unwrap();
-                writeln!(output, "  {}", cells[0]).unwrap();
-                for (label, value) in headers.iter().zip(cells).skip(1) {
-                    writeln!(output, "    {label}: {value}").unwrap();
-                }
-            } else {
-                render_table_row(&mut output, cells, &widths);
-            }
-        }
-    }
+    render_usage_breakdown(&mut output, report, agent_labels, terminal_width, true);
 
     render_estimate_diagnostics(&mut output, &totals.estimates);
 
@@ -214,6 +144,91 @@ pub(super) fn render_terminal_report(
     }
 
     wrap_report(output, terminal_width)
+}
+
+pub(super) fn render_usage_breakdown(
+    output: &mut String,
+    report: &UsageReport,
+    agent_labels: &[(&str, &str)],
+    terminal_width: Option<usize>,
+    include_events: bool,
+) {
+    writeln!(output).unwrap();
+    writeln!(output, "Usage by provider/model:").unwrap();
+    if report.rows.is_empty() {
+        writeln!(output, "- none").unwrap();
+    } else {
+        let mut headers = vec![
+            "Provider / model",
+            "Input",
+            "Output",
+            "Cache read",
+            "Cache write",
+            "Total",
+        ];
+        if include_events {
+            headers.push("Events");
+        }
+        headers.push("Cost");
+        let headers = headers.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        let rows = report
+            .rows
+            .iter()
+            .map(|row| {
+                let mut cells = vec![
+                    group_label(&row.group),
+                    format_integer(row.tokens.input),
+                    format_integer(row.tokens.output),
+                    format_integer(row.tokens.cache_read),
+                    format_integer(row.tokens.cache_write),
+                    format_integer(row.tokens.total()),
+                ];
+                if include_events {
+                    cells.push(format_integer(row.unique_usage_event_count));
+                }
+                cells.push(cost_label(row.cost).unwrap_or_else(|| "-".into()));
+                (&row.agent, cells)
+            })
+            .collect::<Vec<_>>();
+
+        let mut widths = headers
+            .iter()
+            .map(|header| display_width(header))
+            .collect::<Vec<_>>();
+        for (_, cells) in &rows {
+            for (width, cell) in widths.iter_mut().zip(cells) {
+                *width = (*width).max(display_width(cell));
+            }
+        }
+
+        let table_width = widths.iter().sum::<usize>() + 2 * headers.len();
+        let stacked = terminal_width.is_some_and(|width| width > 0 && table_width > width);
+        let mut previous_agent = None;
+        for (agent, cells) in &rows {
+            if previous_agent != Some(agent) {
+                let label = agent_labels
+                    .iter()
+                    .find(|(id, _)| *id == agent.as_str())
+                    .map_or(agent.as_str(), |(_, label)| *label);
+                let label = escape_control_characters(label);
+                writeln!(output).unwrap();
+                writeln!(output, "{label} usage:").unwrap();
+                if !stacked {
+                    render_table_row(output, &headers, &widths);
+                }
+                previous_agent = Some(agent);
+            }
+            if stacked {
+                writeln!(output).unwrap();
+                writeln!(output, "  {}", cells[0]).unwrap();
+                for (label, value) in headers.iter().zip(cells).skip(1) {
+                    writeln!(output, "    {label}: {value}").unwrap();
+                }
+            } else {
+                render_table_row(output, cells, &widths);
+            }
+        }
+    }
 }
 
 pub(super) fn wrap_report(output: String, width: Option<usize>) -> String {
@@ -345,7 +360,7 @@ pub(super) fn render_estimate_diagnostics(output: &mut String, estimates: &Estim
     }
 }
 
-fn render_table_row(output: &mut String, cells: &[String; 8], widths: &[usize; 8]) {
+fn render_table_row(output: &mut String, cells: &[String], widths: &[usize]) {
     for (index, (cell, width)) in cells.iter().zip(widths).enumerate() {
         let padding = width - display_width(cell);
         if index == 0 {
@@ -501,6 +516,27 @@ mod tests {
         assert!(narrow.lines().all(|line| display_width(line) <= 24));
         assert!(narrow.contains("$0.120000"));
         assert!(narrow.contains("(partial)"));
+
+        let render_remote = |width| {
+            let mut output = String::new();
+            render_usage_breakdown(&mut output, &report, &[("pi", "Pi")], width, false);
+            wrap_report(output, width)
+        };
+        let remote = render_remote(None);
+        let table = remote
+            .lines()
+            .filter(|line| line.starts_with("  "))
+            .collect::<Vec<_>>();
+        let width = display_width(table[0]);
+        assert_eq!(display_width(table[1]), width);
+        assert_eq!(render_remote(Some(width)), remote);
+        assert!(remote.contains("Pi usage:\n"));
+        assert!(!remote.contains("Events"));
+        let stacked = render_remote(Some(width - 1));
+        assert!(stacked.contains("    Total: 21,579\n    Cost: $0.120000 (partial)\n"));
+        let narrow = render_remote(Some(24));
+        assert!(narrow.lines().all(|line| display_width(line) <= 24));
+        assert!(narrow.contains("$0.120000"));
     }
 
     #[test]
