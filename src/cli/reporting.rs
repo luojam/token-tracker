@@ -239,7 +239,7 @@ pub(super) fn wrap_report(output: String, width: Option<usize>) -> String {
     wrapped
 }
 
-fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) {
+pub(super) fn render_estimate_diagnostics(output: &mut String, estimates: &EstimateTotals) {
     if estimates.estimate_candidate_event_count == 0 {
         return;
     }
@@ -357,7 +357,7 @@ fn render_table_row(output: &mut String, cells: &[String; 8], widths: &[usize; 8
     writeln!(output).unwrap();
 }
 
-fn cost_label(cost: CostTotal) -> Option<String> {
+pub(super) fn cost_label(cost: CostTotal) -> Option<String> {
     let (amount, partial) = match cost {
         CostTotal::Absent => return None,
         CostTotal::Unavailable => return Some("unavailable".into()),
@@ -383,7 +383,7 @@ fn model_label(attribution: &ModelAttribution) -> String {
     )
 }
 
-fn group_label(group: &SummaryGroup) -> String {
+pub(super) fn group_label(group: &SummaryGroup) -> String {
     match group {
         SummaryGroup::ProviderModel(attribution) => model_label(attribution),
         SummaryGroup::Unattributed(UsageKind::Other) => "Unattributed other usage".into(),
@@ -411,7 +411,7 @@ pub(super) fn escape_control_characters(value: &str) -> String {
         .collect()
 }
 
-fn format_integer(value: impl Into<u128>) -> String {
+pub(super) fn format_integer(value: impl Into<u128>) -> String {
     let digits = value.into().to_string();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
     let first_group = digits.len() % 3;

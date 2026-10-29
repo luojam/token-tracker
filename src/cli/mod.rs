@@ -2,6 +2,7 @@ mod args;
 mod config;
 mod doctor;
 mod exporting;
+mod remote;
 mod reporting;
 
 use std::fmt;
@@ -43,7 +44,24 @@ fn execute() -> Result<(), CliError> {
             Ok(())
         };
     }
+
     let config = config::Config::load()?;
+    if matches!(cli.command, Some(Command::Sync)) {
+        return remote::sync(&config);
+    }
+
+    let report_args = match &cli.command {
+        None => Some((&cli.filters, ReportingPeriod::AllTime, false)),
+        Some(Command::Day(args)) => Some((args, ReportingPeriod::Day, false)),
+        Some(Command::Week(args)) => Some((args, ReportingPeriod::Week, false)),
+        Some(Command::Month(args)) => Some((args, ReportingPeriod::Month, false)),
+        Some(Command::Summary(args)) => Some((args, ReportingPeriod::AllTime, true)),
+        _ => None,
+    };
+    if let Some((args, period, summary)) = report_args.filter(|(args, _, _)| args.remote) {
+        return remote::report(&config, args, period, summary);
+    }
+
     let mut tracker = TokenTracker::open(TokenTrackerConfig {
         machine_name: config.machine_name,
         ..Default::default()
@@ -61,7 +79,9 @@ fn execute() -> Result<(), CliError> {
             let snapshot = tracker.export_snapshot().map_err(CliError::Export)?;
             return exporting::write_snapshot(&path, force, &snapshot);
         }
-        Some(Command::Doctor) => unreachable!("doctor returns before opening storage"),
+        Some(Command::Sync | Command::Doctor) => {
+            unreachable!("sync and doctor are handled above")
+        }
     };
     let result = tracker
         .report_filtered(
@@ -105,6 +125,7 @@ fn terminal_width() -> Option<usize> {
 #[derive(Debug)]
 enum CliError {
     Doctor,
+    Remote(token_tracker::remote::RemoteError),
     Config {
         path: PathBuf,
         source: io::Error,
@@ -127,6 +148,7 @@ enum CliError {
 impl fmt::Display for CliError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Remote(source) => write!(formatter, "remote sync/report failed: {source}"),
             Self::Doctor => formatter.write_str("doctor found issues (see report above)"),
             Self::Config { path, source } => {
                 write!(
