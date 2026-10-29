@@ -186,7 +186,7 @@ pub fn calculate_usage_summary_filtered(
     )
 }
 
-fn summarize_events<'a>(
+pub(crate) fn summarize_events<'a>(
     session_count: u64,
     events: impl IntoIterator<Item = &'a UsageEvent>,
 ) -> Result<UsageSummary, UsageSummaryError> {

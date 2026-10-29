@@ -2,7 +2,7 @@ mod event_deduplication;
 pub mod exporting;
 mod import_validation;
 mod ports;
-mod reporting;
+pub(crate) mod reporting;
 mod synchronization;
 mod tracker;
 
