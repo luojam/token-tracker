@@ -160,9 +160,11 @@ struct SessionState {
     expected_ancestor: Option<String>,
     inherited_prefix: bool,
     inherited_history: bool,
-    pending_fork_boundary: bool,
+    history_owner: Option<String>,
+    pending_fork_boundary: Option<String>,
     pending_inherited_abort: bool,
     referenced_history: bool,
+    inherited_last: Option<TokenUsageWire>,
     responses: BTreeMap<String, ResponseObservation>,
     legacy: LegacyUsageState,
     turns: TurnLifecycle,
@@ -182,9 +184,11 @@ impl SessionState {
         );
         Self {
             inherited_history: copied_history,
-            pending_fork_boundary: false,
+            history_owner: None,
+            pending_fork_boundary: None,
             pending_inherited_abort: referenced_history,
             referenced_history,
+            inherited_last: None,
             expected_ancestor: header
                 .identity
                 .forked_from_id
@@ -236,6 +240,7 @@ impl SessionState {
                                         line,
                                         "event_msg.payload.info.total_token_usage",
                                     )?;
+                                    self.inherited_last = Some(info.0.last_token_usage.0);
                                 }
                                 None => self.legacy.accept_usage(
                                     info.0,
@@ -250,13 +255,12 @@ impl SessionState {
                         validate_timestamp(text, line)?;
                         let settings: SettingsWire =
                             payload(text, line, "event_msg.payload.thread_settings")?;
-                        // Child settings followed by a start end inherited history.
-                        self.pending_fork_boundary = self.inherited_history
-                            && self.expected_ancestor.is_none()
-                            && self.mirrors.is_none()
-                            && !self.turns.in_review()
-                            && settings.thread_id.as_deref()
-                                == Some(self.metadata.session_id.as_str());
+                        // Descendant settings followed by a start end the inherited turn.
+                        self.pending_fork_boundary = settings
+                            .thread_id
+                            .as_ref()
+                            .filter(|id| self.fork_boundary_is_valid(id))
+                            .cloned();
                         self.context
                             .accept_settings(settings, !self.turns.in_review());
                     }
@@ -282,10 +286,13 @@ impl SessionState {
                             mirrors.require_confirmed(line)?;
                         }
 
-                        if event.entry_type == "task_started" && fork_boundary {
+                        if event.entry_type == "task_started"
+                            && let Some(thread_id) = fork_boundary
+                        {
                             self.turns.end_inherited_turn();
-                            self.context.enter_thread(&self.metadata.session_id);
-                            self.inherited_history = false;
+                            self.context.enter_thread(&thread_id);
+                            self.inherited_history = thread_id != self.metadata.session_id;
+                            self.history_owner = Some(thread_id);
                         }
 
                         if self.turns.accept_boundary(
@@ -371,7 +378,7 @@ impl SessionState {
         timestamp: Timestamp,
         line: usize,
     ) -> Result<(), CodexParseError> {
-        self.pending_fork_boundary = false;
+        self.pending_fork_boundary = None;
         if !self.headers.contains_key(&response.thread_id) {
             return Err(CodexParseError::InvalidField {
                 line,
@@ -447,7 +454,7 @@ impl SessionState {
             }
             self.legacy
                 .validate_response_start(&response.turn_id, line)?;
-            if self.expected_ancestor.is_some() || response.thread_id != self.metadata.session_id {
+            if !self.response_owner_is_valid(&response.thread_id) {
                 return Err(CodexParseError::InvalidField {
                     line,
                     field: "token_usage_record.payload.thread_id",
@@ -456,9 +463,14 @@ impl SessionState {
 
             self.mirrors
                 .get_or_insert_with(|| {
+                    let (total, last) = self.legacy.baseline();
                     MirrorState::new(
-                        (!self.referenced_history).then(|| self.legacy.baseline()),
-                        response.thread_id.clone(),
+                        (!self.referenced_history).then_some(total),
+                        if self.referenced_history {
+                            self.inherited_last
+                        } else {
+                            Some(last)
+                        },
                     )
                 })
                 .accept_response(&response, line)?;
@@ -481,6 +493,10 @@ impl SessionState {
                 recorded_cost: None,
                 pricing_context: Some(PricingContext::OpenAi(pricing_context)),
             };
+            if response.thread_id == self.metadata.session_id {
+                self.inherited_history = false;
+            }
+            self.history_owner = Some(response.thread_id.clone());
             self.responses.insert(
                 response.response_id,
                 ResponseObservation {
@@ -491,9 +507,43 @@ impl SessionState {
                     event,
                 },
             );
-            self.inherited_history = false;
         }
         Ok(())
+    }
+
+    fn fork_boundary_is_valid(&self, thread_id: &str) -> bool {
+        self.inherited_history
+            && !self.turns.in_review()
+            && self
+                .headers
+                .get(thread_id)
+                .and_then(|header| header.forked_from_id.as_deref())
+                .is_some_and(|parent| self.response_owner_is_valid(parent))
+    }
+
+    fn response_owner_is_valid(&self, thread_id: &str) -> bool {
+        if self.expected_ancestor.is_some()
+            || (thread_id != self.metadata.session_id && !self.inherited_history)
+        {
+            return false;
+        }
+        let Some(current_owner) = &self.history_owner else {
+            return true;
+        };
+
+        // Copied history can advance from an ancestor into its fork.
+        let mut owner = Some(thread_id);
+        for _ in 0..self.headers.len() {
+            let Some(id) = owner else { return false };
+            if id == current_owner {
+                return true;
+            }
+            owner = self
+                .headers
+                .get(id)
+                .and_then(|header| header.forked_from_id.as_deref());
+        }
+        false
     }
 
     fn accept_header(
@@ -501,7 +551,7 @@ impl SessionState {
         header: NormalizedHeader,
         line: usize,
     ) -> Result<(), CodexParseError> {
-        self.pending_fork_boundary = false;
+        self.pending_fork_boundary = None;
         let id = &header.metadata.session_id;
         if let Some(original) = self.headers.get(id) {
             if header.identity.started_at != original.started_at {

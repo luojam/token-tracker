@@ -13,6 +13,32 @@ const CORRECTED: &str = include_str!("../../fixtures/codex/legacy-resume-correct
 const ZERO: &str = include_str!("../../fixtures/codex/legacy-zero-correction.jsonl");
 
 #[test]
+fn spending_only_usage_counts_deltas_while_retaining_context_usage() {
+    let original = crate::support::records(FRESH);
+    let expected = parse(FRESH).unwrap().events;
+    let mut source = original.clone();
+    let zero = json!({"input_tokens":0,"cached_input_tokens":0,"output_tokens":0,
+        "reasoning_output_tokens":0,"total_tokens":0});
+    for index in [4, 5] {
+        source[index]["payload"]["info"]["last_token_usage"] = zero.clone();
+    }
+    assert_eq!(super::parse_records(&source).unwrap().events, expected);
+
+    source = original.clone();
+    source[6]["payload"]["info"]["last_token_usage"] =
+        original[4]["payload"]["info"]["last_token_usage"].clone();
+    assert_eq!(super::parse_records(&source).unwrap().events, expected);
+
+    let mut recomputed = original[5].clone();
+    recomputed["payload"]["info"]["last_token_usage"] = zero;
+    recomputed["payload"]["info"]["last_token_usage"]["total_tokens"] = json!(50);
+    source[6]["payload"]["info"]["last_token_usage"] =
+        recomputed["payload"]["info"]["last_token_usage"].clone();
+    source.insert(6, recomputed);
+    assert_eq!(super::parse_records(&source).unwrap().events, expected);
+}
+
+#[test]
 fn legacy_aggregates_use_task_start_timestamps_for_open_and_closed_turns() {
     let source = fixture("codex", "legacy-partial-fork.jsonl");
     for (turn_id, started_at, lines) in [

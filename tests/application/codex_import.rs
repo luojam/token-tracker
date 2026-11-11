@@ -4,7 +4,7 @@ use std::fs;
 use token_tracker::adapters::codex::{CodexSessionDiscovery, CodexSessionParser};
 use token_tracker::adapters::files::FileSessionSource;
 use token_tracker::application::{
-    CostAmount, CostTotal, UsageReadStore, UsageStore, synchronize_sessions_at,
+    CostAmount, CostTotal, UsageReadStore, UsageStore, deduplicate_events, synchronize_sessions_at,
 };
 use token_tracker::domain::{EstimatedCost, Timestamp, TokenCounts};
 use token_tracker::storage::SqliteUsageStore;
@@ -91,6 +91,61 @@ fn referenced_fork_imports_local_responses_without_parent_files() {
             .observations
             .iter()
             .map(|o| o.event.tokens.total())
+            .sum::<u128>(),
+        250
+    );
+}
+
+#[test]
+fn copied_fork_responses_import_without_parents_and_deduplicate_with_them() {
+    let tree = TempTree::new();
+    tree.write(
+        "rollout-child.jsonl",
+        include_str!("../fixtures/codex/response-copied-fork.jsonl"),
+    );
+    let mut store = SqliteUsageStore::open_in_memory().unwrap();
+    let source = FileSessionSource::new(
+        CodexSessionDiscovery::new([&tree.root]),
+        CodexSessionParser::new(),
+    );
+    let sync = |store: &mut SqliteUsageStore, time| {
+        let report =
+            synchronize_sessions_at(&source, store, Timestamp::from_unix_milliseconds(time))
+                .unwrap();
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    };
+
+    sync(&mut store, 1);
+    let snapshot = store.usage_snapshot().unwrap();
+    assert_eq!(snapshot.observations.len(), 2);
+    let child = snapshot
+        .observations
+        .iter()
+        .find(|observation| observation.event.identity.adapter_key == "response-v1:response-child")
+        .unwrap();
+    let Some(token_tracker::domain::PricingContext::OpenAi(context)) = &child.event.pricing_context
+    else {
+        panic!("missing child pricing context");
+    };
+    assert_eq!(context.tier, token_tracker::domain::ServiceTier::Fast);
+
+    tree.write(
+        "rollout-parent.jsonl",
+        format!(
+            "{}\n",
+            prefix(include_str!("../fixtures/codex/response-mirrors.jsonl"), 6)
+        ),
+    );
+    sync(&mut store, 2);
+    let snapshot = store.usage_snapshot().unwrap();
+    assert_eq!(snapshot.observations.len(), 3);
+    let usage = deduplicate_events(&snapshot).unwrap();
+    assert_eq!(usage.events.len(), 2);
+    assert_eq!(
+        usage
+            .events
+            .iter()
+            .map(|event| event.canonical.event.tokens.total())
             .sum::<u128>(),
         250
     );

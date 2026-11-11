@@ -313,6 +313,72 @@ fn fork_boundary_preserves_usage_and_starts_child_pricing_context() {
 }
 
 #[test]
+fn nested_fork_boundaries_close_inherited_turns_and_preserve_child_pricing() {
+    let mut lines = records(RESPONSE)[..5].to_vec();
+    for (id, parent) in [
+        ("thread-child", "thread-main"),
+        ("thread-grandchild", "thread-child"),
+    ] {
+        let mut header = lines[0].clone();
+        header["payload"]["id"] = json!(id);
+        header["payload"]["forked_from_id"] = json!(parent);
+        lines.insert(0, header);
+    }
+    lines.extend([
+        settings(Some("thread-child"), Some(json!("priority"))),
+        boundary("task_started", "turn-child"),
+        context("turn-child", json!("child-model")),
+    ]);
+
+    for owner in ["thread-child", "thread-main"] {
+        let mut overlapping = lines.clone();
+        overlapping.extend([
+            settings(Some(owner), Some(json!("default"))),
+            boundary("task_started", "overlapping-turn"),
+        ]);
+        assert!(matches!(
+            parse(&overlapping),
+            Err(CodexParseError::OverlappingTurn { .. })
+        ));
+    }
+
+    let mut child = response("response-child", "turn-child", 1, 2);
+    child["payload"]["thread_id"] = json!("thread-child");
+    lines.extend([
+        child,
+        mirror(2),
+        settings(Some("thread-grandchild"), Some(json!("default"))),
+        boundary("task_started", "turn-grandchild"),
+        context("turn-grandchild", json!("grandchild-model")),
+    ]);
+    let mut grandchild = response("response-grandchild", "turn-grandchild", 1, 3);
+    grandchild["payload"]["thread_id"] = json!("thread-grandchild");
+    lines.extend([
+        grandchild,
+        mirror(3),
+        boundary("task_complete", "turn-grandchild"),
+    ]);
+
+    let parsed = parse(&lines).unwrap();
+    assert_eq!(parsed.events.len(), 3);
+    assert_eq!(
+        parsed
+            .events
+            .iter()
+            .map(|event| event.tokens.total())
+            .sum::<u128>(),
+        330
+    );
+    for (event, tier, model) in [
+        (&parsed.events[1], ServiceTier::Fast, "child-model"),
+        (&parsed.events[2], ServiceTier::Standard, "grandchild-model"),
+    ] {
+        assert_tier(event, tier, TierEvidence::RequestedSetting);
+        assert_eq!(event.attribution.as_ref().unwrap().model, model);
+    }
+}
+
+#[test]
 fn fork_boundary_requires_child_settings_and_cannot_reset_local_turns() {
     let inherited = records(include_str!(
         "../../fixtures/codex/legacy-partial-fork.jsonl"

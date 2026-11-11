@@ -35,6 +35,16 @@ fn referenced_history_counts_local_requests_with_child_pricing() {
 }
 
 #[test]
+fn first_referenced_response_can_retain_inherited_context_usage() {
+    let mut source = records(FORK);
+    let expected = parse(&source).unwrap().events;
+    source[6]["payload"]["info"]["last_token_usage"] =
+        source[4]["payload"]["info"]["last_token_usage"].clone();
+
+    assert_eq!(parse(&source).unwrap().events, expected);
+}
+
+#[test]
 fn first_referenced_request_can_be_compaction_without_a_usage_mirror() {
     let mut source = records(FORK);
     let expected = parse(&source).unwrap().events;

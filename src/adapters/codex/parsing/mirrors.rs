@@ -2,7 +2,7 @@ use super::{CodexParseError, ResponseUsageWire, TokenInfoWire, TokenUsageWire};
 
 pub(super) struct MirrorState {
     confirmed: Option<TokenUsageWire>,
-    thread_id: String,
+    previous_last: Option<TokenUsageWire>,
     thread_total: Option<TokenUsageWire>,
     turn_id: String,
     turn_total: TokenUsageWire,
@@ -15,10 +15,13 @@ struct PendingResponse {
 }
 
 impl MirrorState {
-    pub(super) fn new(baseline: Option<TokenUsageWire>, thread_id: String) -> Self {
+    pub(super) fn new(
+        baseline: Option<TokenUsageWire>,
+        previous_last: Option<TokenUsageWire>,
+    ) -> Self {
         Self {
             confirmed: baseline,
-            thread_id,
+            previous_last,
             thread_total: baseline.map(|_| TokenUsageWire::default()),
             turn_id: String::new(),
             turn_total: TokenUsageWire::default(),
@@ -60,12 +63,6 @@ impl MirrorState {
         line: usize,
     ) -> Result<(), CodexParseError> {
         self.require_confirmed(line)?;
-        if response.thread_id != self.thread_id {
-            return Err(CodexParseError::InvalidField {
-                line,
-                field: "token_usage_record.payload.thread_id",
-            });
-        }
         let turn_total = if self.turn_id == response.turn_id {
             self.turn_total
         } else {
@@ -164,6 +161,7 @@ impl MirrorState {
                 let Some(pending) = self.pending.as_ref() else {
                     // The first referenced-history request may have been a compaction.
                     self.confirmed = Some(total);
+                    self.previous_last = Some(last);
                     return Ok(());
                 };
                 let inherited = total.checked_sub(&pending.usage).ok_or_else(invalid)?;
@@ -172,12 +170,15 @@ impl MirrorState {
             }
         };
         let delta = total.checked_sub(&confirmed).ok_or_else(invalid)?;
-        if delta.is_zero()
-            && !self
-                .pending
-                .as_ref()
-                .is_some_and(|pending| pending.usage.is_zero() && last.is_zero())
-        {
+        let confirms_zero_usage = self.pending.as_ref().is_some_and(|pending| {
+            pending.usage.is_zero()
+                && (last.is_zero()
+                    || self
+                        .previous_last
+                        .is_some_and(|previous| last.same_counters(&previous)))
+        });
+        if delta.is_zero() && !confirms_zero_usage {
+            self.previous_last = Some(last);
             return Ok(());
         }
 
@@ -185,11 +186,17 @@ impl MirrorState {
         if !delta.same_counters(&pending.usage) {
             return Err(invalid());
         }
-        if !last.same_counters(&pending.usage) {
+        // Spending-only updates retain the last context usage, including estimates.
+        if !last.same_counters(&pending.usage)
+            && self
+                .previous_last
+                .is_some_and(|previous| !last.same_counters(&previous))
+        {
             return Err(CodexParseError::InvalidField { line, field: LAST });
         }
 
         self.confirmed = Some(total);
+        self.previous_last = Some(last);
         self.pending = None;
         Ok(())
     }

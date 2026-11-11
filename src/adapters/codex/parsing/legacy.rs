@@ -14,6 +14,7 @@ pub(super) struct LegacyUsageState {
     pub(super) events: BTreeMap<String, UsageEvent>,
     raw_tiers: BTreeMap<String, RawServiceTier>,
     previous_total: Option<TokenUsageWire>,
+    previous_last: TokenUsageWire,
     checkpoint_before_usage: bool,
 }
 
@@ -24,8 +25,8 @@ impl LegacyUsageState {
         }
     }
 
-    pub(super) fn baseline(&self) -> TokenUsageWire {
-        self.previous_total.unwrap_or_default()
+    pub(super) fn baseline(&self) -> (TokenUsageWire, TokenUsageWire) {
+        (self.previous_total.unwrap_or_default(), self.previous_last)
     }
 
     pub(super) fn validate_response_start(
@@ -63,8 +64,11 @@ impl LegacyUsageState {
         let unchanged = self.previous_total.is_some() && delta.is_zero();
 
         // Recomputed last usage can describe context size, not an incurred request.
-        if unchanged && !last.is_zero() {
-            return Ok(());
+        if unchanged {
+            self.previous_last = last;
+            if !last.is_zero() {
+                return Ok(());
+            }
         }
         if self.checkpoint_before_usage {
             return Err(invalid());
@@ -75,7 +79,8 @@ impl LegacyUsageState {
             None if unchanged => return Ok(()),
             None => return Err(invalid()),
         };
-        if !delta.same_counters(&last) {
+        // Incomplete responses increase spending without replacing context usage.
+        if !delta.same_counters(&last) && !self.previous_last.same_counters(&last) {
             return Err(CodexParseError::InvalidField { line, field: LAST });
         }
 
@@ -143,6 +148,7 @@ impl LegacyUsageState {
 
         event.tokens = event.tokens.checked_add(tokens).ok_or_else(invalid)?;
         self.previous_total = Some(total);
+        self.previous_last = last;
         Ok(())
     }
 }

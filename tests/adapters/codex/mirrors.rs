@@ -14,6 +14,28 @@ fn multiply(vector: &mut Value, factor: u64) {
 }
 
 #[test]
+fn spending_only_responses_keep_previous_context_usage() {
+    let original = records(RESPONSE);
+    let expected = parse(&original).unwrap().events;
+    let mut source = original.clone();
+    multiply(&mut source[4]["payload"]["info"]["last_token_usage"], 0);
+    assert_eq!(parse(&source).unwrap().events, expected);
+
+    source = original.clone();
+    source[10]["payload"]["info"]["last_token_usage"] =
+        original[4]["payload"]["info"]["last_token_usage"].clone();
+    assert_eq!(parse(&source).unwrap().events, expected);
+
+    let mut recomputed = original[4].clone();
+    multiply(&mut recomputed["payload"]["info"]["last_token_usage"], 0);
+    recomputed["payload"]["info"]["last_token_usage"]["total_tokens"] = json!(50);
+    source[10]["payload"]["info"]["last_token_usage"] =
+        recomputed["payload"]["info"]["last_token_usage"].clone();
+    source.insert(9, recomputed);
+    assert_eq!(parse(&source).unwrap().events, expected);
+}
+
+#[test]
 fn validates_raw_mirror_offset_last_usage_and_unmatched_progression() {
     for source in [RESPONSE, UPGRADE] {
         let original = records(source);
@@ -173,6 +195,15 @@ fn repeated_snapshots_compaction_and_zero_mirrors_do_not_add_events() {
     assert_eq!(parsed.events.len(), 2);
     assert_eq!(parsed.events[0].tokens.total(), 0);
     assert_eq!(parsed.events[1].tokens.total(), 140);
+
+    let mut estimate = zero[4].clone();
+    estimate["payload"]["info"]["last_token_usage"]["total_tokens"] = json!(50);
+    zero.insert(4, estimate);
+    assert_eq!(parse(&zero).unwrap().events, parsed.events);
+
+    let mut unconfirmed = zero[..5].to_vec();
+    unconfirmed.push(original[5].clone());
+    assert!(parse(&unconfirmed).is_err());
 }
 
 #[test]
