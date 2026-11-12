@@ -21,6 +21,7 @@ fn command(home: &Path) -> Command {
         .env_remove("CODEX_HOME")
         .env_remove("CLAUDE_CONFIG_DIR")
         .env_remove("HERMES_HOME")
+        .env_remove("HERMES_DATA_DIR_SUFFIX")
         .env_remove("XDG_DATA_HOME")
         .env_remove("XDG_CONFIG_HOME");
     command

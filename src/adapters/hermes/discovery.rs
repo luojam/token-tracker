@@ -1,6 +1,6 @@
 use std::{
     env,
-    ffi::OsStr,
+    ffi::{OsStr, OsString},
     io,
     path::{Path, PathBuf},
 };
@@ -15,25 +15,39 @@ pub(super) enum DatabaseLocations {
 
 impl DatabaseLocations {
     pub fn from_environment() -> io::Result<Self> {
+        let home_directory = || {
+            env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map(PathBuf::from)
+                .filter(|home| home.is_absolute())
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "HOME is unavailable or is not an absolute path",
+                    )
+                })
+        };
+
         if let Some(home) = env::var_os("HERMES_HOME").filter(|home| !home.is_empty()) {
+            let home = PathBuf::from(home);
+            let root = match home.strip_prefix("~") {
+                Ok(relative) => home_directory()?.join(relative),
+                Err(_) => std::path::absolute(home)?,
+            };
             return Ok(Self::Home {
-                root: std::path::absolute(home)?,
+                root,
                 profiles: false,
             });
         }
 
-        let home = env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from)
-            .filter(|home| home.is_absolute())
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "HOME is unavailable or is not an absolute path",
-                )
-            })?;
+        let home = home_directory()?;
+        let mut directory = OsString::from(".hermes");
+        if let Some(suffix) = env::var_os("HERMES_DATA_DIR_SUFFIX") {
+            directory.push(suffix);
+        }
+
         Ok(Self::Home {
-            root: home.join(".hermes"),
+            root: home.join(directory),
             profiles: true,
         })
     }
