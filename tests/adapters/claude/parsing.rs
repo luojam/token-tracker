@@ -320,9 +320,12 @@ fn final_usage_is_revalidated_when_a_placeholder_supplies_the_model() {
     placeholder["message"]["usage"] = json!({
         "input_tokens": 999,
         "output_tokens": 0,
-        "cache_read_input_tokens": 999,
-        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": null,
     });
+    let incomplete = parse_record(&placeholder).unwrap();
+    assert!(incomplete.events.is_empty());
+    assert_eq!(incomplete.notices[0].code, "incomplete_response_usage");
+
     for source in [
         format!("{placeholder}\n{final_snapshot}"),
         format!("{final_snapshot}\n{placeholder}"),
@@ -416,19 +419,36 @@ fn invalid_counters_and_overflow_reject_the_session() {
         ("cache_creation_input_tokens", Value::Null),
     ] {
         let mut record = final_record();
-        record["message"]["usage"][field] = invalid;
-        record["message"]["stop_reason"] = Value::Null;
-
-        let error = parse_record(&record).unwrap_err();
-        assert!(matches!(
-            error,
-            ClaudeParseError::InvalidField {
-                field: "required counter",
-                ..
+        record["message"]["usage"][field] = invalid.clone();
+        for stop_reason in [json!("end_turn"), Value::Null] {
+            if invalid.is_null() && stop_reason.is_null() {
+                continue;
             }
-        ));
-        assert!(!format!("{error:?} {error}").contains("PRIVATE"));
+            record["message"]["stop_reason"] = stop_reason;
+            let error = parse_record(&record).unwrap_err();
+            assert!(matches!(
+                error,
+                ClaudeParseError::InvalidField {
+                    field: "required counter",
+                    ..
+                }
+            ));
+            assert!(!format!("{error:?} {error}").contains("PRIVATE"));
+        }
     }
+
+    let mut record = final_record();
+    record["message"]["usage"]
+        .as_object_mut()
+        .unwrap()
+        .remove("cache_read_input_tokens");
+    assert!(matches!(
+        parse_record(&record),
+        Err(ClaudeParseError::InvalidField {
+            field: "required counter",
+            ..
+        })
+    ));
 
     let mut record = final_record();
     record["message"]["usage"]["cache_creation"] = json!({

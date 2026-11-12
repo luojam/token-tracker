@@ -290,7 +290,11 @@ fn observe_response(
             .get(&message.id)
             .and_then(|response| response.model.as_deref())
     });
-    let accounting = parse_usage(&message.usage, response_model, line)?;
+    let accounting = if final_snapshot || preliminary_counters_complete(&message.usage, line)? {
+        parse_usage(&message.usage, response_model, line)?
+    } else {
+        None
+    };
     if model == Some("<synthetic>")
         && accounting.as_ref().is_some_and(|usage| {
             usage.executor.tokens.total() == 0
@@ -357,6 +361,28 @@ fn optional_string<'a>(
         Value::String(value) => Ok((!value.is_empty()).then_some(value.as_str())),
         _ => Err(invalid(line, field)),
     }
+}
+
+fn preliminary_counters_complete(usage: &Value, line: usize) -> Result<bool, ClaudeParseError> {
+    if !usage.is_object() {
+        return Err(invalid(line, "required counter"));
+    }
+
+    let mut complete = true;
+    for field in [
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    ] {
+        match usage.get(field) {
+            None | Some(Value::Null) => complete = false,
+            Some(_) => {
+                counter(usage, field, line)?;
+            }
+        }
+    }
+    Ok(complete)
 }
 
 fn parse_usage(
