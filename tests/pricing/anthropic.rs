@@ -116,6 +116,18 @@ fn bundled_models_use_exact_flat_rates() {
             9_000_000_000_000,
         ),
         (
+            "claude-fable-5-2",
+            ServiceSpeed::Standard,
+            1_360_000_000,
+            7_200_000_000_000,
+        ),
+        (
+            "claude-fable-5-2",
+            ServiceSpeed::Fast,
+            2_720_000_000,
+            14_400_000_000_000,
+        ),
+        (
             "claude-opus-5",
             ServiceSpeed::Standard,
             887_500_000,
